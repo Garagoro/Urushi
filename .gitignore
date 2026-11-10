@@ -1,0 +1,29 @@
+# Build directories & artifacts
+build/
+out/
+.vs/
+x64/
+Win32/
+Release/
+Debug/
+
+# Compiled binaries & symbols
+*.dll
+*.exe
+*.lib
+*.exp
+*.pdb
+*.ilk
+*.obj
+
+# Local temporary scratch, logs & replay captures
+scratch/
+*.log
+*.cxr2
+
+# IDE & OS
+.vscode/
+*.user
+*.suo
+Thumbs.db
+.DS_Store

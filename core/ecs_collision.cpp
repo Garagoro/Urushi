@@ -1,0 +1,896 @@
+#include "ecs_collision.h"
+#include "unity_bridge.h"
+#include "native_carx.h"
+#include "logger.h"
+
+#include <windows.h>
+#include <psapi.h>
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstring>
+#include <mutex>
+#include <unordered_map>
+#include <unordered_set>
+
+namespace {
+
+// Verified GameAssembly.dll (CarX DR2 / Unity Entities) RVAs.
+constexpr uintptr_t RVA_WORLD_CLASS            = 0x844C9E0; // Unity.Entities.World*
+constexpr uintptr_t RVA_ECS_CLASS              = 0x8428C98; // EntityComponentStore class static_fields -> s_chunkStore
+constexpr uintptr_t RVA_CHUNK_META_CLASS       = 0x843CB48; // SharedStatic chunk meta table
+constexpr uintptr_t RVA_TYPE_NAMES_SS          = 0x83F57D8; // TypeManager.TypeNames SharedStatic<UnsafeList>
+
+constexpr uint32_t FALLBACK_TIDX_PHYSICS_COLLIDER = 0x5BA;
+constexpr uint32_t FALLBACK_TIDX_PHYSICS_VELOCITY = 0x5BE;
+constexpr uint32_t FALLBACK_TIDX_PLAYER_CAR_TAG   = 0x5E2;
+constexpr uint32_t FALLBACK_TIDX_OTHER_CAR_TAG    = 0x5E3;
+constexpr uint32_t FALLBACK_TIDX_LOCAL_TO_WORLD   = 0x8A9;
+constexpr uint32_t FALLBACK_TIDX_LOCAL_TRANSFORM  = 0x8AA;
+constexpr uint32_t FALLBACK_TIDX_GHOST_CAR_TAG    = 0x8B2;
+
+constexpr uint32_t CHUNK_HEADER_BYTES = 0x40;
+constexpr uint32_t CHUNK_SIZE_SHIFT   = 14; // 16 KB chunks
+constexpr uint32_t CHUNK_PAGE_MASK    = 0x3F;
+constexpr uint32_t CHUNK_PAGE_SHIFT   = 6;
+constexpr uint32_t MAX_SCAN_PAGES     = 512; // 32,768 chunks max
+constexpr uint8_t  COLLIDER_COMPOUND  = 8;
+constexpr int32_t  GHOST_GROUP_INDEX  = -7777;
+constexpr float    OVERLAP_SAFETY_DIST_SQ = 6.0f * 6.0f;
+constexpr float    RELEASE_HYSTERESIS_SEC = 0.45f;
+
+#pragma pack(push, 1)
+struct CollisionFilter {
+    uint32_t belongsTo;
+    uint32_t collidesWith;
+    int32_t  groupIndex;
+};
+#pragma pack(pop)
+
+struct EcsTypeIndices {
+    bool resolvedFromTypeNames = false;
+    uint32_t physicsCollider = FALLBACK_TIDX_PHYSICS_COLLIDER;
+    uint32_t physicsVelocity = FALLBACK_TIDX_PHYSICS_VELOCITY;
+    uint32_t playerCarTag    = FALLBACK_TIDX_PLAYER_CAR_TAG;
+    uint32_t otherCarTag     = FALLBACK_TIDX_OTHER_CAR_TAG;
+    uint32_t localToWorld    = FALLBACK_TIDX_LOCAL_TO_WORLD;
+    uint32_t localTransform  = FALLBACK_TIDX_LOCAL_TRANSFORM;
+    uint32_t ghostCarTag     = FALLBACK_TIDX_GHOST_CAR_TAG;
+};
+
+struct RawEcsCar {
+    uint64_t entityKey = 0;
+    void*    blobPtr = nullptr;
+    bool     isPlayer = false;
+    bool     isGameGhosted = false;
+    float    pos[3] = { 0.0f, 0.0f, 0.0f };
+    float    fwd[3] = { 0.0f, 0.0f, 1.0f };
+    float    vel[3] = { 0.0f, 0.0f, 0.0f };
+    bool     hasPos = false;
+    bool     hasFwd = false;
+    bool     hasVel = false;
+};
+
+struct CachedColliderBaseline {
+    uint64_t entityKey = 0;
+    void*    blobPtr = nullptr;
+    uint8_t  colliderType = 0;
+    CollisionFilter origParent{};
+    int      childCount = 0;
+    void*    childPtrs[8] = { nullptr };
+    CollisionFilter origChildren[8]{};
+    bool     modifiedCollidesMask = false;
+    uint32_t removedMask = 0;
+    bool     modifiedGroupIndex = false;
+};
+
+struct AutoLatchState {
+    float holdTimerSec = 0.0f;
+    bool  wasGhosted = false;
+};
+
+static std::recursive_mutex s_mutex;
+static uintptr_t s_gaBase = 0;
+static uintptr_t s_gaSize = 0;
+static EcsTypeIndices s_types{};
+static SelectiveGhostConfig s_config{};
+
+static std::unordered_map<std::string, CarGhostOverride> s_overridesByName;
+static std::unordered_map<uintptr_t, CarGhostOverride>   s_overridesByPtr;
+static std::unordered_map<uint64_t, CachedColliderBaseline> s_baselines;
+static std::unordered_map<uint64_t, AutoLatchState>      s_autoLatch;
+static std::vector<uint32_t> s_cachedCarChunks;
+static std::vector<CarGhostState> s_latestStates;
+static std::chrono::steady_clock::time_point s_lastChunkScan{};
+static size_t s_lastSeenCarCount = 0;
+
+// ================= Leaf SEH Memory Helpers =================
+
+static bool SafeReadBytes(const void* addr, void* outBuf, size_t size) {
+    __try {
+        if (!addr || reinterpret_cast<uintptr_t>(addr) < 0x10000 || !outBuf) return false;
+        memcpy(outBuf, addr, size);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static bool SafeWriteBytes(void* addr, const void* inBuf, size_t size) {
+    __try {
+        if (!addr || reinterpret_cast<uintptr_t>(addr) < 0x10000 || !inBuf) return false;
+        memcpy(addr, inBuf, size);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+template <typename T>
+static bool SafeRead(uintptr_t addr, T& outVal) {
+    return SafeReadBytes(reinterpret_cast<const void*>(addr), &outVal, sizeof(T));
+}
+
+template <typename T>
+static bool SafeWrite(uintptr_t addr, const T& val) {
+    return SafeWriteBytes(reinterpret_cast<void*>(addr), &val, sizeof(T));
+}
+
+static bool SafeReadCStr(uintptr_t addr, char* buf, size_t maxLen) {
+    __try {
+        if (addr < 0x10000 || !buf || maxLen == 0) return false;
+        const char* src = reinterpret_cast<const char*>(addr);
+        for (size_t i = 0; i < maxLen - 1; ++i) {
+            char ch = src[i];
+            buf[i] = ch;
+            if (ch == '\0') return true;
+        }
+        buf[maxLen - 1] = '\0';
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (buf && maxLen > 0) buf[0] = '\0';
+        return false;
+    }
+}
+
+// ================= Dynamic ECS Pointer & Type Resolution =================
+
+static bool ResolveGameAssembly() {
+    if (s_gaBase) return true;
+    HMODULE hMod = GetModuleHandleW(L"GameAssembly.dll");
+    if (!hMod) return false;
+    MODULEINFO mi{};
+    if (!GetModuleInformation(GetCurrentProcess(), hMod, &mi, sizeof(mi))) return false;
+    s_gaBase = reinterpret_cast<uintptr_t>(hMod);
+    s_gaSize = mi.SizeOfImage;
+    return s_gaBase != 0;
+}
+
+static void TryResolveTypeIndices() {
+    if (s_types.resolvedFromTypeNames || !ResolveGameAssembly()) return;
+
+    uintptr_t tmCls = 0, tmSf = 0, tmList = 0, entries = 0;
+    if (!SafeRead(s_gaBase + RVA_TYPE_NAMES_SS, tmCls) || tmCls < 0x10000) return;
+    if (!SafeRead(tmCls + 0xB8, tmSf) || tmSf < 0x10000) return;
+    if (!SafeRead(tmSf, tmList) || tmList < 0x10000) return;
+    if (!SafeRead(tmList, entries) || entries < 0x10000) return;
+
+    int matched = 0;
+    char nameBuf[160] = { 0 };
+    for (uint32_t i = 0; i < 4096; ++i) {
+        uintptr_t entryAddr = entries + static_cast<size_t>(i) * 24;
+        uintptr_t strPtr = 0;
+        uint32_t len = 0;
+        if (!SafeRead(entryAddr, strPtr) || !SafeRead(entryAddr + 8, len)) break;
+        if (strPtr < 0x10000 || len == 0 || len >= sizeof(nameBuf)) continue;
+        if (!SafeReadCStr(strPtr, nameBuf, sizeof(nameBuf))) continue;
+
+        if (strcmp(nameBuf, "Unity.Physics.PhysicsCollider") == 0) {
+            s_types.physicsCollider = i; ++matched;
+        } else if (strcmp(nameBuf, "Unity.Physics.PhysicsVelocity") == 0) {
+            s_types.physicsVelocity = i; ++matched;
+        } else if (strcmp(nameBuf, "Framework.Views.Cars.PlayerCarTagComponentData") == 0) {
+            s_types.playerCarTag = i; ++matched;
+        } else if (strcmp(nameBuf, "Framework.Views.Cars.OtherCarTagComponentData") == 0) {
+            s_types.otherCarTag = i; ++matched;
+        } else if (strcmp(nameBuf, "Unity.Transforms.LocalToWorld") == 0) {
+            s_types.localToWorld = i; ++matched;
+        } else if (strcmp(nameBuf, "Unity.Transforms.LocalTransform") == 0) {
+            s_types.localTransform = i; ++matched;
+        } else if (strcmp(nameBuf, "Modules.CarX.Game.DR3.UIView.Components.GhostCarTag") == 0) {
+            s_types.ghostCarTag = i; ++matched;
+        }
+        if (matched >= 7) break;
+    }
+
+    if (matched >= 4) {
+        s_types.resolvedFromTypeNames = true;
+        Logger::Info("EcsCollision resolved TypeManager indices dynamically (" + std::to_string(matched) + "/7).");
+    }
+}
+
+struct EcsStores {
+    uintptr_t chunkStore = 0;
+    uintptr_t chunkMetaBase = 0;
+};
+
+static bool GetEcsStores(EcsStores& out) {
+    if (!ResolveGameAssembly()) return false;
+
+    uintptr_t worldCls = 0, worldSf = 0, world = 0;
+    if (!SafeRead(s_gaBase + RVA_WORLD_CLASS, worldCls) || worldCls < 0x10000) return false;
+    if (!SafeRead(worldCls + 0xB8, worldSf) || worldSf < 0x10000) return false;
+    if (!SafeRead(worldSf + 0x08, world) || world < 0x10000) return false;
+
+    uintptr_t ecsCls = 0, ecsSf = 0;
+    if (!SafeRead(s_gaBase + RVA_ECS_CLASS, ecsCls) || ecsCls < 0x10000) return false;
+    if (!SafeRead(ecsCls + 0xB8, ecsSf) || ecsSf < 0x10000) return false;
+    if (!SafeRead(ecsSf + 0x10, out.chunkStore) || out.chunkStore < 0x10000) return false;
+
+    uintptr_t cmCls = 0, cmSf = 0, cmInner = 0;
+    if (!SafeRead(s_gaBase + RVA_CHUNK_META_CLASS, cmCls) || cmCls < 0x10000) return false;
+    if (!SafeRead(cmCls + 0xB8, cmSf) || cmSf < 0x10000) return false;
+    if (!SafeRead(cmSf, cmInner) || cmInner < 0x10000) return false;
+    if (!SafeRead(cmInner, out.chunkMetaBase) || out.chunkMetaBase < 0x10000) return false;
+
+    return true;
+}
+
+struct ChunkLayout {
+    uint32_t entityCount = 0;
+    uintptr_t dataBase = 0;
+    bool isPlayer = false;
+    bool isOther = false;
+    bool isGameGhosted = false;
+    uint32_t colliderOff = 0;
+    bool hasCollider = false;
+    uint32_t velocityOff = 0;
+    uint16_t velocitySize = 0;
+    bool hasVelocity = false;
+    uint32_t ltwOff = 0;
+    uint16_t ltwSize = 0;
+    bool hasLtw = false;
+    uint32_t localTfOff = 0;
+    uint16_t localTfSize = 0;
+    bool hasLocalTf = false;
+};
+
+static bool InspectCarChunk(const EcsStores& stores, uint32_t cidx, ChunkLayout& out) {
+    uint32_t page = cidx >> CHUNK_PAGE_SHIFT;
+    uint32_t sub  = cidx & CHUNK_PAGE_MASK;
+    uintptr_t cpage = 0;
+    if (!SafeRead(stores.chunkStore + static_cast<size_t>(page) * 8, cpage) || cpage < 0x10000) {
+        return false;
+    }
+
+    uintptr_t metaPtr = stores.chunkMetaBase + static_cast<size_t>(cidx) * 16;
+    uintptr_t arch = 0;
+    uint32_t countMeta = 0;
+    if (!SafeRead(metaPtr, arch) || arch < 0x10000) return false;
+    if (!SafeRead(metaPtr + 8, countMeta)) return false;
+
+    uint32_t count = countMeta & 0xFFFF;
+    if (count == 0 || count >= 512) return false;
+
+    uint32_t tcount = 0;
+    uintptr_t typesPtr = 0, offsPtr = 0, szsPtr = 0;
+    if (!SafeRead(arch + 0xA8, tcount) || tcount == 0 || tcount >= 160) return false;
+    if (!SafeRead(arch + 0x70, typesPtr) || typesPtr < 0x10000) return false;
+    if (!SafeRead(arch + 0xE0, offsPtr) || offsPtr < 0x10000) return false;
+    if (!SafeRead(arch + 0xE8, szsPtr) || szsPtr < 0x10000) return false;
+
+    out = ChunkLayout{};
+    out.entityCount = count;
+    out.dataBase = cpage + (static_cast<uintptr_t>(sub) << CHUNK_SIZE_SHIFT) + CHUNK_HEADER_BYTES;
+
+    for (uint32_t ti = 0; ti < tcount; ++ti) {
+        uint32_t rawType = 0;
+        if (!SafeRead(typesPtr + ti * 4, rawType)) return false;
+        uint32_t tidx = rawType & 0xFFFF;
+
+        if (tidx == s_types.playerCarTag) {
+            out.isPlayer = true;
+        } else if (tidx == s_types.otherCarTag) {
+            out.isOther = true;
+        } else if (tidx == s_types.ghostCarTag) {
+            out.isGameGhosted = true;
+        } else if (tidx == s_types.physicsCollider) {
+            out.hasCollider = SafeRead(offsPtr + ti * 4, out.colliderOff);
+        } else if (tidx == s_types.physicsVelocity) {
+            out.hasVelocity = SafeRead(offsPtr + ti * 4, out.velocityOff) && SafeRead(szsPtr + ti * 2, out.velocitySize);
+        } else if (tidx == s_types.localToWorld) {
+            out.hasLtw = SafeRead(offsPtr + ti * 4, out.ltwOff) && SafeRead(szsPtr + ti * 2, out.ltwSize);
+        } else if (tidx == s_types.localTransform) {
+            out.hasLocalTf = SafeRead(offsPtr + ti * 4, out.localTfOff) && SafeRead(szsPtr + ti * 2, out.localTfSize);
+        }
+    }
+
+    return out.hasCollider && (out.isPlayer || out.isOther);
+}
+
+static void RescanCarChunks(const EcsStores& stores) {
+    s_cachedCarChunks.clear();
+    uint32_t lastValidPage = 0;
+    for (uint32_t page = 0; page < MAX_SCAN_PAGES; ++page) {
+        if (page > 128 && page > lastValidPage + 48) break;
+        uintptr_t cpage = 0;
+        if (!SafeRead(stores.chunkStore + static_cast<size_t>(page) * 8, cpage) || cpage < 0x10000) {
+            continue;
+        }
+        lastValidPage = page;
+        uint32_t baseCidx = page << CHUNK_PAGE_SHIFT;
+        for (uint32_t sub = 0; sub < 64; ++sub) {
+            ChunkLayout layout;
+            if (InspectCarChunk(stores, baseCidx + sub, layout)) {
+                s_cachedCarChunks.push_back(baseCidx + sub);
+            }
+        }
+    }
+}
+
+static void CollectRawEcsCars(const EcsStores& stores, size_t liveCarCount, std::vector<RawEcsCar>& outCars) {
+    outCars.clear();
+    auto now = std::chrono::steady_clock::now();
+    float sinceScan = std::chrono::duration<float>(now - s_lastChunkScan).count();
+
+    bool needRescan = s_cachedCarChunks.empty() || sinceScan > 0.5f || liveCarCount != s_lastSeenCarCount;
+    bool cacheInvalid = false;
+
+    if (!needRescan) {
+        for (uint32_t cidx : s_cachedCarChunks) {
+            ChunkLayout layout;
+            if (!InspectCarChunk(stores, cidx, layout)) {
+                cacheInvalid = true;
+                break;
+            }
+        }
+        if (cacheInvalid) needRescan = true;
+    }
+
+    if (needRescan) {
+        RescanCarChunks(stores);
+        s_lastChunkScan = now;
+        s_lastSeenCarCount = liveCarCount;
+    }
+
+    for (uint32_t cidx : s_cachedCarChunks) {
+        ChunkLayout layout;
+        if (!InspectCarChunk(stores, cidx, layout)) continue;
+
+        for (uint32_t ei = 0; ei < layout.entityCount; ++ei) {
+            uint64_t ent = 0;
+            uintptr_t blob = 0;
+            if (!SafeRead(layout.dataBase + ei * 8, ent) || ent == 0) continue;
+            if (!SafeRead(layout.dataBase + layout.colliderOff + ei * 8, blob) || blob < 0x10000) continue;
+
+            RawEcsCar car;
+            car.entityKey = ent;
+            car.blobPtr = reinterpret_cast<void*>(blob);
+            car.isPlayer = layout.isPlayer;
+            car.isGameGhosted = layout.isGameGhosted;
+
+            if (layout.hasLocalTf && layout.localTfSize >= 12) {
+                if (SafeReadBytes(reinterpret_cast<const void*>(layout.dataBase + layout.localTfOff + ei * layout.localTfSize),
+                                  car.pos, sizeof(float) * 3)) {
+                    car.hasPos = std::isfinite(car.pos[0]) && std::isfinite(car.pos[1]) && std::isfinite(car.pos[2]);
+                }
+            }
+            if (layout.hasLtw && layout.ltwSize >= 64) {
+                float ltw[16] = { 0 };
+                if (SafeReadBytes(reinterpret_cast<const void*>(layout.dataBase + layout.ltwOff + ei * layout.ltwSize),
+                                  ltw, sizeof(ltw))) {
+                    if (!car.hasPos && std::isfinite(ltw[12])) {
+                        car.pos[0] = ltw[12]; car.pos[1] = ltw[13]; car.pos[2] = ltw[14];
+                        car.hasPos = true;
+                    }
+                    if (std::isfinite(ltw[8]) && std::isfinite(ltw[10])) {
+                        car.fwd[0] = ltw[8]; car.fwd[1] = ltw[9]; car.fwd[2] = ltw[10];
+                        car.hasFwd = true;
+                    }
+                }
+            }
+            if (layout.hasVelocity && layout.velocitySize >= 12) {
+                if (SafeReadBytes(reinterpret_cast<const void*>(layout.dataBase + layout.velocityOff + ei * layout.velocitySize),
+                                  car.vel, sizeof(float) * 3)) {
+                    car.hasVel = std::isfinite(car.vel[0]) && std::isfinite(car.vel[2]);
+                }
+            }
+            outCars.push_back(car);
+        }
+    }
+}
+
+// ================= Collider Blob Baseline & Filter Mutation =================
+
+static bool CaptureColliderBaseline(uint64_t entityKey, void* blobPtr, CachedColliderBaseline& out) {
+    uintptr_t blob = reinterpret_cast<uintptr_t>(blobPtr);
+    if (blob < 0x10000) return false;
+
+    uint8_t btype = 0xFF;
+    CollisionFilter pFilter{};
+    if (!SafeRead(blob, btype) || !SafeRead(blob + 0x08, pFilter)) return false;
+    if (pFilter.belongsTo == 0) return false;
+
+    out = CachedColliderBaseline{};
+    out.entityKey = entityKey;
+    out.blobPtr = blobPtr;
+    out.colliderType = btype;
+    out.origParent = pFilter;
+
+    if (btype == COLLIDER_COMPOUND) {
+        int32_t nc = 0;
+        if (!SafeRead(blob + 0x5C, nc) || nc <= 0 || nc > 8) return false;
+        out.childCount = nc;
+        for (int k = 0; k < nc; ++k) {
+            uintptr_t relPtr = blob + 0x60 + static_cast<size_t>(k) * 40 + 0x1C;
+            int32_t rel = 0;
+            if (!SafeRead(relPtr, rel) || rel <= 0 || rel > 0x100000) return false;
+            uintptr_t kc = relPtr + rel;
+            CollisionFilter cf{};
+            if (!SafeRead(kc + 0x08, cf) || cf.belongsTo == 0) return false;
+            out.childPtrs[k] = reinterpret_cast<void*>(kc);
+            out.origChildren[k] = cf;
+        }
+    }
+    return true;
+}
+
+static CachedColliderBaseline* EnsureBaseline(uint64_t entityKey, void* blobPtr) {
+    auto it = s_baselines.find(entityKey);
+    if (it != s_baselines.end() && it->second.blobPtr == blobPtr) {
+        return &it->second;
+    }
+    CachedColliderBaseline fresh;
+    if (!CaptureColliderBaseline(entityKey, blobPtr, fresh)) return nullptr;
+    auto res = s_baselines.emplace(entityKey, fresh);
+    if (!res.second) res.first->second = fresh;
+    return &res.first->second;
+}
+
+static bool ApplyFilterToCollider(void* colliderPtr, const CollisionFilter& f) {
+    uintptr_t addr = reinterpret_cast<uintptr_t>(colliderPtr);
+    if (addr < 0x10000) return false;
+    return SafeWrite(addr + 0x08, f);
+}
+
+static void RestoreBaseline(CachedColliderBaseline& base) {
+    if (!base.modifiedCollidesMask && !base.modifiedGroupIndex) return;
+
+    CollisionFilter curP{};
+    if (SafeRead(reinterpret_cast<uintptr_t>(base.blobPtr) + 0x08, curP)) {
+        CollisionFilter restoredP = curP;
+        if (base.modifiedCollidesMask) {
+            restoredP.collidesWith |= (base.origParent.collidesWith & base.removedMask);
+        }
+        if (base.modifiedGroupIndex) {
+            restoredP.groupIndex = base.origParent.groupIndex;
+        }
+        ApplyFilterToCollider(base.blobPtr, restoredP);
+    }
+
+    if (base.colliderType == COLLIDER_COMPOUND) {
+        for (int k = 0; k < base.childCount; ++k) {
+            if (!base.childPtrs[k]) continue;
+            CollisionFilter curC{};
+            if (SafeRead(reinterpret_cast<uintptr_t>(base.childPtrs[k]) + 0x08, curC)) {
+                CollisionFilter restoredC = curC;
+                if (base.modifiedCollidesMask) {
+                    restoredC.collidesWith |= (base.origChildren[k].collidesWith & base.removedMask);
+                }
+                if (base.modifiedGroupIndex) {
+                    restoredC.groupIndex = base.origChildren[k].groupIndex;
+                }
+                ApplyFilterToCollider(base.childPtrs[k], restoredC);
+            }
+        }
+    }
+
+    base.modifiedCollidesMask = false;
+    base.removedMask = 0;
+    base.modifiedGroupIndex = false;
+}
+
+static void RestoreAllModifiedBaselines(const std::unordered_set<void*>* validActiveBlobs = nullptr) {
+    for (auto& kv : s_baselines) {
+        CachedColliderBaseline& b = kv.second;
+        if (!b.modifiedCollidesMask && !b.modifiedGroupIndex) continue;
+        if (validActiveBlobs && validActiveBlobs->find(b.blobPtr) == validActiveBlobs->end()) {
+            b.modifiedCollidesMask = false;
+            b.modifiedGroupIndex = false;
+            continue;
+        }
+        RestoreBaseline(b);
+    }
+}
+
+static void ApplyBitmaskGhost(CachedColliderBaseline& target, uint32_t playerBelongsMask) {
+    if (target.modifiedGroupIndex) {
+        RestoreBaseline(target);
+    }
+
+    uint32_t combinedChildMask = 0;
+    if (target.colliderType == COLLIDER_COMPOUND && target.childCount > 0) {
+        for (int k = 0; k < target.childCount; ++k) {
+            CollisionFilter cf = target.origChildren[k];
+            SafeRead(reinterpret_cast<uintptr_t>(target.childPtrs[k]) + 0x08, cf);
+            // If we hadn't modified yet, refresh clean baseline collidesWith first
+            if (!target.modifiedCollidesMask) {
+                target.origChildren[k] = cf;
+            }
+            cf.collidesWith = target.origChildren[k].collidesWith & ~playerBelongsMask;
+            combinedChildMask |= cf.collidesWith;
+            ApplyFilterToCollider(target.childPtrs[k], cf);
+        }
+    }
+
+    CollisionFilter pf = target.origParent;
+    if (target.colliderType == COLLIDER_COMPOUND && target.childCount > 0) {
+        pf.collidesWith = combinedChildMask | (target.origParent.collidesWith & ~playerBelongsMask & ~0x300u);
+        pf.collidesWith &= ~playerBelongsMask;
+    } else {
+        pf.collidesWith &= ~playerBelongsMask;
+    }
+    ApplyFilterToCollider(target.blobPtr, pf);
+
+    target.modifiedCollidesMask = true;
+    target.removedMask = playerBelongsMask;
+}
+
+static void ApplyGroupIndexGhost(CachedColliderBaseline& target) {
+    if (target.modifiedCollidesMask) {
+        RestoreBaseline(target);
+    }
+
+    CollisionFilter pf = target.origParent;
+    pf.groupIndex = GHOST_GROUP_INDEX;
+    ApplyFilterToCollider(target.blobPtr, pf);
+
+    if (target.colliderType == COLLIDER_COMPOUND) {
+        for (int k = 0; k < target.childCount; ++k) {
+            CollisionFilter cf = target.origChildren[k];
+            cf.groupIndex = GHOST_GROUP_INDEX;
+            ApplyFilterToCollider(target.childPtrs[k], cf);
+        }
+    }
+
+    target.modifiedGroupIndex = true;
+}
+
+// ================= Heading / Wrong-Way Evaluation =================
+
+static bool Normalize2D(float x, float z, float& outX, float& outZ) {
+    float len = sqrtf(x * x + z * z);
+    if (len < 1e-4f) return false;
+    outX = x / len;
+    outZ = z / len;
+    return true;
+}
+
+static bool ComputeCarMotionDir(const RawEcsCar& ecsCar, const LiveCarInfo* matchedLive, float& outDirX, float& outDirZ, float& outSpeedKmh) {
+    float vx = ecsCar.vel[0], vz = ecsCar.vel[2];
+    bool hasVel = ecsCar.hasVel;
+
+    if (!hasVel && matchedLive && matchedLive->carPtr) {
+        float nv[3] = { 0 };
+        if (NativeCarX::GetCarVelocity(matchedLive->carPtr, nv)) {
+            vx = nv[0]; vz = nv[2];
+            hasVel = std::isfinite(vx) && std::isfinite(vz);
+        }
+    }
+
+    if (hasVel) {
+        float spdMs = sqrtf(vx * vx + vz * vz);
+        outSpeedKmh = spdMs * 3.6f;
+        if (spdMs >= 1.2f && Normalize2D(vx, vz, outDirX, outDirZ)) {
+            return true;
+        }
+    } else if (matchedLive) {
+        outSpeedKmh = matchedLive->speedKmh;
+    } else {
+        outSpeedKmh = 0.0f;
+    }
+
+    if (ecsCar.hasFwd && Normalize2D(ecsCar.fwd[0], ecsCar.fwd[2], outDirX, outDirZ)) {
+        return true;
+    }
+    return false;
+}
+
+} // namespace
+
+// ================= Public API =================
+
+void EcsCollision::Init() {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    ResolveGameAssembly();
+    TryResolveTypeIndices();
+}
+
+void EcsCollision::Shutdown() {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    if (NativeCarX::IsInSession()) {
+        EcsStores stores;
+        if (GetEcsStores(stores)) {
+            std::vector<RawEcsCar> ecsCars;
+            CollectRawEcsCars(stores, s_lastSeenCarCount, ecsCars);
+            std::unordered_set<void*> activeBlobs;
+            for (const auto& c : ecsCars) activeBlobs.insert(c.blobPtr);
+            RestoreAllModifiedBaselines(&activeBlobs);
+        }
+    }
+    s_baselines.clear();
+    s_autoLatch.clear();
+    s_cachedCarChunks.clear();
+    s_latestStates.clear();
+}
+
+void EcsCollision::SetConfig(const SelectiveGhostConfig& cfg) {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    s_config = cfg;
+    s_config.minSpeedKmh = std::clamp(s_config.minSpeedKmh, 0.0f, 120.0f);
+    s_config.dotThreshold = std::clamp(s_config.dotThreshold, -0.95f, 0.25f);
+    s_config.maxDistanceMeters = std::clamp(s_config.maxDistanceMeters, 0.0f, 1000.0f);
+}
+
+SelectiveGhostConfig EcsCollision::GetConfig() {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    return s_config;
+}
+
+void EcsCollision::SetCarOverride(const std::string& unityName, uintptr_t carPtr, CarGhostOverride mode) {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    if (!unityName.empty()) {
+        if (mode == CarGhostOverride::Auto) s_overridesByName.erase(unityName);
+        else s_overridesByName[unityName] = mode;
+    }
+    if (carPtr) {
+        if (mode == CarGhostOverride::Auto) s_overridesByPtr.erase(carPtr);
+        else s_overridesByPtr[carPtr] = mode;
+    }
+}
+
+CarGhostOverride EcsCollision::GetCarOverride(const std::string& unityName, uintptr_t carPtr) {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    if (!unityName.empty()) {
+        auto it = s_overridesByName.find(unityName);
+        if (it != s_overridesByName.end()) return it->second;
+    }
+    if (carPtr) {
+        auto it = s_overridesByPtr.find(carPtr);
+        if (it != s_overridesByPtr.end()) return it->second;
+    }
+    return CarGhostOverride::Auto;
+}
+
+void EcsCollision::ClearOverrides() {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    s_overridesByName.clear();
+    s_overridesByPtr.clear();
+}
+
+std::vector<CarGhostState> EcsCollision::GetCarStates() {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    return s_latestStates;
+}
+
+void EcsCollision::UpdateOnMainThread(float dt, const std::vector<LiveCarInfo>& liveCars) {
+    if (!UnityBridge::IsOnMainThread()) return;
+
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    if (!NativeCarX::IsInSession()) {
+        s_baselines.clear();
+        s_autoLatch.clear();
+        s_cachedCarChunks.clear();
+        s_latestStates.clear();
+        return;
+    }
+
+    TryResolveTypeIndices();
+
+    EcsStores stores;
+    if (!GetEcsStores(stores)) return;
+
+    std::vector<RawEcsCar> ecsCars;
+    CollectRawEcsCars(stores, liveCars.size(), ecsCars);
+    if (ecsCars.empty()) {
+        s_latestStates.clear();
+        return;
+    }
+
+    std::unordered_set<void*> activeBlobs;
+    std::unordered_set<uint64_t> activeEntities;
+    for (const auto& ec : ecsCars) {
+        activeBlobs.insert(ec.blobPtr);
+        activeEntities.insert(ec.entityKey);
+    }
+
+    // Match each ECS car entity to LiveCarInfo for stable naming and UI mapping.
+    std::vector<const LiveCarInfo*> matchedLive(ecsCars.size(), nullptr);
+    std::vector<bool> liveUsed(liveCars.size(), false);
+
+    for (size_t i = 0; i < ecsCars.size(); ++i) {
+        if (!ecsCars[i].isPlayer) continue;
+        for (size_t j = 0; j < liveCars.size(); ++j) {
+            if (!liveUsed[j] && liveCars[j].isLocalPlayer) {
+                matchedLive[i] = &liveCars[j];
+                liveUsed[j] = true;
+                break;
+            }
+        }
+    }
+
+    for (size_t i = 0; i < ecsCars.size(); ++i) {
+        if (matchedLive[i] || !ecsCars[i].hasPos) continue;
+        float bestD2 = 25.0f; // within 5m
+        size_t bestIdx = SIZE_MAX;
+        for (size_t j = 0; j < liveCars.size(); ++j) {
+            if (liveUsed[j]) continue;
+            float dx = liveCars[j].x - ecsCars[i].pos[0];
+            float dy = liveCars[j].y - ecsCars[i].pos[1];
+            float dz = liveCars[j].z - ecsCars[i].pos[2];
+            float d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < bestD2) {
+                bestD2 = d2;
+                bestIdx = j;
+            }
+        }
+        if (bestIdx != SIZE_MAX) {
+            matchedLive[i] = &liveCars[bestIdx];
+            liveUsed[bestIdx] = true;
+        }
+    }
+
+    // Prune stale baselines/latches cleanly.
+    for (auto it = s_baselines.begin(); it != s_baselines.end();) {
+        if (activeEntities.find(it->first) == activeEntities.end()) it = s_baselines.erase(it);
+        else ++it;
+    }
+    for (auto it = s_autoLatch.begin(); it != s_autoLatch.end();) {
+        if (activeEntities.find(it->first) == activeEntities.end()) it = s_autoLatch.erase(it);
+        else ++it;
+    }
+
+    // Locate Player ECS car & reference heading/position.
+    size_t playerIdx = SIZE_MAX;
+    for (size_t i = 0; i < ecsCars.size(); ++i) {
+        if (ecsCars[i].isPlayer) {
+            playerIdx = i;
+            break;
+        }
+    }
+
+    if (playerIdx == SIZE_MAX) {
+        RestoreAllModifiedBaselines(&activeBlobs);
+        s_latestStates.clear();
+        return;
+    }
+
+    CachedColliderBaseline* playerBase = EnsureBaseline(ecsCars[playerIdx].entityKey, ecsCars[playerIdx].blobPtr);
+    if (!playerBase) {
+        RestoreAllModifiedBaselines(&activeBlobs);
+        return;
+    }
+
+    float pDirX = 0.0f, pDirZ = 1.0f, pSpeedKmh = 0.0f;
+    bool hasPDir = ComputeCarMotionDir(ecsCars[playerIdx], matchedLive[playerIdx], pDirX, pDirZ, pSpeedKmh);
+    const uint32_t playerBelongs = playerBase->origParent.belongsTo;
+
+    std::vector<CarGhostState> states;
+    states.reserve(ecsCars.size());
+
+    bool needPlayerGroupIndex = false;
+
+    for (size_t i = 0; i < ecsCars.size(); ++i) {
+        const RawEcsCar& ec = ecsCars[i];
+        const LiveCarInfo* lc = matchedLive[i];
+
+        CachedColliderBaseline* base = EnsureBaseline(ec.entityKey, ec.blobPtr);
+
+        CarGhostState st;
+        st.entityKey = ec.entityKey;
+        st.carPtr = lc ? lc->carPtr : nullptr;
+        st.unityName = lc ? lc->unityName : (ec.isPlayer ? "Player Car" : "Opponent");
+        st.isLocalPlayer = ec.isPlayer;
+        st.isGameGhosted = ec.isGameGhosted;
+
+        float oDirX = 0.0f, oDirZ = 1.0f, oSpeedKmh = 0.0f;
+        bool hasODir = ComputeCarMotionDir(ec, lc, oDirX, oDirZ, oSpeedKmh);
+        st.speedKmh = oSpeedKmh;
+
+        float d2 = 1e9f;
+        if (ec.hasPos && ecsCars[playerIdx].hasPos) {
+            float dx = ec.pos[0] - ecsCars[playerIdx].pos[0];
+            float dy = ec.pos[1] - ecsCars[playerIdx].pos[1];
+            float dz = ec.pos[2] - ecsCars[playerIdx].pos[2];
+            d2 = dx * dx + dy * dy + dz * dz;
+            st.distanceMeters = sqrtf(d2);
+        }
+
+        if (!ec.isPlayer && hasPDir && hasODir) {
+            st.headingDot = pDirX * oDirX + pDirZ * oDirZ;
+        } else {
+            st.headingDot = 1.0f;
+        }
+
+        if (!ec.isPlayer) {
+            st.overrideMode = GetCarOverride(st.unityName, reinterpret_cast<uintptr_t>(st.carPtr));
+
+            bool rawWrongWay = false;
+            if (s_config.enabled && s_config.antiWrongWay && hasPDir && hasODir) {
+                bool speedOk = (oSpeedKmh >= s_config.minSpeedKmh) || (s_config.minSpeedKmh <= 1.0f);
+                bool distOk = (s_config.maxDistanceMeters <= 0.0f) || (st.distanceMeters <= s_config.maxDistanceMeters);
+                if (speedOk && distOk && st.headingDot < s_config.dotThreshold) {
+                    rawWrongWay = true;
+                }
+            }
+
+            AutoLatchState& latch = s_autoLatch[ec.entityKey];
+            bool latchedWrongWay = rawWrongWay;
+            if (!s_config.enabled || !s_config.antiWrongWay || st.overrideMode != CarGhostOverride::Auto) {
+                latch.wasGhosted = false;
+                latch.holdTimerSec = 0.0f;
+                latchedWrongWay = rawWrongWay;
+            } else if (rawWrongWay) {
+                latch.wasGhosted = true;
+                latch.holdTimerSec = RELEASE_HYSTERESIS_SEC;
+                latchedWrongWay = true;
+            } else if (latch.wasGhosted) {
+                // Keep ghosted while cars are overlapping (< 6m) or within release debounce window
+                if (d2 < OVERLAP_SAFETY_DIST_SQ) {
+                    latch.holdTimerSec = RELEASE_HYSTERESIS_SEC;
+                    latchedWrongWay = true;
+                } else if (latch.holdTimerSec > 0.0f) {
+                    latch.holdTimerSec -= dt;
+                    latchedWrongWay = true;
+                } else {
+                    latch.wasGhosted = false;
+                    latchedWrongWay = false;
+                }
+            }
+            st.isWrongWay = rawWrongWay;
+
+            bool shouldGhost = false;
+            if (s_config.enabled) {
+                if (st.overrideMode == CarGhostOverride::ForceGhost) {
+                    shouldGhost = true;
+                } else if (st.overrideMode == CarGhostOverride::ForceSolid) {
+                    shouldGhost = false;
+                } else {
+                    shouldGhost = latchedWrongWay;
+                }
+            }
+
+            if (base) {
+                if (shouldGhost) {
+                    if ((base->origParent.belongsTo & playerBelongs) == 0) {
+                        ApplyBitmaskGhost(*base, playerBelongs);
+                    } else {
+                        ApplyGroupIndexGhost(*base);
+                        needPlayerGroupIndex = true;
+                    }
+                    st.isSelectivelyGhosted = true;
+                } else {
+                    RestoreBaseline(*base);
+                    st.isSelectivelyGhosted = false;
+                }
+            }
+        }
+
+        if (base) {
+            CollisionFilter curP = base->origParent;
+            SafeRead(reinterpret_cast<uintptr_t>(base->blobPtr) + 0x08, curP);
+            st.colliderBelongsTo = curP.belongsTo;
+            st.colliderCollidesWith = curP.collidesWith;
+            st.colliderGroupIndex = curP.groupIndex;
+        }
+        states.push_back(std::move(st));
+    }
+
+    if (needPlayerGroupIndex && s_config.enabled) {
+        ApplyGroupIndexGhost(*playerBase);
+    } else {
+        RestoreBaseline(*playerBase);
+    }
+
+    s_latestStates = std::move(states);
+}
