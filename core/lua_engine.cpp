@@ -6,6 +6,7 @@
 #include "bindings/lua_imgui.h"
 #include "bindings/lua_replay.h"
 #include "bindings/lua_memory.h"
+#include "bindings/lua_updater.h"
 #include <chrono>
 
 std::recursive_mutex LuaEngine::s_mutex;
@@ -42,6 +43,7 @@ bool LuaEngine::Init(const std::wstring& scriptsDir) {
     LuaImGui::Register(s_L);
     LuaReplay::Register(s_L);
     LuaMemory::Register(s_L);
+    LuaUpdater::Register(s_L);
     RegisterEventsModule(s_L);
     RegisterLogModule(s_L);
 

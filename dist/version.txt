@@ -1,0 +1,3 @@
+version=0.1.0
+link_time=1794335626
+notes=URUSHI v0.1.0: CarFX shaders, FPS fix & auto-updater

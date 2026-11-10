@@ -9,6 +9,7 @@
 #include "replay_engine.h"
 #include "file_watcher.h"
 #include "lua_engine.h"
+#include "updater.h"
 
 #pragma comment(lib, "shlwapi.lib")
 
@@ -52,6 +53,7 @@ extern "C" __declspec(dllexport) void ScriptHook_Unload() {
     Sleep(50);
 
     FileWatcher::Stop();
+    Updater::Shutdown();
     LuaEngine::Shutdown();
     D3D11Hook::Shutdown();
     UnityBridge::Shutdown();
@@ -106,6 +108,9 @@ static DWORD WINAPI InitThread(LPVOID) {
         FileWatcher::Start(scriptsDir, [](const std::string& filename) {
             LuaEngine::OnScriptModified(filename);
         });
+
+        // Start async auto-update check against GitHub repository (Garagoro/Urushi)
+        Updater::Init(exeDir, g_module);
 
         g_initialized = true;
         Logger::Info("CarX2ScriptHook fully initialized and ready. Press F4 to toggle menu.");

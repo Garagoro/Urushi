@@ -4,6 +4,7 @@
 #include "logger.h"
 #include "lua_engine.h"
 #include "ui_schema.h"
+#include "updater.h"
 
 #include <shlwapi.h>
 #include <imgui.h>
@@ -453,6 +454,9 @@ HRESULT WINAPI D3D11Hook::Hooked_Present(IDXGISwapChain* pSwapChain, UINT SyncIn
 
             // 2. Render all declarative schema panels
             UiSchema::RenderAll(s_menuOpen);
+
+            // 3. Render floating update notification banner if a newer build is ready
+            Updater::RenderUI(s_menuOpen);
 
             ImGui::Render();
             s_context->OMSetRenderTargets(1, &s_renderTargetView, nullptr);

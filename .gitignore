@@ -7,7 +7,7 @@ Win32/
 Release/
 Debug/
 
-# Compiled binaries & symbols
+# Compiled binaries & symbols (release binaries inside dist/ are tracked for auto-update)
 *.dll
 *.exe
 *.lib
@@ -15,11 +15,18 @@ Debug/
 *.pdb
 *.ilk
 *.obj
+!dist/
+!dist/*.dll
+
+# Secrets / GitHub tokens (never commit!)
+urushi_token.txt
+core/urushi_gh_token.h
 
 # Local temporary scratch, logs & replay captures
 scratch/
 *.log
 *.cxr2
+dist/*.pdb
 
 # IDE & OS
 .vscode/

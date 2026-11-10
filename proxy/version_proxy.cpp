@@ -7,6 +7,7 @@
 static HMODULE g_realVersionModule = nullptr;
 static HMODULE g_coreHookModule = nullptr;
 static HANDLE g_workerThread = nullptr;
+static HANDLE g_reloadEvent = nullptr;
 static bool g_running = true;
 static std::wstring g_loadedShadowDll;
 static std::wstring g_loadedShadowPdb;
@@ -256,6 +257,13 @@ static DWORD WINAPI LoaderThread(LPVOID) {
     if (!g_running) return 0;
 
     std::wstring exeDir = GetExecutableDirectory();
+    // Clean up any staged version.dll.old left over after a proxy self-update
+    DeleteFileW((exeDir + L"\\version.dll.old").c_str());
+
+    wchar_t evName[64] = {};
+    wsprintfW(evName, L"Local\\UrushiReload_%lu", GetCurrentProcessId());
+    g_reloadEvent = CreateEventW(nullptr, FALSE, FALSE, evName);
+
     SweepOldShadowFiles(GetShadowDirectory());
     LoadCoreShadow(exeDir);
 
@@ -263,8 +271,19 @@ static DWORD WINAPI LoaderThread(LPVOID) {
     bool prevCtrlF11 = false;
 
     // Ctrl+F10: cleanly detach/unload CarX2ScriptHook.dll from process
-    // Ctrl+F11: reload (or re-attach) fresh CarX2ScriptHook.dll shadow copy from game folder
+    // Ctrl+F11 or UrushiReload_<pid> event: hot-reinject fresh shadow copy from game folder
     while (g_running) {
+        DWORD waitMs = g_reloadEvent ? WaitForSingleObject(g_reloadEvent, 50) : (Sleep(50), WAIT_TIMEOUT);
+        if (!g_running) break;
+
+        if (waitMs == WAIT_OBJECT_0) {
+            Sleep(120);
+            UnloadCoreModule();
+            Sleep(150);
+            LoadCoreShadow(exeDir);
+            continue;
+        }
+
         const bool ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
         const bool f10Down = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
         const bool f11Down = (GetAsyncKeyState(VK_F11) & 0x8000) != 0;
@@ -283,9 +302,12 @@ static DWORD WINAPI LoaderThread(LPVOID) {
 
         prevCtrlF10 = ctrlF10;
         prevCtrlF11 = ctrlF11;
-        Sleep(50);
     }
 
+    if (g_reloadEvent) {
+        CloseHandle(g_reloadEvent);
+        g_reloadEvent = nullptr;
+    }
     return 0;
 }
 
@@ -298,6 +320,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
     case DLL_PROCESS_DETACH:
         g_running = false;
         if (lpvReserved == nullptr) {
+            if (g_reloadEvent) SetEvent(g_reloadEvent);
             if (g_workerThread) {
                 WaitForSingleObject(g_workerThread, 1500);
                 CloseHandle(g_workerThread);

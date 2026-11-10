@@ -374,8 +374,28 @@ events.on_render(function()
         imgui.set_next_window_size(530, 560, 2)
     end
 
-    local isOpen, keepOpen = imgui.begin_window("CarX2 Replay & Ghost Mod (MIT)", true)
+    local isOpen, keepOpen = imgui.begin_window("URUSHI // Replay & Ghost Mod [F4]", true)
     if isOpen then
+        if updater and updater.get_status then
+            local ust = updater.get_status()
+            local uver = ust.local_version or "0.1.0"
+            imgui.text_colored(0.55, 0.85, 1.0, 1.0, string.format("URUSHI v%s | %s", uver, ust.status_text or ""))
+            imgui.same_line()
+            if ust.state == "update_available" then
+                if imgui.button("Обновить", 95, 22) then
+                    updater.install()
+                end
+            elseif ust.state == "restart_required" then
+                if imgui.button("Рестарт", 95, 22) then
+                    updater.restart_game()
+                end
+            elseif ust.state ~= "checking" and ust.state ~= "downloading" and ust.state ~= "reinjecting" then
+                if imgui.button("Проверить", 95, 22) then
+                    updater.check()
+                end
+            end
+            imgui.separator()
+        end
         if imgui.begin_tab_bar("MainTabs") then
 
             -- ===================== TAB 1: RECORD =====================

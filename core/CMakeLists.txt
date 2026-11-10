@@ -24,11 +24,13 @@ add_library(CarX2ScriptHook SHARED
     file_watcher.h file_watcher.cpp
     lua_engine.h lua_engine.cpp
     ui_schema.h ui_schema.cpp
+    updater.h updater.cpp
     bindings/lua_carx.h bindings/lua_carx.cpp
     bindings/lua_carfx.h bindings/lua_carfx.cpp
     bindings/lua_imgui.h bindings/lua_imgui.cpp
     bindings/lua_replay.h bindings/lua_replay.cpp
     bindings/lua_memory.h bindings/lua_memory.cpp
+    bindings/lua_updater.h bindings/lua_updater.cpp
     ${IMGUI_SOURCES}
 )
 
@@ -47,6 +49,8 @@ target_link_libraries(CarX2ScriptHook PRIVATE
     shlwapi
     windowscodecs
     ole32
+    winhttp
+    bcrypt
 )
 
 set_target_properties(CarX2ScriptHook PROPERTIES
