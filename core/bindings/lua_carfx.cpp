@@ -20,6 +20,7 @@ static const luaL_Reg kCarfxFuncs[] = {
     { "get_game_input", LuaCarFX::GetGameInput },
     { "list_shaders",   LuaCarFX::ListShaders },
     { "get_status",     LuaCarFX::GetStatus },
+    { "get_spatial",    LuaCarFX::GetSpatial },
     { nullptr, nullptr }
 };
 
@@ -283,5 +284,54 @@ int LuaCarFX::GetStatus(lua_State* L) {
     }
     lua_setfield(L, -2, "textures");
 
+    return 1;
+}
+
+int LuaCarFX::GetSpatial(lua_State* L) {
+    CarFX::SpatialProximityInput sp = CarFX::GetSpatialProximity();
+    auto pushVec4 = [&](const char* k, const float v[4], const char* wKey) {
+        lua_newtable(L);
+        lua_pushnumber(L, v[0]); lua_setfield(L, -2, "x");
+        lua_pushnumber(L, v[1]); lua_setfield(L, -2, "y");
+        lua_pushnumber(L, v[2]); lua_setfield(L, -2, "z");
+        lua_pushnumber(L, v[3]); lua_setfield(L, -2, wKey ? wKey : "w");
+        lua_setfield(L, -2, k);
+    };
+
+    lua_newtable(L);
+    pushVec4("car_pos", sp.carPos, "half_w");
+    pushVec4("car_right", sp.carRight, "half_l");
+    pushVec4("car_up", sp.carUp, "height");
+    pushVec4("car_fwd", sp.carFwd, "valid");
+    pushVec4("cam_pos", sp.camPos, "valid");
+
+    pushVec4("near_car_pos", sp.nearCarPos, "gap");
+    pushVec4("near_car_closest", sp.nearCarClosest, "half_h");
+
+    lua_pushnumber(L, sp.wallDirDist[0]); lua_setfield(L, -2, "wall_front");
+    lua_pushnumber(L, sp.wallDirDist[1]); lua_setfield(L, -2, "wall_rear");
+    lua_pushnumber(L, sp.wallDirDist[2]); lua_setfield(L, -2, "wall_left");
+    lua_pushnumber(L, sp.wallDirDist[3]); lua_setfield(L, -2, "wall_right");
+    lua_pushnumber(L, sp.wallDoorLeftHit[3]); lua_setfield(L, -2, "wall_door_left");
+    lua_pushnumber(L, sp.wallDoorRightHit[3]); lua_setfield(L, -2, "wall_door_right");
+    lua_pushnumber(L, sp.wallFrontLeftHit[3]); lua_setfield(L, -2, "wall_front_left");
+    lua_pushnumber(L, sp.wallFrontRightHit[3]); lua_setfield(L, -2, "wall_front_right");
+    lua_pushnumber(L, sp.wallRearLeftHit[3]); lua_setfield(L, -2, "wall_rear_left");
+    lua_pushnumber(L, sp.wallRearRightHit[3]); lua_setfield(L, -2, "wall_rear_right");
+    pushVec4("wall_nearest", sp.wallNearestHit, "gap");
+    pushVec4("wall_front_hit", sp.wallFrontHit, "gap");
+    pushVec4("wall_rear_hit", sp.wallRearHit, "gap");
+    pushVec4("wall_left_hit", sp.wallLeftHit, "gap");
+    pushVec4("wall_right_hit", sp.wallRightHit, "gap");
+    pushVec4("wall_door_left_hit", sp.wallDoorLeftHit, "gap");
+    pushVec4("wall_door_right_hit", sp.wallDoorRightHit, "gap");
+    pushVec4("wall_front_left_hit", sp.wallFrontLeftHit, "gap");
+    pushVec4("wall_front_right_hit", sp.wallFrontRightHit, "gap");
+    pushVec4("wall_rear_left_hit", sp.wallRearLeftHit, "gap");
+    pushVec4("wall_rear_right_hit", sp.wallRearRightHit, "gap");
+    lua_pushnumber(L, sp.driftState[0]); lua_setfield(L, -2, "drift_deg");
+    lua_pushnumber(L, sp.driftState[1]); lua_setfield(L, -2, "drift_signed_deg");
+    lua_pushnumber(L, sp.driftState[2]); lua_setfield(L, -2, "drift_norm65");
+    lua_pushnumber(L, sp.driftState[3]); lua_setfield(L, -2, "speed_kmh");
     return 1;
 }

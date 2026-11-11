@@ -32,6 +32,33 @@ struct FxConstants {
     float param[kParams][4];         // p0..p7
     float frameInfo[4];              // x: livery bound (0/1), y: tex0 bound, z: tex1 bound, w: mode (1=replace, 2=overlay)
     float game[kGameInputs / 4][4];  // g_fxGame[4]
+
+    // Spatial + Proximity vectors populated from MainThread Unity/Physics
+    float carPos[4];
+    float carRight[4];
+    float carUp[4];
+    float carFwd[4];
+    float camPos[4];
+
+    float nearCarPos[4];
+    float nearCarRight[4];
+    float nearCarFwd[4];
+    float nearCarClosest[4];
+
+    float wallDirDist[4];
+    float wallNearestHit[4];
+    float wallNearestNormal[4];
+    float wallFrontHit[4];
+    float wallRearHit[4];
+    float wallLeftHit[4];
+    float wallRightHit[4];
+    float wallDoorLeftHit[4];
+    float wallDoorRightHit[4];
+    float wallFrontLeftHit[4];
+    float wallFrontRightHit[4];
+    float wallRearLeftHit[4];
+    float wallRearRightHit[4];
+    float driftState[4];
 };
 static_assert(sizeof(FxConstants) % 16 == 0, "CarFx constant buffer must align to 16 bytes");
 
@@ -197,6 +224,9 @@ GameSrvSnapshot s_gameTex[kTargetCount];
 std::atomic<uint64_t> s_gameTexGen{ 1 };
 
 std::atomic<float> s_gameInputs[kGameInputs]{};
+
+SRWLOCK s_spatialLock = SRWLOCK_INIT;
+SpatialProximityInput s_spatialInput{};
 
 std::mutex s_graveMtx;
 std::vector<RetiredObject> s_graveyard;
@@ -1231,6 +1261,19 @@ bool SetParamByName(int target, const char* name, const float* values, int count
     return true;
 }
 
+bool GetParamByName(int target, const char* name, float* outValues, int maxCount) {
+    if (!ValidTarget(target) || !name || !outValues || maxCount <= 0) return false;
+    TargetSlotState& ts = s_targets[target];
+    std::lock_guard<std::mutex> lk(ts.publishMtx);
+    const ParamDecl* pd = FindParam(ts.decl, name);
+    if (!pd) return false;
+    int n = (std::min)(maxCount, pd->count);
+    for (int i = 0; i < n; ++i) {
+        outValues[i] = ts.param[pd->slot][pd->first + i].load(std::memory_order_relaxed);
+    }
+    return true;
+}
+
 bool SetParamSlot(int target, int slot, const float* values, int count) {
     if (!ValidTarget(target) || slot < 0 || slot >= kParams || !values || count <= 0) return false;
     int n = (std::min)(count, 4);
@@ -1366,6 +1409,19 @@ float GetGameInput(int index) {
     return (index >= 0 && index < kGameInputs) ? s_gameInputs[index].load(std::memory_order_relaxed) : 0.0f;
 }
 
+void SetSpatialProximity(const SpatialProximityInput& input) {
+    AcquireSRWLockExclusive(&s_spatialLock);
+    s_spatialInput = input;
+    ReleaseSRWLockExclusive(&s_spatialLock);
+}
+
+SpatialProximityInput GetSpatialProximity() {
+    AcquireSRWLockShared(&s_spatialLock);
+    SpatialProximityInput copy = s_spatialInput;
+    ReleaseSRWLockShared(&s_spatialLock);
+    return copy;
+}
+
 bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, DrawIssueFn issueFn, void* issueCtx) {
     if (!context || !issueFn || !s_initialized.load(std::memory_order_acquire)) return false;
     if (context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return false;
@@ -1479,6 +1535,35 @@ bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, Draw
 
     for (int i = 0; i < kGameInputs; ++i) {
         k.game[i / 4][i % 4] = s_gameInputs[i].load(std::memory_order_relaxed);
+    }
+
+    {
+        AcquireSRWLockShared(&s_spatialLock);
+        const SpatialProximityInput sp = s_spatialInput;
+        ReleaseSRWLockShared(&s_spatialLock);
+        memcpy(k.carPos, sp.carPos, sizeof(k.carPos));
+        memcpy(k.carRight, sp.carRight, sizeof(k.carRight));
+        memcpy(k.carUp, sp.carUp, sizeof(k.carUp));
+        memcpy(k.carFwd, sp.carFwd, sizeof(k.carFwd));
+        memcpy(k.camPos, sp.camPos, sizeof(k.camPos));
+        memcpy(k.nearCarPos, sp.nearCarPos, sizeof(k.nearCarPos));
+        memcpy(k.nearCarRight, sp.nearCarRight, sizeof(k.nearCarRight));
+        memcpy(k.nearCarFwd, sp.nearCarFwd, sizeof(k.nearCarFwd));
+        memcpy(k.nearCarClosest, sp.nearCarClosest, sizeof(k.nearCarClosest));
+        memcpy(k.wallDirDist, sp.wallDirDist, sizeof(k.wallDirDist));
+        memcpy(k.wallNearestHit, sp.wallNearestHit, sizeof(k.wallNearestHit));
+        memcpy(k.wallNearestNormal, sp.wallNearestNormal, sizeof(k.wallNearestNormal));
+        memcpy(k.wallFrontHit, sp.wallFrontHit, sizeof(k.wallFrontHit));
+        memcpy(k.wallRearHit, sp.wallRearHit, sizeof(k.wallRearHit));
+        memcpy(k.wallLeftHit, sp.wallLeftHit, sizeof(k.wallLeftHit));
+        memcpy(k.wallRightHit, sp.wallRightHit, sizeof(k.wallRightHit));
+        memcpy(k.wallDoorLeftHit, sp.wallDoorLeftHit, sizeof(k.wallDoorLeftHit));
+        memcpy(k.wallDoorRightHit, sp.wallDoorRightHit, sizeof(k.wallDoorRightHit));
+        memcpy(k.wallFrontLeftHit, sp.wallFrontLeftHit, sizeof(k.wallFrontLeftHit));
+        memcpy(k.wallFrontRightHit, sp.wallFrontRightHit, sizeof(k.wallFrontRightHit));
+        memcpy(k.wallRearLeftHit, sp.wallRearLeftHit, sizeof(k.wallRearLeftHit));
+        memcpy(k.wallRearRightHit, sp.wallRearRightHit, sizeof(k.wallRearRightHit));
+        memcpy(k.driftState, sp.driftState, sizeof(k.driftState));
     }
 
     D3D11_MAPPED_SUBRESOURCE mapped{};

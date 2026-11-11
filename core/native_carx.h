@@ -50,9 +50,11 @@ public:
     static bool GetCarRigidBody(void* car, float outRb[29]);
     static bool SetCarRigidBody(void* car, const float inRb[29]);
     static bool GetCarVelocity(void* car, float outVel[3]);
+    static bool GetCarAngularVelocity(void* car, float outAngVel[3]);
     static void* SpawnCar();
     static bool DestroyCar(void* car);
     static void* GetPlayerCarPtr();
+    static void SetKnownPlayerCarPtr(void* car);
     static void* GetManagerPtr();
 
 private:
@@ -79,6 +81,7 @@ private:
     static std::recursive_mutex s_mutex;
     static std::vector<CarTelemetry> s_trackedCars;
     static void* s_playerCarPtr;
+    static void* s_knownPlayerCarPtr;
     static void* s_managerPtr;
     static HMODULE s_nativeCarXModule;
     static bool s_initialized;
@@ -131,4 +134,5 @@ private:
     static t_CX_CarGetRigidBody pfn_GetRigidBody;
     static t_CX_CarSetRigidBody pfn_SetRigidBody;
     static t_CX_CarGetVelocity pfn_GetVelocity;
+    static t_CX_CarGetVelocity pfn_GetAngularVelocity;
 };

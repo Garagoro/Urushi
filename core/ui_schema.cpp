@@ -1,4 +1,5 @@
 #include "ui_schema.h"
+#include "urushi_ui.h"
 #include "lua_engine.h"
 #include "logger.h"
 
@@ -456,21 +457,21 @@ void UiSchema::DrawUiNode(UiNode& node, ScriptPanel& panel) {
         ImGui::Spacing();
         break;
     case UiNodeType::Heading:
-        ImGui::Spacing();
-        ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.35f, 1.0f), "%s", node.text.empty() ? node.label.c_str() : node.text.c_str());
-        ImGui::Separator();
+        UrushiUI::Spacing(4.0f);
+        UrushiUI::Text(node.text.empty() ? node.label : node.text, UrushiUI::Tone::Accent);
+        UrushiUI::Separator();
         break;
     case UiNodeType::Text: {
-        const char* txt = node.text.empty() ? node.label.c_str() : node.text.c_str();
-        if (!node.id.empty() && panel.stringValues.find(node.id) != panel.stringValues.end()) {
-            txt = panel.stringValues[node.id].c_str();
-        }
-        if (node.style == "dim") ImGui::TextDisabled("%s", txt);
-        else if (node.style == "error") ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", txt);
-        else if (node.style == "accent") ImGui::TextColored(ImVec4(0.25f, 0.75f, 1.0f, 1.0f), "%s", txt);
-        else if (node.style == "green") ImGui::TextColored(ImVec4(0.35f, 0.85f, 0.45f, 1.0f), "%s", txt);
-        else if (node.style == "yellow") ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "%s", txt);
-        else ImGui::TextWrapped("%s", txt);
+        const std::string& txt = (!node.id.empty() && panel.stringValues.find(node.id) != panel.stringValues.end())
+            ? panel.stringValues[node.id]
+            : (node.text.empty() ? node.label : node.text);
+        UrushiUI::Tone tone = UrushiUI::Tone::Default;
+        if (node.style == "dim") tone = UrushiUI::Tone::Muted;
+        else if (node.style == "error") tone = UrushiUI::Tone::Red;
+        else if (node.style == "accent") tone = UrushiUI::Tone::Accent;
+        else if (node.style == "green") tone = UrushiUI::Tone::Green;
+        else if (node.style == "yellow") tone = UrushiUI::Tone::Yellow;
+        UrushiUI::TextWrapped(txt, tone);
         break;
     }
     case UiNodeType::Help:
@@ -482,21 +483,21 @@ void UiSchema::DrawUiNode(UiNode& node, ScriptPanel& panel) {
         break;
     case UiNodeType::SliderFloat: {
         float& val = panel.floatValues[node.id];
-        if (ImGui::SliderFloat(node.label.c_str(), &val, node.minVal, node.maxVal, "%.2f")) {
+        if (UrushiUI::SliderFloat(node.label, &val, node.minVal, node.maxVal, "%.2f")) {
             DispatchChange(panel, node.id);
         }
         break;
     }
     case UiNodeType::SliderInt: {
         int& val = panel.intValues[node.id];
-        if (ImGui::SliderInt(node.label.c_str(), &val, static_cast<int>(node.minVal), static_cast<int>(node.maxVal))) {
+        if (UrushiUI::SliderInt(node.label, &val, static_cast<int>(node.minVal), static_cast<int>(node.maxVal))) {
             DispatchChange(panel, node.id);
         }
         break;
     }
     case UiNodeType::Checkbox: {
         bool& val = panel.boolValues[node.id];
-        if (ImGui::Checkbox(node.label.c_str(), &val)) {
+        if (UrushiUI::Toggle(node.label, &val)) {
             DispatchChange(panel, node.id);
         }
         break;
@@ -504,56 +505,27 @@ void UiSchema::DrawUiNode(UiNode& node, ScriptPanel& panel) {
     case UiNodeType::Combo: {
         int& idx = panel.intValues[node.id];
         if (!node.options.empty()) {
-            std::string preview = (idx >= 0 && idx < static_cast<int>(node.options.size())) ? node.options[idx] : "";
-            if (ImGui::BeginCombo(node.label.c_str(), preview.c_str())) {
-                for (int i = 0; i < static_cast<int>(node.options.size()); ++i) {
-                    bool isSel = (i == idx);
-                    if (ImGui::Selectable(node.options[i].c_str(), isSel)) {
-                        idx = i;
-                        panel.stringValues[node.id] = node.options[i];
-                        DispatchChange(panel, node.id);
-                    }
-                    if (isSel) ImGui::SetItemDefaultFocus();
+            if (UrushiUI::Combo(node.label, &idx, node.options)) {
+                if (idx >= 0 && idx < static_cast<int>(node.options.size())) {
+                    panel.stringValues[node.id] = node.options[idx];
                 }
-                ImGui::EndCombo();
+                DispatchChange(panel, node.id);
             }
         }
         break;
     }
     case UiNodeType::TextInput: {
         std::string& val = panel.stringValues[node.id];
-        char buf[256];
-        memset(buf, 0, sizeof(buf));
-        if (!val.empty()) {
-            strncpy_s(buf, val.c_str(), sizeof(buf) - 1);
-        }
-        if (ImGui::InputText(node.label.c_str(), buf, sizeof(buf))) {
-            val = buf;
+        if (UrushiUI::InputText(node.label, val, 256)) {
             DispatchChange(panel, node.id);
         }
         break;
     }
     case UiNodeType::Button: {
-        bool clicked = false;
-        if (node.style == "primary") {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.50f, 0.85f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.60f, 0.95f, 1.0f));
-            clicked = ImGui::Button(node.label.c_str());
-            ImGui::PopStyleColor(2);
-        } else if (node.style == "accent") {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.30f, 0.35f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.35f, 0.40f, 1.0f));
-            clicked = ImGui::Button(node.label.c_str());
-            ImGui::PopStyleColor(2);
-        } else if (node.style == "green") {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.70f, 0.40f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.80f, 0.45f, 1.0f));
-            clicked = ImGui::Button(node.label.c_str());
-            ImGui::PopStyleColor(2);
-        } else {
-            clicked = ImGui::Button(node.label.c_str());
-        }
-
+        UrushiUI::ButtonStyle bStyle = UrushiUI::ButtonStyle::Default;
+        if (node.style == "primary" || node.style == "green") bStyle = UrushiUI::ButtonStyle::Primary;
+        else if (node.style == "accent") bStyle = UrushiUI::ButtonStyle::Danger;
+        bool clicked = UrushiUI::Button(node.label, 0.0f, 30.0f, bStyle);
         if (clicked && !node.action.empty()) {
             DispatchAction(panel, node.action);
         }

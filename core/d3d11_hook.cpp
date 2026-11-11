@@ -1,9 +1,11 @@
 #include "d3d11_hook.h"
 #include "carfx.h"
+#include "dev_pipe.h"
 #include "hook_manager.h"
 #include "logger.h"
 #include "lua_engine.h"
 #include "ui_schema.h"
+#include "urushi_ui.h"
 #include "updater.h"
 
 #include <shlwapi.h>
@@ -264,9 +266,11 @@ void D3D11Hook::Shutdown() {
     if (!s_initialized) return;
 
     DetachWndProc();
+    DevPipe::ReleaseD3D11();
     CarFX::Shutdown();
 
     if (s_imguiInitialized) {
+        UrushiUI::Shutdown();
         ImGui_ImplDX11_Shutdown();
         ImGui_ImplWin32_Shutdown();
         ImGui::DestroyContext();
@@ -293,60 +297,7 @@ void D3D11Hook::Shutdown() {
 }
 
 void D3D11Hook::ApplyTheme() {
-    ImGuiStyle& s = ImGui::GetStyle();
-    s.WindowPadding     = ImVec2(10.0f, 10.0f);
-    s.FramePadding      = ImVec2(9.0f, 5.0f);
-    s.ItemSpacing       = ImVec2(10.0f, 6.0f);
-    s.ItemInnerSpacing  = ImVec2(8.0f, 6.0f);
-    s.CellPadding       = ImVec2(9.0f, 7.0f);
-    s.ScrollbarSize     = 8.0f;
-    s.GrabMinSize       = 12.0f;
-    s.WindowRounding    = 8.0f;
-    s.ChildRounding     = 6.0f;
-    s.FrameRounding     = 5.0f;
-    s.PopupRounding     = 6.0f;
-    s.ScrollbarRounding = 4.0f;
-    s.GrabRounding      = 4.0f;
-    s.TabRounding       = 5.0f;
-    s.WindowBorderSize  = 1.0f;
-    s.ChildBorderSize   = 1.0f;
-    s.PopupBorderSize   = 1.0f;
-    s.FrameBorderSize   = 1.0f;
-    s.WindowTitleAlign  = ImVec2(0.0f, 0.5f);
-    s.AntiAliasedLines  = true;
-    s.AntiAliasedFill   = true;
-
-    ImVec4* c = s.Colors;
-    c[ImGuiCol_Text]                 = ImVec4(0.91f, 0.92f, 0.95f, 1.00f);
-    c[ImGuiCol_TextDisabled]         = ImVec4(0.56f, 0.58f, 0.64f, 1.00f);
-    c[ImGuiCol_WindowBg]             = ImVec4(0.06f, 0.07f, 0.09f, 0.96f);
-    c[ImGuiCol_ChildBg]              = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
-    c[ImGuiCol_PopupBg]              = ImVec4(0.08f, 0.09f, 0.13f, 0.98f);
-    c[ImGuiCol_Border]               = ImVec4(0.16f, 0.19f, 0.25f, 1.00f);
-    c[ImGuiCol_BorderShadow]         = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
-    c[ImGuiCol_FrameBg]              = ImVec4(0.10f, 0.12f, 0.17f, 1.00f);
-    c[ImGuiCol_FrameBgHovered]       = ImVec4(0.14f, 0.17f, 0.23f, 1.00f);
-    c[ImGuiCol_FrameBgActive]        = ImVec4(0.18f, 0.22f, 0.29f, 1.00f);
-    c[ImGuiCol_TitleBg]              = ImVec4(0.08f, 0.09f, 0.12f, 1.00f);
-    c[ImGuiCol_TitleBgActive]        = ImVec4(0.11f, 0.13f, 0.18f, 1.00f);
-    c[ImGuiCol_CheckMark]            = ImVec4(0.20f, 0.65f, 1.00f, 1.00f);
-    c[ImGuiCol_SliderGrab]           = ImVec4(0.20f, 0.65f, 1.00f, 1.00f);
-    c[ImGuiCol_SliderGrabActive]     = ImVec4(0.35f, 0.75f, 1.00f, 1.00f);
-    c[ImGuiCol_Button]               = ImVec4(0.12f, 0.15f, 0.21f, 1.00f);
-    c[ImGuiCol_ButtonHovered]        = ImVec4(0.18f, 0.22f, 0.30f, 1.00f);
-    c[ImGuiCol_ButtonActive]         = ImVec4(0.22f, 0.27f, 0.36f, 1.00f);
-    c[ImGuiCol_Header]               = ImVec4(0.12f, 0.15f, 0.21f, 1.00f);
-    c[ImGuiCol_HeaderHovered]        = ImVec4(0.18f, 0.22f, 0.30f, 1.00f);
-    c[ImGuiCol_HeaderActive]         = ImVec4(0.20f, 0.65f, 1.00f, 0.40f);
-    c[ImGuiCol_Separator]            = ImVec4(0.16f, 0.19f, 0.25f, 0.75f);
-    c[ImGuiCol_SeparatorHovered]     = ImVec4(0.20f, 0.65f, 1.00f, 0.60f);
-    c[ImGuiCol_ScrollbarBg]          = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
-    c[ImGuiCol_ScrollbarGrab]        = ImVec4(0.16f, 0.19f, 0.25f, 1.00f);
-    c[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.25f, 0.29f, 0.38f, 1.00f);
-    c[ImGuiCol_ScrollbarGrabActive]  = ImVec4(0.20f, 0.65f, 1.00f, 0.85f);
-    c[ImGuiCol_Tab]                  = ImVec4(0.10f, 0.12f, 0.17f, 1.00f);
-    c[ImGuiCol_TabHovered]           = ImVec4(0.18f, 0.22f, 0.30f, 1.00f);
-    c[ImGuiCol_TabSelected]          = ImVec4(0.15f, 0.25f, 0.40f, 1.00f);
+    UrushiUI::ApplyBaseTheme();
 }
 
 HRESULT WINAPI D3D11Hook::Hooked_Present(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags) {
@@ -425,8 +376,8 @@ HRESULT WINAPI D3D11Hook::Hooked_Present(IDXGISwapChain* pSwapChain, UINT SyncIn
 
                 io.FontDefault = AppFonts::Regular;
 
-                // Apply modern dark theme
-                ApplyTheme();
+                // Apply URUSHI Lacquered theme
+                UrushiUI::Init();
 
                 ImGui_ImplWin32_Init(s_hwnd);
                 ImGui_ImplDX11_Init(s_device, s_context);
@@ -447,6 +398,8 @@ HRESULT WINAPI D3D11Hook::Hooked_Present(IDXGISwapChain* pSwapChain, UINT SyncIn
 
             ImGui_ImplDX11_NewFrame();
             ImGui_ImplWin32_NewFrame();
+            DevPipe::BeforeNewFrame();
+            UrushiUI::PrepareFrame();
             ImGui::NewFrame();
 
             // 1. Let Lua Engine render imperative UI (HUD, graphs)
@@ -459,8 +412,11 @@ HRESULT WINAPI D3D11Hook::Hooked_Present(IDXGISwapChain* pSwapChain, UINT SyncIn
             Updater::RenderUI(s_menuOpen);
 
             ImGui::Render();
-            s_context->OMSetRenderTargets(1, &s_renderTargetView, nullptr);
-            ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+            if (!DevPipe::ShouldSuppressVisibleDraw()) {
+                s_context->OMSetRenderTargets(1, &s_renderTargetView, nullptr);
+                ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+            }
+            DevPipe::AfterImGuiRender(pSwapChain, s_device, s_context);
         }
     }
     catch (const std::exception& e) {
@@ -483,6 +439,7 @@ HRESULT WINAPI D3D11Hook::Hooked_ResizeBuffers(IDXGISwapChain* pSwapChain, UINT 
         s_renderTargetView->Release();
         s_renderTargetView = nullptr;
     }
+    DevPipe::ReleaseD3D11();
 
     HRESULT hr = s_originalResizeBuffers(pSwapChain, BufferCount, Width, Height, NewFormat, SwapChainFlags);
 
@@ -523,15 +480,13 @@ LRESULT WINAPI D3D11Hook::Hooked_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
             return true;
         }
 
-        // If ImGui is capturing keyboard/mouse and menu is open, block inputs to game
+        // If ImGui is capturing keyboard/mouse (dock open or hovering a pinned interactive window), block inputs to game
         ImGuiIO& io = ImGui::GetIO();
-        if (s_menuOpen) {
-            if (io.WantCaptureMouse && (uMsg >= WM_MOUSEFIRST && uMsg <= WM_MOUSELAST)) {
-                return true;
-            }
-            if (io.WantCaptureKeyboard && (uMsg >= WM_KEYFIRST && uMsg <= WM_KEYLAST)) {
-                return true;
-            }
+        if (io.WantCaptureMouse && (uMsg >= WM_MOUSEFIRST && uMsg <= WM_MOUSELAST)) {
+            return true;
+        }
+        if (io.WantCaptureKeyboard && (uMsg >= WM_KEYFIRST && uMsg <= WM_KEYLAST)) {
+            return true;
         }
     }
 

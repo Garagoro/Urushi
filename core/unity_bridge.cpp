@@ -1,6 +1,7 @@
 #include "unity_bridge.h"
 #include "carfx.h"
 #include "ecs_collision.h"
+#include "car_sim_optimizer.h"
 #include "native_carx.h"
 #include "replay_engine.h"
 #include "hook_manager.h"
@@ -39,6 +40,9 @@ float UnityBridge::s_pendingMultiReplayTime = 0.0f;
 float UnityBridge::s_pendingMultiReplayOffset = 0.0f;
 std::atomic<bool> UnityBridge::s_ghostCollisionEnabled{ false };
 std::atomic<bool> UnityBridge::s_pendingCollisionSync{ false };
+std::atomic<bool> UnityBridge::s_pendingTeleport{ false };
+TeleportPose UnityBridge::s_pendingTeleportPose{};
+int UnityBridge::s_pendingTeleportVelMode = 0;
 UnityVector3 UnityBridge::s_pendingPos{};
 UnityVector4 UnityBridge::s_pendingRot{};
 
@@ -54,6 +58,8 @@ UnityBridge::t_Transform_set_position UnityBridge::pfn_Transform_set_position = 
 UnityBridge::t_Transform_set_rotation UnityBridge::pfn_Transform_set_rotation = nullptr;
 UnityBridge::t_Transform_get_position UnityBridge::pfn_Transform_get_position = nullptr;
 UnityBridge::t_Transform_get_rotation UnityBridge::pfn_Transform_get_rotation = nullptr;
+UnityBridge::t_GetMainCameraNative UnityBridge::pfn_GetMainCameraNative = nullptr;
+UnityBridge::t_InternalRaycast UnityBridge::pfn_InternalRaycast = nullptr;
 
 // ================= Leaf SEH Helpers (No C++ Unwinding Objects) =================
 
@@ -135,6 +141,123 @@ static bool SafeCallGetNativeTexPtr(uintptr_t fnAddr, void* nativeTex, void** ou
     }
 }
 
+struct CarBehaviourInfo {
+    uintptr_t carBehaviour = 0;
+    void* nativeCarPtr = nullptr;
+    void* raceCarPtr = nullptr;
+    bool isPlayer = false;
+};
+
+struct Float4x4 {
+    float m[16];
+};
+
+static uintptr_t SafeFindCarBehaviourOnRootGoSEH(void* rootGo) {
+    if (!rootGo) return 0;
+    __try {
+        uintptr_t go = reinterpret_cast<uintptr_t>(rootGo);
+        if (!IsReadableMem(go, 0x38)) return 0;
+        uintptr_t compArr = *reinterpret_cast<uintptr_t*>(go + 0x20);
+        uint32_t compCount = *reinterpret_cast<uint32_t*>(go + 0x30);
+        if (compCount == 0 || compCount > 256 || !IsReadableMem(compArr, static_cast<size_t>(compCount) * 16)) return 0;
+
+        for (uint32_t ci = 0; ci < compCount; ++ci) {
+            uint32_t cid = *reinterpret_cast<uint32_t*>(compArr + ci * 16);
+            if (cid != 66) continue; // MonoBehaviour
+            uintptr_t natComp = *reinterpret_cast<uintptr_t*>(compArr + ci * 16 + 8);
+            if (!IsReadableMem(natComp, 0x20)) continue;
+            uintptr_t gcSlot = *reinterpret_cast<uintptr_t*>(natComp + 0x18);
+            if (!IsReadableMem(gcSlot & ~7ull, sizeof(uintptr_t))) continue;
+            uintptr_t managed = *reinterpret_cast<uintptr_t*>(gcSlot & ~7ull);
+            if ((managed & 7) || !IsReadableMem(managed, 0x118)) continue;
+            uintptr_t klass = *reinterpret_cast<uintptr_t*>(managed);
+            if (!IsReadableMem(klass, 0x18)) continue;
+            const char* kname = *reinterpret_cast<const char**>(klass + 0x10);
+            if (!IsReadableMem(reinterpret_cast<uintptr_t>(kname), 16)) continue;
+            if (kname[0] == 'C' && kname[1] == 'a' && kname[2] == 'r' &&
+                strcmp(kname, "CarBehaviour") == 0) {
+                return managed;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+    return 0;
+}
+
+static bool SafeInspectCarBehaviourOnRootGoSEH(void* rootGo, CarBehaviourInfo* outInfo) {
+    if (!rootGo || !outInfo) return false;
+    *outInfo = CarBehaviourInfo{};
+    uintptr_t cb = SafeFindCarBehaviourOnRootGoSEH(rootGo);
+    if (cb < 0x10000) return false;
+
+    __try {
+        outInfo->carBehaviour = cb;
+        // Verified offsets in CarBehaviour [idx=23722]:
+        //   +0x50: <carX>k__BackingField (CARXCar : Car) -> +0xC8: Car.native (NativeCarX handle)
+        //   +0x58: Framework.Models.Cars.RaceCars.RaceCar* raceCarModel
+        //   +0x110: uint8_t m_isPlayer
+        outInfo->isPlayer = (*reinterpret_cast<const uint8_t*>(cb + 0x110) != 0);
+
+        uintptr_t carXObj = *reinterpret_cast<const uintptr_t*>(cb + 0x50);
+        if (IsReadableMem(carXObj, 0xD0)) {
+            void* nativePtr = *reinterpret_cast<void* const*>(carXObj + 0xC8);
+            if (reinterpret_cast<uintptr_t>(nativePtr) >= 0x10000) {
+                outInfo->nativeCarPtr = nativePtr;
+            }
+        }
+
+        uintptr_t raceCar = *reinterpret_cast<const uintptr_t*>(cb + 0x58);
+        if (IsReadableMem(raceCar, 0x160)) {
+            outInfo->raceCarPtr = reinterpret_cast<void*>(raceCar);
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *outInfo = CarBehaviourInfo{};
+        return false;
+    }
+}
+
+static bool SafeCallRaceCarTeleportSEH(uintptr_t gaBase, void* raceCarPtr,
+                                       const Float4x4* mat,
+                                       const UnityVector3* linVel,
+                                       const UnityVector3* angVel) {
+    if (!gaBase || !raceCarPtr || !mat || !linVel || !angVel) return false;
+    __try {
+        uintptr_t rc = reinterpret_cast<uintptr_t>(raceCarPtr);
+        if (!IsReadableMem(rc, 0x160)) return false;
+        uintptr_t klass = *reinterpret_cast<uintptr_t*>(rc);
+        if (!IsReadableMem(klass, 0x18)) return false;
+        const char* kname = *reinterpret_cast<const char**>(klass + 0x10);
+        if (!IsReadableMem(reinterpret_cast<uintptr_t>(kname), 16) ||
+            strcmp(kname, "RaceCar") != 0) {
+            return false;
+        }
+        uintptr_t localToWorldObj = *reinterpret_cast<uintptr_t*>(rc + 0x140);
+        uintptr_t velObj = *reinterpret_cast<uintptr_t*>(rc + 0x148);
+        uintptr_t angVelObj = *reinterpret_cast<uintptr_t*>(rc + 0x150);
+        if (!IsReadableMem(localToWorldObj, 0x68) ||
+            !IsReadableMem(velObj, 0x20) ||
+            !IsReadableMem(angVelObj, 0x20)) {
+            return false;
+        }
+
+        // Verified RVAs in GameAssembly.dll (Framework.Models.Cars.RaceCars.RaceCar [idx=29997]):
+        //   0x1DCE130: ForceVelocityChange(Vector3 velocity, Vector3 angularVelocity)
+        //   0x1DCE0B0: ForceTransformChange(float4x4 localToWorld)
+        using t_ForceVelocityChange = void(__fastcall*)(void*, const UnityVector3*, const UnityVector3*, void*);
+        using t_ForceTransformChangeMat = void(__fastcall*)(void*, const Float4x4*, void*);
+        auto pfnVel = reinterpret_cast<t_ForceVelocityChange>(gaBase + 0x1DCE130);
+        auto pfnTf  = reinterpret_cast<t_ForceTransformChangeMat>(gaBase + 0x1DCE0B0);
+
+        pfnVel(raceCarPtr, linVel, angVel, nullptr);
+        pfnTf(raceCarPtr, mat, nullptr);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 static bool SafeExtractMasterMatTexPairSEH(void* rootGo, uint32_t targetTypeId,
                                            void** outNatAlbedo, void** outNatPacked,
                                            uint32_t* outAlbTexId, uint32_t* outPackTexId,
@@ -146,34 +269,10 @@ static bool SafeExtractMasterMatTexPairSEH(void* rootGo, uint32_t targetTypeId,
     *outPackTexId = 0;
     if (outPartsMap) *outPartsMap = 0;
 
-    __try {
-        uintptr_t go = reinterpret_cast<uintptr_t>(rootGo);
-        if (!IsReadableMem(go, 0x38)) return false;
-        uintptr_t compArr = *reinterpret_cast<uintptr_t*>(go + 0x20);
-        uint32_t compCount = *reinterpret_cast<uint32_t*>(go + 0x30);
-        if (compCount == 0 || compCount > 256 || !IsReadableMem(compArr, static_cast<size_t>(compCount) * 16)) return false;
+    uintptr_t carBehaviour = SafeFindCarBehaviourOnRootGoSEH(rootGo);
+    if (carBehaviour < 0x10000) return false;
 
-        uintptr_t carBehaviour = 0;
-        for (uint32_t ci = 0; ci < compCount; ++ci) {
-            uint32_t cid = *reinterpret_cast<uint32_t*>(compArr + ci * 16);
-            if (cid != 66) continue; // MonoBehaviour
-            uintptr_t natComp = *reinterpret_cast<uintptr_t*>(compArr + ci * 16 + 8);
-            if (!IsReadableMem(natComp, 0x20)) continue;
-            uintptr_t gcSlot = *reinterpret_cast<uintptr_t*>(natComp + 0x18);
-            if (!IsReadableMem(gcSlot & ~7ull, sizeof(uintptr_t))) continue;
-            uintptr_t managed = *reinterpret_cast<uintptr_t*>(gcSlot & ~7ull);
-            if ((managed & 7) || !IsReadableMem(managed, 0x68)) continue;
-            uintptr_t klass = *reinterpret_cast<uintptr_t*>(managed);
-            if (!IsReadableMem(klass, 0x18)) continue;
-            const char* kname = *reinterpret_cast<const char**>(klass + 0x10);
-            if (!IsReadableMem(reinterpret_cast<uintptr_t>(kname), 16)) continue;
-            if (kname[0] == 'C' && kname[1] == 'a' && kname[2] == 'r' &&
-                strcmp(kname, "CarBehaviour") == 0) {
-                carBehaviour = managed;
-                break;
-            }
-        }
-        if (carBehaviour < 0x10000) return false;
+    __try {
 
         // Verified chain: CarBehaviour +0x60 -> CarModel +0x38 -> PartsMap +0x18 -> MasterMaterials +0x20 -> m_textures
         uintptr_t carModel = *reinterpret_cast<uintptr_t*>(carBehaviour + 0x60);
@@ -1114,6 +1213,8 @@ bool UnityBridge::Init() {
     pfn_Transform_set_position   = reinterpret_cast<t_Transform_set_position>(s_unityBase + 0xCCA50);
     pfn_Transform_get_rotation   = reinterpret_cast<t_Transform_get_rotation>(s_unityBase + 0xCCB40);
     pfn_Transform_set_rotation   = reinterpret_cast<t_Transform_set_rotation>(s_unityBase + 0xCCB90);
+    pfn_GetMainCameraNative      = reinterpret_cast<t_GetMainCameraNative>(s_unityBase + 0x592900);
+    pfn_InternalRaycast          = reinterpret_cast<t_InternalRaycast>(s_unityBase + 0x12E080);
 
     void* targetExecLoop = reinterpret_cast<void*>(s_unityBase + 0x5AC580);
     bool hookOk = HookManager::CreateHook(
@@ -1220,6 +1321,17 @@ void UnityBridge::ProcessPendingMainThreadTasks(float dt) {
         SpawnGhostSlotInternal(0);
     }
 
+    if (s_pendingTeleport.exchange(false)) {
+        TeleportPose poseCopy{};
+        int velMode = 0;
+        {
+            std::lock_guard<std::recursive_mutex> lock(s_mutex);
+            poseCopy = s_pendingTeleportPose;
+            velMode = s_pendingTeleportVelMode;
+        }
+        ApplyTeleportPlayerInternal(poseCopy, velMode);
+    }
+
     // Periodically sync scene car model cache + per-frame lightweight position matching
     if (NativeCarX::IsInSession()) {
         RefreshLiveCarListOnMainThread(false);
@@ -1229,7 +1341,9 @@ void UnityBridge::ProcessPendingMainThreadTasks(float dt) {
             liveSnapshot = s_liveCars;
         }
         EcsCollision::UpdateOnMainThread(dt, liveSnapshot);
+        CarSimOptimizer::UpdateOnMainThread(dt, liveSnapshot);
         UpdateCarFXPlayerTexturesOnMainThread(s_unityBase, liveSnapshot);
+        UpdateCarFXSpatialProximityOnMainThread(liveSnapshot);
     } else if (!s_liveCars.empty() || !s_sceneCarCache.empty()) {
         {
             std::lock_guard<std::recursive_mutex> lock(s_mutex);
@@ -1237,10 +1351,14 @@ void UnityBridge::ProcessPendingMainThreadTasks(float dt) {
             s_sceneCarCache.clear();
         }
         EcsCollision::UpdateOnMainThread(dt, {});
+        CarSimOptimizer::UpdateOnMainThread(dt, {});
         UpdateCarFXPlayerTexturesOnMainThread(s_unityBase, {});
+        CarFX::SetSpatialProximity(CarFX::SpatialProximityInput{});
     } else {
         EcsCollision::UpdateOnMainThread(dt, {});
+        CarSimOptimizer::UpdateOnMainThread(dt, {});
         UpdateCarFXPlayerTexturesOnMainThread(s_unityBase, {});
+        CarFX::SetSpatialProximity(CarFX::SpatialProximityInput{});
     }
 
     if (s_pendingCollisionSync.exchange(false)) {
@@ -1546,22 +1664,59 @@ void UnityBridge::RefreshLiveCarListOnMainThread(bool forceRescan) {
             item.rootGo = root->go;
             item.rootTf = root->transform;
             item.modelGo = obj.go;
-            UnityVector4 dummyRot{};
+
+            CarBehaviourInfo cbInfo{};
+            if (SafeInspectCarBehaviourOnRootGoSEH(item.rootGo, &cbInfo)) {
+                item.carBehaviour = reinterpret_cast<void*>(cbInfo.carBehaviour);
+                item.nativeCarPtr = cbInfo.nativeCarPtr;
+                item.raceCarPtr = cbInfo.raceCarPtr;
+                item.isPlayer = cbInfo.isPlayer;
+            }
+
             if (pfn_Transform_get_position && SafeCallGetVec3(reinterpret_cast<void*>(pfn_Transform_get_position), item.rootTf, &item.pos)) {
                 item.hasPos = true;
             } else if (root->hasPos) {
                 item.pos = root->pos;
                 item.hasPos = true;
             }
+            if (pfn_Transform_get_rotation && item.rootTf) {
+                item.hasRot = SafeCallGetVec4(reinterpret_cast<void*>(pfn_Transform_get_rotation), item.rootTf, &item.rot);
+            }
             rebuilt.push_back(std::move(item));
         }
         s_sceneCarCache = std::move(rebuilt);
-    } else if (pfn_Transform_get_position) {
+    } else if (pfn_Transform_get_position || pfn_Transform_get_rotation) {
         for (auto& sc : s_sceneCarCache) {
             if (sc.rootTf) {
-                sc.hasPos = SafeCallGetVec3(reinterpret_cast<void*>(pfn_Transform_get_position), sc.rootTf, &sc.pos);
+                if (pfn_Transform_get_position) {
+                    sc.hasPos = SafeCallGetVec3(reinterpret_cast<void*>(pfn_Transform_get_position), sc.rootTf, &sc.pos);
+                }
+                if (pfn_Transform_get_rotation) {
+                    sc.hasRot = SafeCallGetVec4(reinterpret_cast<void*>(pfn_Transform_get_rotation), sc.rootTf, &sc.rot);
+                }
+            }
+            if (sc.rootGo && (!sc.carBehaviour || !sc.nativeCarPtr || !sc.raceCarPtr)) {
+                CarBehaviourInfo cbInfo{};
+                if (SafeInspectCarBehaviourOnRootGoSEH(sc.rootGo, &cbInfo)) {
+                    sc.carBehaviour = reinterpret_cast<void*>(cbInfo.carBehaviour);
+                    sc.nativeCarPtr = cbInfo.nativeCarPtr;
+                    sc.raceCarPtr = cbInfo.raceCarPtr;
+                    sc.isPlayer = cbInfo.isPlayer;
+                }
             }
         }
+    }
+
+    // Push authoritative local player car pointer from Unity CarBehaviour::m_isPlayer into NativeCarX
+    void* knownPlayerCarPtr = nullptr;
+    for (const auto& sc : s_sceneCarCache) {
+        if (sc.isPlayer && sc.nativeCarPtr) {
+            knownPlayerCarPtr = sc.nativeCarPtr;
+            break;
+        }
+    }
+    if (knownPlayerCarPtr) {
+        NativeCarX::SetKnownPlayerCarPtr(knownPlayerCarPtr);
     }
 
     std::vector<LiveCarInfo> updated;
@@ -1570,23 +1725,30 @@ void UnityBridge::RefreshLiveCarListOnMainThread(bool forceRescan) {
         const auto& c = cars[i];
         LiveCarInfo info;
         info.carPtr = c.carPtr;
-        info.isLocalPlayer = c.isLocalPlayer;
         info.x = c.posX;
         info.y = c.posY;
         info.z = c.posZ;
         info.speedKmh = c.speedKmh;
 
         const SceneCarModelCache* best = nullptr;
-        float bestDistSq = 16.0f; // within 4m
         for (const auto& sc : s_sceneCarCache) {
-            if (!sc.hasPos) continue;
-            float dx = sc.pos.x - c.posX;
-            float dy = sc.pos.y - c.posY;
-            float dz = sc.pos.z - c.posZ;
-            float d2 = dx * dx + dy * dy + dz * dz;
-            if (d2 < bestDistSq) {
-                bestDistSq = d2;
+            if (sc.nativeCarPtr && sc.nativeCarPtr == c.carPtr) {
                 best = &sc;
+                break;
+            }
+        }
+        if (!best) {
+            float bestDistSq = 16.0f; // fallback within 4m
+            for (const auto& sc : s_sceneCarCache) {
+                if (!sc.hasPos) continue;
+                float dx = sc.pos.x - c.posX;
+                float dy = sc.pos.y - c.posY;
+                float dz = sc.pos.z - c.posZ;
+                float d2 = dx * dx + dy * dy + dz * dz;
+                if (d2 < bestDistSq) {
+                    bestDistSq = d2;
+                    best = &sc;
+                }
             }
         }
 
@@ -1595,8 +1757,20 @@ void UnityBridge::RefreshLiveCarListOnMainThread(bool forceRescan) {
             info.rootGo = best->rootGo;
             info.rootTf = best->rootTf;
             info.modelGo = best->modelGo;
+            info.carBehaviour = best->carBehaviour;
+            info.raceCarPtr = best->raceCarPtr;
+            if (best->hasPos) {
+                info.x = best->pos.x; info.y = best->pos.y; info.z = best->pos.z;
+                info.hasPos = true;
+            }
+            if (best->hasRot) {
+                info.qx = best->rot.x; info.qy = best->rot.y; info.qz = best->rot.z; info.qw = best->rot.w;
+                info.hasRot = true;
+            }
+            info.isLocalPlayer = best->isPlayer || (knownPlayerCarPtr ? (c.carPtr == knownPlayerCarPtr) : c.isLocalPlayer);
         } else {
-            info.unityName = c.isLocalPlayer ? "Player Car" : ("Car #" + std::to_string(i + 1));
+            info.isLocalPlayer = knownPlayerCarPtr ? (c.carPtr == knownPlayerCarPtr) : c.isLocalPlayer;
+            info.unityName = info.isLocalPlayer ? "Player Car" : ("Car #" + std::to_string(i + 1));
         }
         updated.push_back(std::move(info));
     }
@@ -1628,6 +1802,17 @@ std::vector<LiveCarInfo> UnityBridge::GetLiveCarList() {
                 info.rootGo = cached.rootGo;
                 info.rootTf = cached.rootTf;
                 info.modelGo = cached.modelGo;
+                info.carBehaviour = cached.carBehaviour;
+                info.raceCarPtr = cached.raceCarPtr;
+                info.hasPos = cached.hasPos;
+                if (cached.hasPos) {
+                    info.x = cached.x; info.y = cached.y; info.z = cached.z;
+                }
+                if (cached.hasRot) {
+                    info.qx = cached.qx; info.qy = cached.qy; info.qz = cached.qz; info.qw = cached.qw;
+                    info.hasRot = true;
+                }
+                info.isLocalPlayer = cached.isLocalPlayer || c.isLocalPlayer;
                 matched = true;
                 break;
             }
@@ -1699,6 +1884,22 @@ void* UnityBridge::FindModelForCarName(const std::string& preferredCarName, void
 
 void* UnityBridge::FindPlayerCarModel(void** outRootTf) {
     if (outRootTf) *outRootTf = nullptr;
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(s_mutex);
+        for (const auto& c : s_liveCars) {
+            if (c.isLocalPlayer && c.modelGo) {
+                if (outRootTf) *outRootTf = c.rootTf;
+                return c.modelGo;
+            }
+        }
+        for (const auto& sc : s_sceneCarCache) {
+            if (sc.isPlayer && sc.modelGo) {
+                if (outRootTf) *outRootTf = sc.rootTf;
+                return sc.modelGo;
+            }
+        }
+    }
 
     CarTelemetry tele = NativeCarX::GetPlayerCarTelemetry();
     if (!tele.carPtr) return nullptr;
@@ -2103,6 +2304,770 @@ void UnityBridge::ApplyAllReplayTracksAtTimeInternal(float targetTime, float off
     }
 }
 
+struct UnityRay {
+    UnityVector3 origin;
+    UnityVector3 direction;
+};
+
+struct UnityRaycastHit {
+    UnityVector3 point;       // +0x00
+    UnityVector3 normal;      // +0x0C
+    uint32_t     faceId;      // +0x18
+    float        distance;    // +0x1C
+    float        uv[2];       // +0x20
+    int32_t      colliderId;  // +0x28
+};
+static_assert(sizeof(UnityRaycastHit) == 44, "UnityRaycastHit size mismatch");
+
+static void QuatToAxes(UnityVector4 q, UnityVector3& right, UnityVector3& up, UnityVector3& fwd) {
+    float lenSq = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+    if (lenSq > 1e-8f) {
+        float inv = 1.0f / sqrtf(lenSq);
+        q.x *= inv; q.y *= inv; q.z *= inv; q.w *= inv;
+    } else {
+        q = { 0.0f, 0.0f, 0.0f, 1.0f };
+    }
+    float xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
+    float xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z;
+    float wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
+    right = VecNormalize({ 1.0f - 2.0f * (yy + zz), 2.0f * (xy + wz), 2.0f * (xz - wy) });
+    up    = VecNormalize({ 2.0f * (xy - wz), 1.0f - 2.0f * (xx + zz), 2.0f * (yz + wx) });
+    fwd   = VecNormalize({ 2.0f * (xz + wy), 2.0f * (yz - wx), 1.0f - 2.0f * (xx + yy) });
+}
+
+static bool SafeGetMainCameraPosSEH(void* fnGetCam, void* fnTfGetPos, UnityVector3* outPos) {
+    if (!fnGetCam || !fnTfGetPos || !outPos) return false;
+    __try {
+        using t_GetCam = void* (*)();
+        using t_GetPos = void (*)(void*, UnityVector3*);
+        void* camNative = reinterpret_cast<t_GetCam>(fnGetCam)();
+        if (!IsReadableMem(reinterpret_cast<uintptr_t>(camNative), 0x28)) return false;
+        uintptr_t camGo = *reinterpret_cast<const uintptr_t*>(reinterpret_cast<uintptr_t>(camNative) + 0x20);
+        if (!IsReadableMem(camGo, 0x28)) return false;
+        uintptr_t compArr = *reinterpret_cast<const uintptr_t*>(camGo + 0x20);
+        if (!IsReadableMem(compArr, 0x10)) return false;
+        void* camTf = *reinterpret_cast<void* const*>(compArr + 0x08);
+        if (reinterpret_cast<uintptr_t>(camTf) < 0x10000) return false;
+        reinterpret_cast<t_GetPos>(fnTfGetPos)(camTf, outPos);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static bool SafePhysicsRaycastSEH(void* fnRaycast, const UnityRay* ray, float maxDist, UnityRaycastHit* outHit, int layerMask) {
+    if (!fnRaycast || !ray || !outHit) return false;
+    __try {
+        using t_Ray = bool (*)(const uint64_t*, const void*, float, void*, int, int);
+        uint64_t sceneHandle = 0;
+        memset(outHit, 0, sizeof(*outHit));
+        return reinterpret_cast<t_Ray>(fnRaycast)(&sceneHandle, ray, maxDist, outHit, layerMask, 1);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static UnityVector3 ClosestPointOnOBB(const UnityVector3& pt,
+                                      const UnityVector3& center,
+                                      const UnityVector3& right,
+                                      const UnityVector3& up,
+                                      const UnityVector3& fwd,
+                                      float halfW, float halfH, float halfL) {
+    UnityVector3 d = { pt.x - center.x, pt.y - center.y, pt.z - center.z };
+    float lx = std::clamp(VecDot(d, right), -halfW, halfW);
+    float ly = std::clamp(VecDot(d, up),    -halfH, halfH);
+    float lz = std::clamp(VecDot(d, fwd),   -halfL, halfL);
+    return {
+        center.x + right.x * lx + up.x * ly + fwd.x * lz,
+        center.y + right.y * lx + up.y * ly + fwd.y * lz,
+        center.z + right.z * lx + up.z * ly + fwd.z * lz
+    };
+}
+
+void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<LiveCarInfo>& liveSnapshot) {
+    CarFX::SpatialProximityInput sp{};
+
+    void* localRootTf = nullptr;
+    UnityVector3 pPos{};
+    UnityVector4 pRot{ 0.0f, 0.0f, 0.0f, 1.0f };
+    bool hasLocal = false;
+
+    for (const auto& c : liveSnapshot) {
+        if (c.isLocalPlayer) {
+            localRootTf = c.rootTf;
+            pPos = { c.x, c.y, c.z };
+            pRot = { c.qx, c.qy, c.qz, c.qw };
+            hasLocal = c.hasPos || c.hasRot;
+            break;
+        }
+    }
+    if (localRootTf && GetTransformPosRotDirect(localRootTf, pPos, pRot)) {
+        hasLocal = true;
+    }
+    if (!hasLocal) {
+        CarFX::SetSpatialProximity(sp);
+        return;
+    }
+
+    UnityVector3 pRight, pUp, pFwd;
+    QuatToAxes(pRot, pRight, pUp, pFwd);
+
+    float halfW = 0.96f, halfL = 2.20f, halfH = 0.65f;
+    float frontAxleZ = halfL * 0.62f;
+    float rearAxleZ  = -halfL * 0.62f;
+    CarTelemetry player = NativeCarX::GetPlayerCarTelemetry();
+    if (player.carPtr) {
+        float wheelMats[4][16];
+        for (int w = 0; w < 4; ++w) {
+            memcpy(wheelMats[w], player.wheels[w].matrix.data(), sizeof(float) * 16);
+        }
+        EstimateCarExtents(player.transformMatrix.data(), wheelMats, halfW, halfL);
+        halfW = std::clamp(halfW, 0.75f, 1.35f);
+        halfL = std::clamp(halfL, 1.65f, 2.75f);
+
+        float wMag = fabsf(wheelMats[0][12]) + fabsf(wheelMats[1][12]) + fabsf(wheelMats[2][12]) + fabsf(wheelMats[3][12]);
+        if (wMag > 0.01f) {
+            float wz[4] = {};
+            for (int w = 0; w < 4; ++w) {
+                UnityVector3 dw = { wheelMats[w][12] - pPos.x, wheelMats[w][13] - pPos.y, wheelMats[w][14] - pPos.z };
+                wz[w] = VecDot(dw, pFwd);
+            }
+            std::sort(wz, wz + 4);
+            float rZ = 0.5f * (wz[0] + wz[1]);
+            float fZ = 0.5f * (wz[2] + wz[3]);
+            if (fZ - rZ > 1.35f && fZ - rZ < 4.40f) {
+                frontAxleZ = fZ;
+                rearAxleZ  = rZ;
+            }
+        }
+    }
+
+    sp.carPos[0] = pPos.x; sp.carPos[1] = pPos.y; sp.carPos[2] = pPos.z; sp.carPos[3] = halfW;
+    sp.carRight[0] = pRight.x; sp.carRight[1] = pRight.y; sp.carRight[2] = pRight.z; sp.carRight[3] = halfL;
+    sp.carUp[0] = pUp.x; sp.carUp[1] = pUp.y; sp.carUp[2] = pUp.z; sp.carUp[3] = halfH * 2.0f;
+    sp.carFwd[0] = pFwd.x; sp.carFwd[1] = pFwd.y; sp.carFwd[2] = pFwd.z; sp.carFwd[3] = 1.0f;
+
+    UnityVector3 camPos{};
+    void* dbgCamNat = pfn_GetMainCameraNative ? pfn_GetMainCameraNative() : nullptr;
+    if (SafeGetMainCameraPosSEH(reinterpret_cast<void*>(pfn_GetMainCameraNative),
+                                reinterpret_cast<void*>(pfn_Transform_get_position),
+                                &camPos)) {
+        sp.camPos[0] = camPos.x;
+        sp.camPos[1] = camPos.y;
+        sp.camPos[2] = camPos.z;
+        sp.camPos[3] = 1.0f;
+    }
+
+    // 1. Volumetric perimeter proximity queries (3D SphereCasts + barrier layer + low-curb CastRays, 8 zones incl. doors)
+    struct RawZoneHit {
+        bool hit = false;
+        float gap = 999.0f;
+        UnityVector3 point{};
+        UnityVector3 normal{ 0.0f, 1.0f, 0.0f };
+    };
+    enum ZoneId {
+        kZoneFront = 0,
+        kZoneRear,
+        kZoneDoorL,
+        kZoneDoorR,
+        kZoneFrontL,
+        kZoneFrontR,
+        kZoneRearL,
+        kZoneRearR,
+        kZoneCount
+    };
+    RawZoneHit rawZones[kZoneCount];
+    {
+        const uint32_t dotsBelongs         = 0x100u;     // Layer 8: Player Car
+        const uint32_t dotsCollidesStatic  = ~(0x100u | 0x200u | 0x400u | 0x800u | 0x1000u | 0x2000u | 0x20000u | 0x40000u | 0x800000u | 0x1000000u);
+        const uint32_t dotsCollidesBarrier = 0x00010000u; // Car-only barrier walls (zero road asphalt)
+        const int physxLayerMask = static_cast<int>(~((1u << 2) | (1u << 5) | (1u << 8) | (1u << 12) | (1u << 15) | (1u << 17) | (1u << 22)));
+        const float maxScanRange = 9.0f;
+
+        const float fbStart = (std::max)(0.35f, halfL - 1.15f);
+        const float lrStart = (std::max)(0.10f, halfW - 0.72f);
+
+        // Door span between front & rear wheel arches
+        const float doorCenterZ  = 0.5f * (frontAxleZ + rearAxleZ);
+        const float doorHalfSpan = std::clamp(0.5f * (frontAxleZ - rearAxleZ) - 0.36f, 0.25f, 0.90f);
+        const float frontSideZ   = (std::min)(halfL - 0.15f, frontAxleZ + 0.46f);
+        const float rearSideZ    = (std::max)(-halfL + 0.15f, rearAxleZ - 0.46f);
+
+        auto recordZoneCandidate = [&](int z, float gap, const UnityVector3& hitPt, const UnityVector3& hitNorm) {
+            RawZoneHit& rz = rawZones[z];
+            if (!rz.hit || gap < rz.gap) {
+                rz.hit = true;
+                rz.gap = gap;
+                rz.point = hitPt;
+                rz.normal = hitNorm;
+            }
+        };
+
+        auto recordWallHit = [&](int hintZone, const UnityVector3& dir, const UnityVector3& hitPt, const UnityVector3& hitNorm) {
+            const UnityVector3 rel = { hitPt.x - pPos.x, hitPt.y - pPos.y, hitPt.z - pPos.z };
+            // Ignore points completely behind the car relative to query direction
+            if (VecDot(rel, dir) <= 0.05f) return;
+
+            const float lx = VecDot(rel, pRight);
+            const float ly = VecDot(rel, pUp);
+            const float lz = VecDot(rel, pFwd);
+            if (ly < -0.25f || ly > 2.35f) return;
+
+            const float ex = (std::max)(0.0f, fabsf(lx) - halfW);
+            const float ez = (std::max)(0.0f, fabsf(lz) - halfL);
+            const float gap = sqrtf(ex * ex + ez * ez);
+            if (gap > maxScanRange) return;
+
+            recordZoneCandidate(hintZone, gap, hitPt, hitNorm);
+
+            // Soft car-local OBB attribution across adjacent sectors so angled/curved walls never lose continuity
+            if (lz >= halfL - 0.18f && fabsf(lx) <= halfW + 0.35f)
+                recordZoneCandidate(kZoneFront, gap, hitPt, hitNorm);
+            if (lz <= -halfL + 0.18f && fabsf(lx) <= halfW + 0.35f)
+                recordZoneCandidate(kZoneRear, gap, hitPt, hitNorm);
+            if (lx <= -halfW + 0.18f && lz >= rearAxleZ + 0.08f && lz <= frontAxleZ - 0.08f)
+                recordZoneCandidate(kZoneDoorL, gap, hitPt, hitNorm);
+            if (lx >= halfW - 0.18f && lz >= rearAxleZ + 0.08f && lz <= frontAxleZ - 0.08f)
+                recordZoneCandidate(kZoneDoorR, gap, hitPt, hitNorm);
+            if (lx <= -halfW * 0.45f && lz >= frontAxleZ - 0.25f)
+                recordZoneCandidate(kZoneFrontL, gap, hitPt, hitNorm);
+            if (lx >= halfW * 0.45f && lz >= frontAxleZ - 0.25f)
+                recordZoneCandidate(kZoneFrontR, gap, hitPt, hitNorm);
+            if (lx <= -halfW * 0.45f && lz <= rearAxleZ + 0.25f)
+                recordZoneCandidate(kZoneRearL, gap, hitPt, hitNorm);
+            if (lx >= halfW * 0.45f && lz <= rearAxleZ + 0.25f)
+                recordZoneCandidate(kZoneRearR, gap, hitPt, hitNorm);
+        };
+
+        auto computeEdgeOffset = [&](float sx, float sz, float dx, float dz) -> float {
+            float tx = (fabsf(dx) > 1e-4f) ? (((dx > 0.0f ? halfW : -halfW) - sx) / dx) : 999.0f;
+            float tz = (fabsf(dz) > 1e-4f) ? (((dz > 0.0f ? halfL : -halfL) - sz) / dz) : 999.0f;
+            return (std::max)(0.05f, (std::min)(tx, tz));
+        };
+
+        auto isGroundSlope = [&](const UnityVector3& n, float maxSlopeCos) -> bool {
+            float lenSq = n.x * n.x + n.y * n.y + n.z * n.z;
+            if (lenSq <= 0.25f) return false;
+            return fabsf(VecDot(n, pUp)) > maxSlopeCos || fabsf(n.y) > maxSlopeCos;
+        };
+
+        auto probeWallSphere = [&](int zone, float sx, float sy, float sz,
+                                   float dx, float dy, float dz, float radius,
+                                   uint32_t collidesMask, float maxSlopeCos, int maxSlopeHops,
+                                   bool allowRayFallback) {
+            UnityVector3 dir = VecNormalize({
+                pRight.x * dx + pUp.x * dy + pFwd.x * dz,
+                pRight.y * dx + pUp.y * dy + pFwd.y * dz,
+                pRight.z * dx + pUp.z * dy + pFwd.z * dz
+            });
+            const float edgeDist = computeEdgeOffset(sx, sz, dx, dz);
+            const float inset = radius + 0.04f;
+            const float startOffset = (std::max)(0.0f, edgeDist - inset);
+            UnityVector3 curOrig = {
+                pPos.x + pRight.x * sx + pUp.x * sy + pFwd.x * sz + dir.x * startOffset,
+                pPos.y + pRight.y * sx + pUp.y * sy + pFwd.y * sz + dir.y * startOffset,
+                pPos.z + pRight.z * sx + pUp.z * sy + pFwd.z * sz + dir.z * startOffset
+            };
+            float remDist = (edgeDist - startOffset) + maxScanRange;
+            float curRadius = radius;
+            bool sphereWorked = false;
+
+            for (int hop = 0; hop <= maxSlopeHops && remDist > 0.25f; ++hop) {
+                float origArr[3] = { curOrig.x, curOrig.y, curOrig.z };
+                float dirArr[3]  = { dir.x, dir.y, dir.z };
+                EcsCollision::SphereCastHit shit{};
+                bool dotsExecuted = false;
+                bool hit = EcsCollision::SphereCast(origArr, curRadius, dirArr, remDist, dotsBelongs, collidesMask, shit, 1, &dotsExecuted);
+                sphereWorked = sphereWorked || dotsExecuted;
+                if (!hit) {
+                    break;
+                }
+                UnityVector3 hitPt{ shit.position[0], shit.position[1], shit.position[2] };
+                UnityVector3 hitNorm{ shit.surfaceNormal[0], shit.surfaceNormal[1], shit.surfaceNormal[2] };
+                if (isGroundSlope(hitNorm, maxSlopeCos)) {
+                    // Climb past sloped road asphalt / curb apron so walls behind banks are never occluded
+                    float advance = (std::max)(0.25f, shit.fraction * remDist + 0.14f);
+                    if (advance >= remDist - 0.15f) break;
+                    curOrig = {
+                        hitPt.x + dir.x * (curRadius * 0.55f + 0.12f) + pUp.x * (curRadius + 0.20f),
+                        hitPt.y + dir.y * (curRadius * 0.55f + 0.12f) + pUp.y * (curRadius + 0.20f),
+                        hitPt.z + dir.z * (curRadius * 0.55f + 0.12f) + pUp.z * (curRadius + 0.20f)
+                    };
+                    remDist -= advance;
+                    curRadius = (std::min)(curRadius, 0.22f);
+                    continue;
+                }
+                recordWallHit(zone, dir, hitPt, hitNorm);
+                break;
+            }
+
+            if (!sphereWorked && allowRayFallback) {
+                const float rayLen = edgeDist + maxScanRange;
+                UnityVector3 rayOrig = {
+                    pPos.x + pRight.x * sx + pUp.x * sy + pFwd.x * sz,
+                    pPos.y + pRight.y * sx + pUp.y * sy + pFwd.y * sz,
+                    pPos.z + pRight.z * sx + pUp.z * sy + pFwd.z * sz
+                };
+                float start[3] = { rayOrig.x, rayOrig.y, rayOrig.z };
+                float end[3]   = { rayOrig.x + dir.x * rayLen, rayOrig.y + dir.y * rayLen, rayOrig.z + dir.z * rayLen };
+                DotsRaycastHit dhit{};
+                if (EcsCollision::CastRay(start, end, dotsBelongs, collidesMask, dhit)) {
+                    UnityVector3 hitNorm{ dhit.normal[0], dhit.normal[1], dhit.normal[2] };
+                    if (!isGroundSlope(hitNorm, maxSlopeCos)) {
+                        recordWallHit(zone, dir, { dhit.point[0], dhit.point[1], dhit.point[2] }, hitNorm);
+                    }
+                } else if (pfn_InternalRaycast) {
+                    UnityRay ray{ rayOrig, dir };
+                    UnityRaycastHit hit{};
+                    if (SafePhysicsRaycastSEH(reinterpret_cast<void*>(pfn_InternalRaycast), &ray, rayLen, &hit, physxLayerMask)) {
+                        if (!isGroundSlope(hit.normal, maxSlopeCos)) {
+                            recordWallHit(zone, dir, hit.point, hit.normal);
+                        }
+                    }
+                }
+            }
+        };
+
+        auto probeLowCurbRay = [&](int zone, float sx, float sy, float sz, float dx, float dy, float dz) {
+            UnityVector3 dir = VecNormalize({
+                pRight.x * dx + pUp.x * dy + pFwd.x * dz,
+                pRight.y * dx + pUp.y * dy + pFwd.y * dz,
+                pRight.z * dx + pUp.z * dy + pFwd.z * dz
+            });
+            const float rayLen = computeEdgeOffset(sx, sz, dx, dz) + maxScanRange;
+            UnityVector3 rayOrig = {
+                pPos.x + pRight.x * sx + pUp.x * sy + pFwd.x * sz,
+                pPos.y + pRight.y * sx + pUp.y * sy + pFwd.y * sz,
+                pPos.z + pRight.z * sx + pUp.z * sy + pFwd.z * sz
+            };
+            float start[3] = { rayOrig.x, rayOrig.y, rayOrig.z };
+            float end[3]   = { rayOrig.x + dir.x * rayLen, rayOrig.y + dir.y * rayLen, rayOrig.z + dir.z * rayLen };
+            DotsRaycastHit dhit{};
+            if (EcsCollision::CastRay(start, end, dotsBelongs, dotsCollidesStatic, dhit)) {
+                UnityVector3 hitNorm{ dhit.normal[0], dhit.normal[1], dhit.normal[2] };
+                // Strict curb vertical threshold (< ~52 deg flat/road excluded) so low rays never catch road camber
+                if (!isGroundSlope(hitNorm, 0.62f)) {
+                    recordWallHit(zone, dir, { dhit.point[0], dhit.point[1], dhit.point[2] }, hitNorm);
+                }
+            }
+        };
+
+        struct ProbeDef { int zone; float sx, sy, sz; float dx, dy, dz; };
+
+        // A) Overlapping volumetric beltline SphereCasts (r=0.27m @ y=0.62m -> 0.35m..0.89m continuous band)
+        const ProbeDef mainProbes[] = {
+            // Front bumper curtain
+            { kZoneFront,  -0.62f, 0.62f,  fbStart,   0.00f, 0.0f,  1.00f },
+            { kZoneFront,  -0.22f, 0.62f,  fbStart,   0.00f, 0.0f,  1.00f },
+            { kZoneFront,   0.22f, 0.62f,  fbStart,   0.00f, 0.0f,  1.00f },
+            { kZoneFront,   0.62f, 0.62f,  fbStart,   0.00f, 0.0f,  1.00f },
+            // Rear bumper curtain
+            { kZoneRear,   -0.62f, 0.62f, -fbStart,   0.00f, 0.0f, -1.00f },
+            { kZoneRear,   -0.22f, 0.62f, -fbStart,   0.00f, 0.0f, -1.00f },
+            { kZoneRear,    0.22f, 0.62f, -fbStart,   0.00f, 0.0f, -1.00f },
+            { kZoneRear,    0.62f, 0.62f, -fbStart,   0.00f, 0.0f, -1.00f },
+            // Left door (3 overlapping lateral + 2 forward/aft splayed sweeps)
+            { kZoneDoorL,  -lrStart, 0.62f, doorCenterZ - doorHalfSpan, -1.00f, 0.0f,  0.00f },
+            { kZoneDoorL,  -lrStart, 0.62f, doorCenterZ,                -1.00f, 0.0f,  0.00f },
+            { kZoneDoorL,  -lrStart, 0.62f, doorCenterZ + doorHalfSpan, -1.00f, 0.0f,  0.00f },
+            { kZoneDoorL,  -lrStart, 0.62f, doorCenterZ,                -0.94f, 0.0f,  0.34f },
+            { kZoneDoorL,  -lrStart, 0.62f, doorCenterZ,                -0.94f, 0.0f, -0.34f },
+            // Right door
+            { kZoneDoorR,   lrStart, 0.62f, doorCenterZ - doorHalfSpan,  1.00f, 0.0f,  0.00f },
+            { kZoneDoorR,   lrStart, 0.62f, doorCenterZ,                 1.00f, 0.0f,  0.00f },
+            { kZoneDoorR,   lrStart, 0.62f, doorCenterZ + doorHalfSpan,  1.00f, 0.0f,  0.00f },
+            { kZoneDoorR,   lrStart, 0.62f, doorCenterZ,                 0.94f, 0.0f,  0.34f },
+            { kZoneDoorR,   lrStart, 0.62f, doorCenterZ,                 0.94f, 0.0f, -0.34f },
+            // Front-Left & Front-Right fenders / corners (360-deg angular continuity)
+            { kZoneFrontL, -lrStart, 0.62f, frontAxleZ,                 -1.00f, 0.0f,  0.00f },
+            { kZoneFrontL, -lrStart, 0.62f, frontSideZ,                 -0.80f, 0.0f,  0.60f },
+            { kZoneFrontL, -0.48f,   0.62f, fbStart,                    -0.44f, 0.0f,  0.90f },
+            { kZoneFrontR,  lrStart, 0.62f, frontAxleZ,                  1.00f, 0.0f,  0.00f },
+            { kZoneFrontR,  lrStart, 0.62f, frontSideZ,                  0.80f, 0.0f,  0.60f },
+            { kZoneFrontR,  0.48f,   0.62f, fbStart,                     0.44f, 0.0f,  0.90f },
+            // Rear-Left & Rear-Right quarters / corners
+            { kZoneRearL,  -lrStart, 0.62f, rearAxleZ,                  -1.00f, 0.0f,  0.00f },
+            { kZoneRearL,  -lrStart, 0.62f, rearSideZ,                  -0.80f, 0.0f, -0.60f },
+            { kZoneRearL,  -0.48f,   0.62f,-fbStart,                    -0.44f, 0.0f, -0.90f },
+            { kZoneRearR,   lrStart, 0.62f, rearAxleZ,                   1.00f, 0.0f,  0.00f },
+            { kZoneRearR,   lrStart, 0.62f, rearSideZ,                   0.80f, 0.0f, -0.60f },
+            { kZoneRearR,   0.48f,   0.62f,-fbStart,                     0.44f, 0.0f, -0.90f },
+        };
+        for (const auto& pd : mainProbes) {
+            probeWallSphere(pd.zone, pd.sx, pd.sy, pd.sz, pd.dx, pd.dy, pd.dz,
+                            0.27f, dotsCollidesStatic, 0.72f, 2, true);
+        }
+
+        // B) Dedicated barrier-layer wide SphereCasts (0x10000 = car barriers, r=0.38m -> 0.26m..1.02m, zero asphalt)
+        const ProbeDef barrierProbes[] = {
+            { kZoneFront,   0.00f,   0.64f,  fbStart,                    0.00f, 0.0f,  1.00f },
+            { kZoneRear,    0.00f,   0.64f, -fbStart,                    0.00f, 0.0f, -1.00f },
+            { kZoneDoorL,  -lrStart, 0.64f, doorCenterZ - doorHalfSpan * 0.5f, -1.0f, 0.0f, 0.0f },
+            { kZoneDoorL,  -lrStart, 0.64f, doorCenterZ + doorHalfSpan * 0.5f, -1.0f, 0.0f, 0.0f },
+            { kZoneDoorR,   lrStart, 0.64f, doorCenterZ - doorHalfSpan * 0.5f,  1.0f, 0.0f, 0.0f },
+            { kZoneDoorR,   lrStart, 0.64f, doorCenterZ + doorHalfSpan * 0.5f,  1.0f, 0.0f, 0.0f },
+            { kZoneFrontL, -0.45f,   0.64f, frontSideZ,                 -0.71f, 0.0f,  0.71f },
+            { kZoneFrontR,  0.45f,   0.64f, frontSideZ,                  0.71f, 0.0f,  0.71f },
+            { kZoneRearL,  -0.45f,   0.64f, rearSideZ,                  -0.71f, 0.0f, -0.71f },
+            { kZoneRearR,   0.45f,   0.64f, rearSideZ,                   0.71f, 0.0f, -0.71f },
+        };
+        for (const auto& pd : barrierProbes) {
+            probeWallSphere(pd.zone, pd.sx, pd.sy, pd.sz, pd.dx, pd.dy, pd.dz,
+                            0.38f, dotsCollidesBarrier, 0.88f, 0, false);
+        }
+
+        // C) Upper-band SphereCasts (r=0.25m @ y=0.98m -> 0.73m..1.23m for tall posts, walls & fences)
+        const ProbeDef highProbes[] = {
+            { kZoneFront,   0.00f,   0.98f,  fbStart,                    0.00f, 0.0f,  1.00f },
+            { kZoneRear,    0.00f,   0.98f, -fbStart,                    0.00f, 0.0f, -1.00f },
+            { kZoneDoorL,  -lrStart, 0.98f, doorCenterZ,                -1.00f, 0.0f,  0.00f },
+            { kZoneDoorR,   lrStart, 0.98f, doorCenterZ,                 1.00f, 0.0f,  0.00f },
+            { kZoneFrontL, -0.45f,   0.98f, frontSideZ,                 -0.71f, 0.0f,  0.71f },
+            { kZoneFrontR,  0.45f,   0.98f, frontSideZ,                  0.71f, 0.0f,  0.71f },
+            { kZoneRearL,  -0.45f,   0.98f, rearSideZ,                  -0.71f, 0.0f, -0.71f },
+            { kZoneRearR,   0.45f,   0.98f, rearSideZ,                   0.71f, 0.0f, -0.71f },
+        };
+        for (const auto& pd : highProbes) {
+            probeWallSphere(pd.zone, pd.sx, pd.sy, pd.sz, pd.dx, pd.dy, pd.dz,
+                            0.25f, dotsCollidesStatic, 0.72f, 1, false);
+        }
+
+        // D) Low-curb vertical-face support rays (y=0.24m)
+        const ProbeDef curbRays[] = {
+            { kZoneFront,  -0.45f,   0.24f,  fbStart,    0.00f, 0.0f,  1.00f },
+            { kZoneFront,   0.45f,   0.24f,  fbStart,    0.00f, 0.0f,  1.00f },
+            { kZoneRear,   -0.45f,   0.24f, -fbStart,    0.00f, 0.0f, -1.00f },
+            { kZoneRear,    0.45f,   0.24f, -fbStart,    0.00f, 0.0f, -1.00f },
+            { kZoneDoorL,  -lrStart, 0.24f, doorCenterZ - doorHalfSpan * 0.5f, -1.0f, 0.0f, 0.0f },
+            { kZoneDoorL,  -lrStart, 0.24f, doorCenterZ + doorHalfSpan * 0.5f, -1.0f, 0.0f, 0.0f },
+            { kZoneDoorR,   lrStart, 0.24f, doorCenterZ - doorHalfSpan * 0.5f,  1.0f, 0.0f, 0.0f },
+            { kZoneDoorR,   lrStart, 0.24f, doorCenterZ + doorHalfSpan * 0.5f,  1.0f, 0.0f, 0.0f },
+            { kZoneFrontL, -0.45f,   0.24f, frontSideZ, -0.71f, 0.0f,  0.71f },
+            { kZoneFrontR,  0.45f,   0.24f, frontSideZ,  0.71f, 0.0f,  0.71f },
+            { kZoneRearL,  -0.45f,   0.24f, rearSideZ,  -0.71f, 0.0f, -0.71f },
+            { kZoneRearR,   0.45f,   0.24f, rearSideZ,   0.71f, 0.0f, -0.71f },
+        };
+        for (const auto& pd : curbRays) {
+            probeLowCurbRay(pd.zone, pd.sx, pd.sy, pd.sz, pd.dx, pd.dy, pd.dz);
+        }
+    }
+
+    // Smooth per-zone hits in vehicle-local space (prevents jumping/snapping and keeps moving smoothness independent of car speed)
+    struct SmoothZoneState {
+        bool valid = false;
+        float missAge = 0.0f;
+        float localPt[3] = { 0.0f, 0.0f, 0.0f };
+        float gap = 999.0f;
+        UnityVector3 normal{ 0.0f, 1.0f, 0.0f };
+    };
+    enum SmoothSlot {
+        kSmFront = 0, kSmRear, kSmDoorL, kSmDoorR,
+        kSmFrontL, kSmFrontR, kSmRearL, kSmRearR,
+        kSmSideL, kSmSideR, kSmNearest, kSmTotal
+    };
+    static SmoothZoneState s_zoneSmooth[kSmTotal];
+    static std::chrono::steady_clock::time_point s_prevSpatTime{};
+    static bool  s_nearCarValid = false;
+    static float s_nearCarGap = 999.0f;
+    static float s_nearLocalCenter[3] = { 0.0f, 0.0f, 0.0f };
+    static float s_nearLocalClosest[3] = { 0.0f, 0.0f, 0.0f };
+    static float s_nearLocalRight[3] = { 1.0f, 0.0f, 0.0f };
+    static float s_nearLocalFwd[3]   = { 0.0f, 0.0f, 1.0f };
+    static float s_nearExtents[3]    = { 0.96f, 0.65f, 2.25f };
+
+    auto nowTp = std::chrono::steady_clock::now();
+    float dt = 0.016f;
+    if (s_prevSpatTime.time_since_epoch().count() != 0) {
+        dt = std::chrono::duration<float>(nowTp - s_prevSpatTime).count();
+    }
+    s_prevSpatTime = nowTp;
+    if (dt > 0.40f) {
+        for (auto& zs : s_zoneSmooth) zs = SmoothZoneState{};
+        s_nearCarValid = false;
+        s_nearCarGap = 999.0f;
+    }
+    dt = std::clamp(dt, 0.0005f, 0.08f);
+
+    float flowSpeed = 6.0f;
+    CarFX::GetParamByName(CarFX::kTargetBody, "flowSpeed", &flowSpeed, 1);
+    flowSpeed = std::clamp(flowSpeed, 0.3f, 60.0f);
+    const float fadeCeiling = 10.5f;
+    const float alphaGap = (flowSpeed >= 28.0f) ? 1.0f : (1.0f - expf(-flowSpeed * dt));
+    const float alphaPos = (flowSpeed >= 28.0f) ? 1.0f : (1.0f - expf(-(flowSpeed * 1.45f) * dt));
+
+    auto updateSmoothZone = [&](int slotIdx, const RawZoneHit& raw, float outVec[4]) {
+        SmoothZoneState& zs = s_zoneSmooth[slotIdx];
+        if (raw.hit && raw.gap < fadeCeiling) {
+            zs.missAge = 0.0f;
+            UnityVector3 rel = { raw.point.x - pPos.x, raw.point.y - pPos.y, raw.point.z - pPos.z };
+            float lx = VecDot(rel, pRight);
+            float ly = VecDot(rel, pUp);
+            float lz = VecDot(rel, pFwd);
+            if (!zs.valid || zs.gap >= fadeCeiling - 0.1f) {
+                zs.valid = true;
+                zs.localPt[0] = lx; zs.localPt[1] = ly; zs.localPt[2] = lz;
+                const float entryStart = (std::min)(fadeCeiling, (std::max)(raw.gap + 2.8f, 3.8f));
+                zs.gap = (alphaGap >= 0.999f) ? raw.gap : (entryStart + (raw.gap - entryStart) * alphaGap);
+                zs.normal = raw.normal;
+            } else {
+                zs.localPt[0] += (lx - zs.localPt[0]) * alphaPos;
+                zs.localPt[1] += (ly - zs.localPt[1]) * alphaPos;
+                zs.localPt[2] += (lz - zs.localPt[2]) * alphaPos;
+                zs.gap        += (raw.gap - zs.gap) * alphaGap;
+                zs.normal.x   += (raw.normal.x - zs.normal.x) * alphaPos;
+                zs.normal.y   += (raw.normal.y - zs.normal.y) * alphaPos;
+                zs.normal.z   += (raw.normal.z - zs.normal.z) * alphaPos;
+            }
+        } else if (zs.valid) {
+            zs.missAge += dt;
+            if (zs.missAge > 0.09f || alphaGap >= 0.999f) {
+                zs.gap += (fadeCeiling - zs.gap) * alphaGap;
+                if (zs.gap >= fadeCeiling - 0.05f || alphaGap >= 0.999f) {
+                    zs.valid = false;
+                    zs.missAge = 0.0f;
+                    zs.gap = 999.0f;
+                }
+            }
+        }
+
+        if (zs.valid) {
+            outVec[0] = pPos.x + pRight.x * zs.localPt[0] + pUp.x * zs.localPt[1] + pFwd.x * zs.localPt[2];
+            outVec[1] = pPos.y + pRight.y * zs.localPt[0] + pUp.y * zs.localPt[1] + pFwd.y * zs.localPt[2];
+            outVec[2] = pPos.z + pRight.z * zs.localPt[0] + pUp.z * zs.localPt[1] + pFwd.z * zs.localPt[2];
+            outVec[3] = zs.gap;
+        } else {
+            outVec[0] = outVec[1] = outVec[2] = 0.0f;
+            outVec[3] = 999.0f;
+        }
+    };
+
+    // Aggregate Left, Right & Nearest raw hits
+    RawZoneHit rawSideL, rawSideR, rawNearest;
+    for (int z : { kZoneFrontL, kZoneDoorL, kZoneRearL }) {
+        if (rawZones[z].hit && (!rawSideL.hit || rawZones[z].gap < rawSideL.gap)) rawSideL = rawZones[z];
+    }
+    for (int z : { kZoneFrontR, kZoneDoorR, kZoneRearR }) {
+        if (rawZones[z].hit && (!rawSideR.hit || rawZones[z].gap < rawSideR.gap)) rawSideR = rawZones[z];
+    }
+    for (int z = 0; z < kZoneCount; ++z) {
+        if (rawZones[z].hit && (!rawNearest.hit || rawZones[z].gap < rawNearest.gap)) rawNearest = rawZones[z];
+    }
+
+    updateSmoothZone(kSmFront,   rawZones[kZoneFront],  sp.wallFrontHit);
+    updateSmoothZone(kSmRear,    rawZones[kZoneRear],   sp.wallRearHit);
+    updateSmoothZone(kSmDoorL,   rawZones[kZoneDoorL],  sp.wallDoorLeftHit);
+    updateSmoothZone(kSmDoorR,   rawZones[kZoneDoorR],  sp.wallDoorRightHit);
+    updateSmoothZone(kSmFrontL,  rawZones[kZoneFrontL], sp.wallFrontLeftHit);
+    updateSmoothZone(kSmFrontR,  rawZones[kZoneFrontR], sp.wallFrontRightHit);
+    updateSmoothZone(kSmRearL,   rawZones[kZoneRearL],  sp.wallRearLeftHit);
+    updateSmoothZone(kSmRearR,   rawZones[kZoneRearR],  sp.wallRearRightHit);
+    updateSmoothZone(kSmSideL,   rawSideL,              sp.wallLeftHit);
+    updateSmoothZone(kSmSideR,   rawSideR,              sp.wallRightHit);
+    updateSmoothZone(kSmNearest, rawNearest,            sp.wallNearestHit);
+
+    sp.wallDirDist[0] = sp.wallFrontHit[3];
+    sp.wallDirDist[1] = sp.wallRearHit[3];
+    sp.wallDirDist[2] = sp.wallLeftHit[3];
+    sp.wallDirDist[3] = sp.wallRightHit[3];
+
+    if (s_zoneSmooth[kSmNearest].valid) {
+        UnityVector3 n = VecNormalize(s_zoneSmooth[kSmNearest].normal);
+        sp.wallNearestNormal[0] = n.x;
+        sp.wallNearestNormal[1] = n.y;
+        sp.wallNearestNormal[2] = n.z;
+    }
+    int activeMask = 0;
+    if (sp.wallFrontHit[3] < fadeCeiling) activeMask |= 1;
+    if (sp.wallRearHit[3]  < fadeCeiling) activeMask |= 2;
+    if (sp.wallLeftHit[3]  < fadeCeiling) activeMask |= 4;
+    if (sp.wallRightHit[3] < fadeCeiling) activeMask |= 8;
+    sp.wallNearestNormal[3] = static_cast<float>(activeMask);
+
+    // 2. Nearest other vehicle (network/AI cars + active 3D Ghost slots)
+    const UnityVector3 pCenter = {
+        pPos.x + pUp.x * halfH,
+        pPos.y + pUp.y * halfH,
+        pPos.z + pUp.z * halfH
+    };
+    float bestCarGap = 999.0f;
+    UnityVector3 bestOCenter{}, bestORight{ 1,0,0 }, bestOFwd{ 0,0,1 }, bestCClosest{};
+    float bestOHw = 0.96f, bestOHh = 0.65f, bestOHl = 2.25f;
+
+    auto considerOtherCar = [&](const UnityVector3& oCenter,
+                                const UnityVector3& oRight,
+                                const UnityVector3& oUp,
+                                const UnityVector3& oFwd,
+                                float oHalfW, float oHalfH, float oHalfL) {
+        float dx = oCenter.x - pCenter.x;
+        float dy = oCenter.y - pCenter.y;
+        float dz = oCenter.z - pCenter.z;
+        if (dx * dx + dy * dy + dz * dz > 1600.0f) return; // > 40m ignore
+
+        UnityVector3 cOther = ClosestPointOnOBB(pCenter, oCenter, oRight, oUp, oFwd, oHalfW, oHalfH, oHalfL);
+        UnityVector3 cPlayer = ClosestPointOnOBB(cOther, pCenter, pRight, pUp, pFwd, halfW, halfH, halfL);
+        cOther = ClosestPointOnOBB(cPlayer, oCenter, oRight, oUp, oFwd, oHalfW, oHalfH, oHalfL);
+
+        float gx = cOther.x - cPlayer.x;
+        float gy = cOther.y - cPlayer.y;
+        float gz = cOther.z - cPlayer.z;
+        float gap = sqrtf(gx * gx + gy * gy + gz * gz);
+
+        if (gap < bestCarGap) {
+            bestCarGap = gap;
+            bestOCenter = oCenter; bestORight = oRight; bestOFwd = oFwd; bestCClosest = cOther;
+            bestOHw = oHalfW; bestOHh = oHalfH; bestOHl = oHalfL;
+        }
+    };
+
+    for (const auto& c : liveSnapshot) {
+        if (c.isLocalPlayer) continue;
+        UnityVector3 oPos{ c.x, c.y, c.z };
+        UnityVector4 oRot{ c.qx, c.qy, c.qz, c.qw };
+        if (c.rootTf) {
+            GetTransformPosRotDirect(c.rootTf, oPos, oRot);
+        } else if (!c.hasPos && !c.hasRot) {
+            continue;
+        }
+        UnityVector3 oR, oU, oF;
+        QuatToAxes(oRot, oR, oU, oF);
+        UnityVector3 oCenter = { oPos.x + oU.x * 0.65f, oPos.y + oU.y * 0.65f, oPos.z + oU.z * 0.65f };
+        considerOtherCar(oCenter, oR, oU, oF, 0.96f, 0.65f, 2.25f);
+    }
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(s_mutex);
+        for (const auto& slot : s_ghostSlots) {
+            if (!slot.gameObject || !slot.hasPose) continue;
+            UnityVector3 oR = VecNormalize({ slot.lastMatrix[0], slot.lastMatrix[1], slot.lastMatrix[2] });
+            UnityVector3 oU = VecNormalize({ slot.lastMatrix[4], slot.lastMatrix[5], slot.lastMatrix[6] });
+            UnityVector3 oF = VecNormalize({ slot.lastMatrix[8], slot.lastMatrix[9], slot.lastMatrix[10] });
+            UnityVector3 oCenter = {
+                slot.pos.x + oU.x * slot.halfHeight,
+                slot.pos.y + oU.y * slot.halfHeight,
+                slot.pos.z + oU.z * slot.halfHeight
+            };
+            considerOtherCar(oCenter, oR, oU, oF, slot.halfWidth, slot.halfHeight, slot.halfLength);
+        }
+    }
+
+    // Smooth near-car entry/exit gap & local-relative fade memory
+    auto toLocalVec = [&](const UnityVector3& v, float out3[3]) {
+        out3[0] = VecDot(v, pRight); out3[1] = VecDot(v, pUp); out3[2] = VecDot(v, pFwd);
+    };
+    auto toWorldVec = [&](const float in3[3]) -> UnityVector3 {
+        return {
+            pRight.x * in3[0] + pUp.x * in3[1] + pFwd.x * in3[2],
+            pRight.y * in3[0] + pUp.y * in3[1] + pFwd.y * in3[2],
+            pRight.z * in3[0] + pUp.z * in3[1] + pFwd.z * in3[2]
+        };
+    };
+
+    if (bestCarGap < fadeCeiling) {
+        UnityVector3 dc = { bestOCenter.x - pPos.x, bestOCenter.y - pPos.y, bestOCenter.z - pPos.z };
+        UnityVector3 dl = { bestCClosest.x - pPos.x, bestCClosest.y - pPos.y, bestCClosest.z - pPos.z };
+        toLocalVec(dc, s_nearLocalCenter);
+        toLocalVec(dl, s_nearLocalClosest);
+        toLocalVec(bestORight, s_nearLocalRight);
+        toLocalVec(bestOFwd,   s_nearLocalFwd);
+        s_nearExtents[0] = bestOHw; s_nearExtents[1] = bestOHh; s_nearExtents[2] = bestOHl;
+
+        if (!s_nearCarValid || s_nearCarGap >= fadeCeiling - 0.1f) {
+            s_nearCarValid = true;
+            const float entryStart = (std::min)(fadeCeiling, (std::max)(bestCarGap + 2.8f, 3.8f));
+            s_nearCarGap = (alphaGap >= 0.999f) ? bestCarGap : (entryStart + (bestCarGap - entryStart) * alphaGap);
+        } else {
+            s_nearCarGap += (bestCarGap - s_nearCarGap) * alphaGap;
+        }
+        sp.nearCarPos[0] = bestOCenter.x; sp.nearCarPos[1] = bestOCenter.y; sp.nearCarPos[2] = bestOCenter.z;
+        sp.nearCarPos[3] = s_nearCarGap;
+        sp.nearCarRight[0] = bestORight.x; sp.nearCarRight[1] = bestORight.y; sp.nearCarRight[2] = bestORight.z;
+        sp.nearCarRight[3] = bestOHw;
+        sp.nearCarFwd[0] = bestOFwd.x; sp.nearCarFwd[1] = bestOFwd.y; sp.nearCarFwd[2] = bestOFwd.z;
+        sp.nearCarFwd[3] = bestOHl;
+        sp.nearCarClosest[0] = bestCClosest.x; sp.nearCarClosest[1] = bestCClosest.y; sp.nearCarClosest[2] = bestCClosest.z;
+        sp.nearCarClosest[3] = bestOHh;
+    } else if (bestCarGap < 900.0f) {
+        // Car is within 10.5..40m: keep accurate OBB telemetry, reset fade
+        s_nearCarValid = false;
+        s_nearCarGap = bestCarGap;
+        sp.nearCarPos[0] = bestOCenter.x; sp.nearCarPos[1] = bestOCenter.y; sp.nearCarPos[2] = bestOCenter.z;
+        sp.nearCarPos[3] = bestCarGap;
+        sp.nearCarRight[0] = bestORight.x; sp.nearCarRight[1] = bestORight.y; sp.nearCarRight[2] = bestORight.z;
+        sp.nearCarRight[3] = bestOHw;
+        sp.nearCarFwd[0] = bestOFwd.x; sp.nearCarFwd[1] = bestOFwd.y; sp.nearCarFwd[2] = bestOFwd.z;
+        sp.nearCarFwd[3] = bestOHl;
+        sp.nearCarClosest[0] = bestCClosest.x; sp.nearCarClosest[1] = bestCClosest.y; sp.nearCarClosest[2] = bestCClosest.z;
+        sp.nearCarClosest[3] = bestOHh;
+    } else if (s_nearCarValid) {
+        s_nearCarGap += (fadeCeiling - s_nearCarGap) * alphaGap;
+        if (s_nearCarGap >= fadeCeiling - 0.05f || alphaGap >= 0.999f) {
+            s_nearCarValid = false;
+            s_nearCarGap = 999.0f;
+        } else {
+            UnityVector3 wC = toWorldVec(s_nearLocalCenter);
+            UnityVector3 wL = toWorldVec(s_nearLocalClosest);
+            UnityVector3 wR = VecNormalize(toWorldVec(s_nearLocalRight));
+            UnityVector3 wF = VecNormalize(toWorldVec(s_nearLocalFwd));
+            sp.nearCarPos[0] = pPos.x + wC.x; sp.nearCarPos[1] = pPos.y + wC.y; sp.nearCarPos[2] = pPos.z + wC.z;
+            sp.nearCarPos[3] = s_nearCarGap;
+            sp.nearCarRight[0] = wR.x; sp.nearCarRight[1] = wR.y; sp.nearCarRight[2] = wR.z;
+            sp.nearCarRight[3] = s_nearExtents[0];
+            sp.nearCarFwd[0] = wF.x; sp.nearCarFwd[1] = wF.y; sp.nearCarFwd[2] = wF.z;
+            sp.nearCarFwd[3] = s_nearExtents[2];
+            sp.nearCarClosest[0] = pPos.x + wL.x; sp.nearCarClosest[1] = pPos.y + wL.y; sp.nearCarClosest[2] = pPos.z + wL.z;
+            sp.nearCarClosest[3] = s_nearExtents[1];
+        }
+    }
+
+    // 3. Real vehicle slip/drift angle in degrees (from world velocity vs car forward axis)
+    static float s_smoothDriftAbs = 0.0f;
+    static float s_smoothDriftSigned = 0.0f;
+    static bool  s_hasPrevDriftPos = false;
+    static UnityVector3 s_prevDriftPos{};
+
+    float vel[3] = { 0.0f, 0.0f, 0.0f };
+    bool hasVel = player.carPtr && NativeCarX::GetCarVelocity(player.carPtr, vel);
+    if (!hasVel) {
+        if (s_hasPrevDriftPos && dt > 1e-4f) {
+            vel[0] = (pPos.x - s_prevDriftPos.x) / dt;
+            vel[1] = (pPos.y - s_prevDriftPos.y) / dt;
+            vel[2] = (pPos.z - s_prevDriftPos.z) / dt;
+            hasVel = true;
+        }
+    }
+    s_prevDriftPos = pPos;
+    s_hasPrevDriftPos = true;
+
+    float vFwd = vel[0] * pFwd.x + vel[1] * pFwd.y + vel[2] * pFwd.z;
+    float vSide = vel[0] * pRight.x + vel[1] * pRight.y + vel[2] * pRight.z;
+    float vPlanar = hasVel ? sqrtf(vFwd * vFwd + vSide * vSide) : 0.0f;
+
+    // Gate out stationary suspension jitter (< ~5 km/h) and pure reversing (> ~120 deg)
+    auto smoothStepF = [](float edge0, float edge1, float x) {
+        float t = std::clamp((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
+        return t * t * (3.0f - 2.0f * t);
+    };
+    float speedGate = smoothStepF(1.2f, 3.8f, vPlanar);
+    float fwdCos = (vPlanar > 0.1f) ? (vFwd / vPlanar) : 1.0f;
+    float revGate = smoothStepF(-0.78f, -0.30f, fwdCos); // allows big ~105 deg backward entries while ignoring straight reverse
+
+    float rawSignedDeg = (vPlanar > 0.1f) ? (atan2f(vSide, vFwd) * 57.2957795f) : 0.0f;
+    float targetSigned = rawSignedDeg * speedGate * revGate;
+    float targetAbs = fabsf(targetSigned);
+
+    const float angleRate = (std::max)(flowSpeed * 1.6f, 6.0f);
+    const float alphaAngle = (flowSpeed >= 28.0f) ? 1.0f : (1.0f - expf(-angleRate * dt));
+    s_smoothDriftSigned += (targetSigned - s_smoothDriftSigned) * alphaAngle;
+    s_smoothDriftAbs    += (targetAbs - s_smoothDriftAbs) * alphaAngle;
+
+    sp.driftState[0] = s_smoothDriftAbs;
+    sp.driftState[1] = s_smoothDriftSigned;
+    sp.driftState[2] = std::clamp(s_smoothDriftAbs / 65.0f, 0.0f, 1.0f);
+    sp.driftState[3] = vPlanar * 3.6f;
+
+    CarFX::SetSpatialProximity(sp);
+}
+
 void UnityBridge::ResolveGhostCollisions() {
     CarTelemetry player = NativeCarX::GetPlayerCarTelemetry();
     if (!player.carPtr) return;
@@ -2248,6 +3213,270 @@ void UnityBridge::ResolveGhostCollisions() {
     if (anyImpact) {
         NativeCarX::SetCarRigidBody(player.carPtr, rb);
     }
+}
+
+static Float4x4 BuildFloat4x4FromPosQuat(const UnityVector3& pos, const UnityVector4& qRaw) {
+    float lenSq = qRaw.x * qRaw.x + qRaw.y * qRaw.y + qRaw.z * qRaw.z + qRaw.w * qRaw.w;
+    UnityVector4 q = { 0.0f, 0.0f, 0.0f, 1.0f };
+    if (lenSq > 1e-8f) {
+        float invLen = 1.0f / sqrtf(lenSq);
+        q.x = qRaw.x * invLen;
+        q.y = qRaw.y * invLen;
+        q.z = qRaw.z * invLen;
+        q.w = qRaw.w * invLen;
+    }
+
+    float xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
+    float xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z;
+    float wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
+
+    Float4x4 out{};
+    // Column 0 (Right), Column 1 (Up), Column 2 (Forward), Column 3 (Translation)
+    out.m[0]  = 1.0f - 2.0f * (yy + zz);
+    out.m[1]  = 2.0f * (xy + wz);
+    out.m[2]  = 2.0f * (xz - wy);
+    out.m[3]  = 0.0f;
+
+    out.m[4]  = 2.0f * (xy - wz);
+    out.m[5]  = 1.0f - 2.0f * (xx + zz);
+    out.m[6]  = 2.0f * (yz + wx);
+    out.m[7]  = 0.0f;
+
+    out.m[8]  = 2.0f * (xz + wy);
+    out.m[9]  = 2.0f * (yz - wx);
+    out.m[10] = 1.0f - 2.0f * (xx + yy);
+    out.m[11] = 0.0f;
+
+    out.m[12] = pos.x;
+    out.m[13] = pos.y;
+    out.m[14] = pos.z;
+    out.m[15] = 1.0f;
+    return out;
+}
+
+bool UnityBridge::GetPlayerCurrentPose(TeleportPose& outPose, std::string* outCarName) {
+    outPose = TeleportPose{};
+    if (outCarName) outCarName->clear();
+
+    if (IsOnMainThread()) {
+        RefreshLiveCarListOnMainThread(false);
+    }
+
+    void* carPtr = nullptr;
+    void* rootTf = nullptr;
+    std::string unityName;
+    UnityVector3 cachedPos{};
+    UnityVector4 cachedRot{ 0.0f, 0.0f, 0.0f, 1.0f };
+    bool hasCachedPos = false;
+    bool hasCachedRot = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(s_mutex);
+        for (const auto& c : s_liveCars) {
+            if (c.isLocalPlayer) {
+                carPtr = c.carPtr;
+                rootTf = c.rootTf;
+                unityName = c.unityName;
+                if (c.hasPos) {
+                    cachedPos = { c.x, c.y, c.z };
+                    hasCachedPos = true;
+                }
+                if (c.hasRot) {
+                    cachedRot = { c.qx, c.qy, c.qz, c.qw };
+                    hasCachedRot = true;
+                }
+                break;
+            }
+        }
+        if (!carPtr) {
+            for (const auto& sc : s_sceneCarCache) {
+                if (sc.isPlayer) {
+                    carPtr = sc.nativeCarPtr;
+                    rootTf = sc.rootTf;
+                    unityName = sc.unityName;
+                    if (sc.hasPos) { cachedPos = sc.pos; hasCachedPos = true; }
+                    if (sc.hasRot) { cachedRot = sc.rot; hasCachedRot = true; }
+                    break;
+                }
+            }
+        }
+    }
+
+    CarTelemetry tele = NativeCarX::GetPlayerCarTelemetry();
+    if (!carPtr) {
+        carPtr = tele.carPtr ? tele.carPtr : NativeCarX::GetPlayerCarPtr();
+    }
+    if (!carPtr && !rootTf) return false;
+    if (outCarName) *outCarName = unityName;
+
+    if (carPtr && NativeCarX::GetCarRigidBody(carPtr, outPose.rb)) {
+        outPose.hasRb = true;
+        NativeCarX::GetCarVelocity(carPtr, outPose.linVel);
+        NativeCarX::GetCarAngularVelocity(carPtr, outPose.angVel);
+    }
+
+    UnityVector3 uPos = hasCachedPos ? cachedPos : UnityVector3{ tele.posX, tele.posY, tele.posZ };
+    UnityVector4 uRot = hasCachedRot ? cachedRot : MatrixToQuaternion(tele.transformMatrix.data());
+    if (rootTf && IsOnMainThread()) {
+        UnityVector3 tfPos{};
+        UnityVector4 tfRot{};
+        if (GetTransformPosRotDirect(rootTf, tfPos, tfRot)) {
+            uPos = tfPos;
+            uRot = tfRot;
+        }
+    }
+
+    outPose.pos[0] = uPos.x; outPose.pos[1] = uPos.y; outPose.pos[2] = uPos.z;
+    outPose.rot[0] = uRot.x; outPose.rot[1] = uRot.y; outPose.rot[2] = uRot.z; outPose.rot[3] = uRot.w;
+    outPose.hasQuat = true;
+    return true;
+}
+
+bool UnityBridge::ApplyTeleportPlayerInternal(const TeleportPose& target, int velMode) {
+    if (!IsOnMainThread()) return false;
+
+    // Ensure our Unity car cache & CarBehaviour::m_isPlayer mapping are fresh
+    RefreshLiveCarListOnMainThread(false);
+
+    void* car = nullptr;
+    void* rootTf = nullptr;
+    void* raceCarPtr = nullptr;
+    std::string carName;
+
+    auto findLocalFromCache = [&]() {
+        std::lock_guard<std::recursive_mutex> lock(s_mutex);
+        for (const auto& c : s_liveCars) {
+            if (c.isLocalPlayer) {
+                car = c.carPtr;
+                rootTf = c.rootTf;
+                raceCarPtr = c.raceCarPtr;
+                carName = c.unityName;
+                return;
+            }
+        }
+        for (const auto& sc : s_sceneCarCache) {
+            if (sc.isPlayer) {
+                car = sc.nativeCarPtr;
+                rootTf = sc.rootTf;
+                raceCarPtr = sc.raceCarPtr;
+                carName = sc.unityName;
+                return;
+            }
+        }
+    };
+
+    findLocalFromCache();
+    if (!raceCarPtr || !rootTf || !car) {
+        RefreshLiveCarListOnMainThread(true);
+        findLocalFromCache();
+    }
+    if (!car) {
+        CarTelemetry player = NativeCarX::GetPlayerCarTelemetry();
+        car = player.carPtr ? player.carPtr : NativeCarX::GetPlayerCarPtr();
+    }
+    if (!car && !raceCarPtr && !rootTf) return false;
+
+    UnityVector3 uPos = {
+        target.hasQuat ? target.pos[0] : target.rb[20],
+        target.hasQuat ? target.pos[1] : target.rb[21],
+        target.hasQuat ? target.pos[2] : target.rb[22]
+    };
+    UnityVector4 uRot = { target.rot[0], target.rot[1], target.rot[2], target.rot[3] };
+    if (!target.hasQuat) {
+        // Fallback: derive quaternion from 3x3 rotation in rb[4..15]
+        float m16[16] = {
+            target.rb[4], target.rb[5],  target.rb[6],  0.0f,
+            target.rb[8], target.rb[9],  target.rb[10], 0.0f,
+            target.rb[12],target.rb[13], target.rb[14], 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f
+        };
+        uRot = MatrixToQuaternion(m16);
+    }
+
+    UnityVector3 linVel{ 0.0f, 0.0f, 0.0f };
+    UnityVector3 angVel{ 0.0f, 0.0f, 0.0f };
+    if (velMode == 1) {
+        linVel = {
+            target.hasRb ? target.rb[23] : target.linVel[0],
+            target.hasRb ? target.rb[24] : target.linVel[1],
+            target.hasRb ? target.rb[25] : target.linVel[2]
+        };
+        angVel = {
+            target.hasRb ? target.rb[26] : target.angVel[0],
+            target.hasRb ? target.rb[27] : target.angVel[1],
+            target.hasRb ? target.rb[28] : target.angVel[2]
+        };
+    } else if (velMode == 2 && car) {
+        float curV[3] = { 0 }, curW[3] = { 0 };
+        if (NativeCarX::GetCarVelocity(car, curV)) {
+            linVel = { curV[0], curV[1], curV[2] };
+        }
+        if (NativeCarX::GetCarAngularVelocity(car, curW)) {
+            angVel = { curW[0], curW[1], curW[2] };
+        }
+    }
+
+    // 1. Vanilla CarX2 Teleport pipeline via RaceCar (IRaceCar):
+    //    ForceVelocityChange + ForceTransformChange fires ForceChangeForcesCalled & ForceTransformChangeCalled ->
+    //    CarProxy pushes CarProxyLocationComponent & CarProxyVelocityComponent into ECS CarWriteTransformSystem /
+    //    PhysicsRootWriteTransformSystem so the ECS PhysicsRoot, wheels, rigidbody & camera stay 100% synced.
+    HMODULE hGA = GetModuleHandleW(L"GameAssembly.dll");
+    uintptr_t gaBase = reinterpret_cast<uintptr_t>(hGA);
+    Float4x4 mat4 = BuildFloat4x4FromPosQuat(uPos, uRot);
+    bool vanillaOk = SafeCallRaceCarTeleportSEH(gaBase, raceCarPtr, &mat4, &linVel, &angVel);
+
+    // 2. Sync Unity Transform immediately on MainThread (matches PlaceOnTrack -> SetPositionAndRotation)
+    bool tfOk = rootTf && SetTransformPosRotDirect(rootTf, uPos, uRot);
+
+    // Note: Do NOT overwrite NativeCarX rb[20..22] with world XYZ (in CarX2 rb[20..22] is a local/CoM offset ~ (0, 0.43, 0.06));
+    // CarProxyLocationComponent & CarProxyVelocityComponent triggered by RaceCar::ForceTransformChange / ForceVelocityChange
+    // propagate the new world pose & velocity to ECS CarWriteTransformSystem / PhysicsRootWriteTransformSystem cleanly.
+    // Only touch NativeCarX::SetCarRigidBody for velocity updates if vanilla RaceCar failed.
+    bool nativeOk = false;
+    if (!vanillaOk && car) {
+        float rb[29] = { 0 };
+        if (NativeCarX::GetCarRigidBody(car, rb)) {
+            if (target.hasRb) {
+                for (int i = 4; i < 16; ++i) rb[i] = target.rb[i];
+            } else if (target.hasQuat) {
+                for (int i = 0; i < 12; ++i) rb[4 + i] = mat4.m[i];
+            }
+            rb[23] = linVel.x; rb[24] = linVel.y; rb[25] = linVel.z;
+            rb[26] = angVel.x; rb[27] = angVel.y; rb[28] = angVel.z;
+            nativeOk = NativeCarX::SetCarRigidBody(car, rb);
+        }
+    }
+
+    char msg[256];
+    sprintf_s(msg, "Vanilla teleport: car='%s' pos=(%.2f,%.2f,%.2f) velMode=%d raceCar=%d tf=%d native=%d",
+              carName.c_str(), uPos.x, uPos.y, uPos.z, velMode,
+              vanillaOk ? 1 : 0, tfOk ? 1 : 0, nativeOk ? 1 : 0);
+    Logger::Info(msg);
+
+    return vanillaOk || tfOk || nativeOk;
+}
+
+bool UnityBridge::RequestTeleportPlayerPose(const TeleportPose& pose, int velMode) {
+    if (!NativeCarX::IsInSession()) return false;
+    if (IsOnMainThread()) {
+        return ApplyTeleportPlayerInternal(pose, velMode);
+    }
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    s_pendingTeleportPose = pose;
+    s_pendingTeleportVelMode = velMode;
+    s_pendingTeleport.store(true, std::memory_order_release);
+    return true;
+}
+
+bool UnityBridge::RequestTeleportPlayerRigidBody(const float rb[29], int velMode) {
+    if (!rb || !NativeCarX::IsInSession()) return false;
+    TeleportPose pose{};
+    memcpy(pose.rb, rb, sizeof(pose.rb));
+    pose.hasRb = true;
+    pose.hasQuat = false;
+    pose.pos[0] = rb[20]; pose.pos[1] = rb[21]; pose.pos[2] = rb[22];
+    pose.linVel[0] = rb[23]; pose.linVel[1] = rb[24]; pose.linVel[2] = rb[25];
+    pose.angVel[0] = rb[26]; pose.angVel[1] = rb[27]; pose.angVel[2] = rb[28];
+    return RequestTeleportPlayerPose(pose, velMode);
 }
 
 // ================= Public Control APIs =================

@@ -32,5 +32,6 @@ dist/*.pdb
 .vscode/
 *.user
 *.suo
+imgui.ini
 Thumbs.db
 .DS_Store

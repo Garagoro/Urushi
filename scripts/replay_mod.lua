@@ -1,7 +1,8 @@
--- CarX Drift Racing Online 2 Replay & Ghost Mod
+-- CarX Drift Racing Online 2 Replay, 3D Ghost & Anti-Wrong-Way Mod
 -- Open Source under MIT License
 
 local state = {
+    ui_tab = 1, -- 1 = Запись, 2 = Воспроизведение
     mode = "IDLE", -- "IDLE", "RECORDING", "PLAYING", "PAUSED"
     playback_type = "GHOST", -- "GHOST" (3D Model Clone) or "LEGACY"
     playback_time = 0.0,
@@ -25,8 +26,8 @@ local state = {
         min_speed_kmh = 10.0,
         dot_threshold = -0.25,
         max_distance = 120.0,
-        show_hud_alert = true
-    }
+        show_hud_alert = true,
+    },
 }
 
 local function sync_selective_ghost_cfg()
@@ -94,12 +95,11 @@ local function start_recording()
             table.insert(targets, {
                 ptr = car.ptr,
                 unity_name = car.unity_name or (car.is_local_player and "Player Car" or "Car"),
-                is_local_player = car.is_local_player == true
+                is_local_player = car.is_local_player == true,
             })
         end
     end
 
-    -- Fallback: если никого не отметили, пишем машину игрока
     if #targets == 0 then
         local player = carx.get_player_car()
         if player and player.ptr then
@@ -107,7 +107,7 @@ local function start_recording()
             table.insert(targets, {
                 ptr = player.ptr,
                 unity_name = player.unity_name or "Player Car",
-                is_local_player = true
+                is_local_player = true,
             })
         end
     end
@@ -120,8 +120,9 @@ local function start_recording()
     end
 
     if ok then
+        state.ui_tab = 1
         state.mode = "RECORDING"
-        state.status_msg = string.format("[REC] Идет запись (%d авто)...", #targets)
+        state.status_msg = string.format("Идет запись (%d авто)...", #targets)
         log.info(string.format("Запись заезда начата (выбрано машин: %d).", #targets))
     else
         state.status_msg = "Ошибка старта записи в движке!"
@@ -222,6 +223,7 @@ local function start_playback()
         end
     end
 
+    state.ui_tab = 2
     state.mode = "PLAYING"
     state.countdown = state.start_delay
     state.playback_time = 0.0
@@ -239,10 +241,10 @@ local function toggle_pause()
     end
 end
 
--- Hotkeys listener
+-- Горячие клавиши F6 / F7 / J
 events.on_key(function(key, is_down)
     if not is_down then return end
-    if imgui.is_any_item_active and imgui.is_any_item_active() then return end
+    if imgui and imgui.is_any_item_active and imgui.is_any_item_active() then return end
 
     if key == 0x75 then -- VK_F6
         if state.mode == "RECORDING" then
@@ -260,7 +262,7 @@ events.on_key(function(key, is_down)
         end
     end
 
-    if key == 0x4A then -- J: Toggle Selective Player Collision / Anti-Wrong-Way
+    if key == 0x4A then -- J: Анти-встречка
         if carx.set_selective_ghost_config then
             state.ghost_cfg.enabled = not state.ghost_cfg.enabled
             sync_selective_ghost_cfg()
@@ -270,7 +272,7 @@ events.on_key(function(key, is_down)
     end
 end)
 
--- Main loop tick: sample telemetry on Unity Main Thread when available
+-- Тик телеметрии на Unity Main Thread
 local register_tick = events.on_main_update or events.on_update
 register_tick(function(dt)
     if not dt or dt <= 0.0 or dt > 0.25 then dt = 0.016 end
@@ -298,6 +300,10 @@ register_tick(function(dt)
                 if state.playback_loop then
                     state.playback_time = 0.0
                     state.countdown = state.start_delay
+                    if state.using_ghost_clone then
+                        apply_ghost_time(0.0)
+                    end
+                    return
                 else
                     stop_playback()
                     return
@@ -333,6 +339,7 @@ register_tick(function(dt)
     end
 end)
 
+-- Компактный HUD-радар активной встречки (появляется на трассе только при обнаружении встречки)
 local function draw_ghost_radar()
     if not state.ghost_cfg.enabled or not state.ghost_cfg.show_hud_alert then return end
     if not (carx.is_in_session and carx.is_in_session()) then return end
@@ -349,386 +356,368 @@ local function draw_ghost_radar()
     end
     if #active_ghosts == 0 then return end
 
-    if imgui.set_next_window_size then
-        imgui.set_next_window_size(320, 0, 2)
+    if imgui and imgui.set_next_window_size then
+        imgui.set_next_window_size(310, 0, 2)
     end
-    local rOpen, _ = imgui.begin_window("Kino Ghost Radar [J]", true)
+    local rOpen, keepRadar = imgui.begin_window("Радар встречки [J]", true)
     if rOpen then
-        imgui.text_colored(0.35, 0.90, 1.0, 1.0, string.format("Коллизия отключена (%d):", #active_ghosts))
+        ui.badge("ПРИЗРАК (" .. tostring(#active_ghosts) .. ")", "accent")
+        ui.same_line(0, 8)
+        ui.text_dim("Коллизия отключена")
+        ui.spacing(4)
         for _, c in ipairs(active_ghosts) do
             local reason = c.is_wrong_way and "ВСТРЕЧКА" or (c.ghost_mode == 1 and "РУЧН." or "ЗОНА")
-            imgui.text_colored(1.0, 0.85, 0.35, 1.0,
-                string.format("  [%s] %s (%.0fм | %.0f км/ч)",
-                    reason, c.unity_name or "Игрок", c.dist_to_player or 0.0, c.speed_kmh or 0.0))
+            local tone = c.is_wrong_way and "red" or "yellow"
+            ui.badge(reason, tone)
+            ui.same_line(0, 8)
+            ui.text(string.format("%s  •  %.0fм  %.0f км/ч",
+                c.unity_name or "Игрок", c.dist_to_player or 0.0, c.speed_kmh or 0.0))
         end
     end
     imgui.end_window()
+    if keepRadar == false then
+        state.ghost_cfg.show_hud_alert = false
+        sync_selective_ghost_cfg()
+    end
 end
 
--- Main UI Window
 events.on_render(function()
     draw_ghost_radar()
-    if not imgui.is_menu_open() then return end
-
-    if imgui.set_next_window_size then
-        imgui.set_next_window_size(530, 560, 2)
-    end
-
-    local isOpen, keepOpen = imgui.begin_window("URUSHI // Replay & Ghost Mod [F4]", true)
-    if isOpen then
-        if updater and updater.get_status then
-            local ust = updater.get_status()
-            local uver = ust.local_version or "0.1.0"
-            imgui.text_colored(0.55, 0.85, 1.0, 1.0, string.format("URUSHI v%s | %s", uver, ust.status_text or ""))
-            imgui.same_line()
-            if ust.state == "update_available" then
-                if imgui.button("Обновить", 95, 22) then
-                    updater.install()
-                end
-            elseif ust.state == "restart_required" then
-                if imgui.button("Рестарт", 95, 22) then
-                    updater.restart_game()
-                end
-            elseif ust.state ~= "checking" and ust.state ~= "downloading" and ust.state ~= "reinjecting" then
-                if imgui.button("Проверить", 95, 22) then
-                    updater.check()
-                end
-            end
-            imgui.separator()
-        end
-        if imgui.begin_tab_bar("MainTabs") then
-
-            -- ===================== TAB 1: RECORD =====================
-            if imgui.begin_tab_item("[REC] Запись заезда") then
-                imgui.spacing()
-
-                if state.mode == "RECORDING" then
-                    imgui.text_colored(1.0, 0.3, 0.3, 1.0, "[● REC] ИДЕТ ЗАПИСЬ ТЕЛЕМЕТРИИ...")
-                    imgui.spacing()
-                    local rec_tracks = (replay.get_record_track_count and replay.get_record_track_count()) or 1
-                    imgui.text(string.format("Авто в записи:   %d", rec_tracks))
-                    imgui.text(string.format("Время заезда:    %.2f сек", replay.get_record_duration()))
-                    imgui.text(string.format("Кадров записано: %d", replay.get_record_frame_count()))
-                    imgui.spacing()
-
-                    if imgui.button("[■] Остановить и сохранить (F6)", 310, 36) then
-                        stop_recording()
-                    end
-                else
-                    imgui.text_colored(0.4, 0.85, 0.45, 1.0, "[ ГОТОВ ] Отметьте нужные машины и нажмите F6")
-                    imgui.spacing()
-
-                    local changed, new_name = imgui.input_text("Имя файла", state.custom_filename)
-                    if changed then state.custom_filename = new_name end
-                    imgui.spacing()
-
-                    if imgui.button("[●] Начать запись заезда (F6)", 310, 36) then
-                        start_recording()
-                    end
-
-                    imgui.spacing()
-                    imgui.separator()
-                    imgui.text_colored(0.85, 0.85, 0.35, 1.0, "Список машин на трассе (Player List):")
-
-                    local cars = get_player_list()
-                    local local_car = nil
-                    for _, c in ipairs(cars) do
-                        if c.is_local_player then local_car = c; break end
-                    end
-
-                    if imgui.button("Выбрать всех (" .. tostring(#cars) .. ")", 160, 24) then
-                        for _, c in ipairs(cars) do
-                            state.selected_cars[tostring(c.ptr)] = true
-                        end
-                    end
-                    imgui.same_line()
-                    if imgui.button("Только моя машина", 160, 24) then
-                        for _, c in ipairs(cars) do
-                            state.selected_cars[tostring(c.ptr)] = (c.is_local_player == true)
-                        end
-                    end
-
-                    imgui.spacing()
-                    if #cars == 0 then
-                        imgui.text_colored(1.0, 0.5, 0.4, 1.0, "  На трассе не найдено активных машин.")
-                    else
-                        for idx, c in ipairs(cars) do
-                            local key = tostring(c.ptr)
-                            local checked = state.selected_cars[key] == true
-                            local dist_str = ""
-                            if local_car and not c.is_local_player and c.x and local_car.x then
-                                local dx, dy, dz = c.x - local_car.x, c.y - local_car.y, c.z - local_car.z
-                                local d = math.sqrt(dx * dx + dy * dy + dz * dz)
-                                dist_str = string.format("%.0fм | ", d)
-                            end
-                            local tag = c.is_local_player and " [ВЫ]" or ""
-                            local name = c.unity_name or ("Авто #" .. tostring(idx))
-                            local label = string.format("#%d %s%s (%s%.0f км/ч)##rec_car_%d",
-                                idx, name, tag, dist_str, c.speed_kmh or 0.0, idx)
-                            local cb_changed, cb_val = imgui.checkbox(label, checked)
-                            if cb_changed then
-                                state.selected_cars[key] = cb_val
-                            end
-                        end
-                    end
-                end
-
-                imgui.spacing()
-                imgui.separator()
-                imgui.text_colored(0.65, 0.68, 0.75, 1.0, "v3 Запись (Multi-Car): кузов, 4 колеса, суппорты, руль и дым.")
-                imgui.end_tab_item()
-            end
-
-            -- ===================== TAB 2: PLAYBACK =====================
-            if imgui.begin_tab_item("[PLAY] Воспроизведение") then
-                imgui.spacing()
-
-                local filenames = {}
-                for _, r in ipairs(state.saved_replays) do
-                    table.insert(filenames, r.filename)
-                end
-
-                if #filenames > 0 then
-                    local combo_changed, new_idx = imgui.combo("Файл реплея", state.selected_replay_idx, filenames)
-                    if combo_changed then
-                        state.selected_replay_idx = new_idx
-                        replay.load(filenames[new_idx])
-                    end
-                    local sel = state.saved_replays[state.selected_replay_idx]
-                    if sel then
-                        imgui.text_colored(0.7, 0.85, 1.0, 1.0,
-                            string.format("Авто: %s | Машин: %d | %.2f сек", sel.car or "?", sel.tracks or 1, sel.duration or 0.0))
-                    end
-                else
-                    imgui.text_colored(1.0, 0.4, 0.4, 1.0, "Нет сохраненных реплеев в папке replays/")
-                end
-
-                imgui.spacing()
-                if imgui.button("Обновить список файлов", 210, 26) then
-                    refresh_replays()
-                end
-
-                imgui.spacing()
-                imgui.separator()
-                imgui.spacing()
-
-                -- Ghost Collision Toggle (shared globally with [K] in ghost_test.lua)
-                if carx.is_ghost_collision and carx.set_ghost_collision then
-                    local col_cur = carx.is_ghost_collision()
-                    local col_changed, col_new = imgui.checkbox("Коллизия призраков (Твёрдый кузов) [K]", col_cur)
-                    if col_changed then
-                        carx.set_ghost_collision(col_new)
-                    end
-                end
-
-                imgui.spacing()
-                imgui.text_colored(0.85, 0.85, 0.35, 1.0, "Режим призрака:")
-                if imgui.button(state.playback_type == "GHOST" and "[x] 3D-Призрак (Model Clone)" or "[ ] 3D-Призрак (Model Clone)", 230, 26) then
-                    state.playback_type = "GHOST"
-                end
-                imgui.same_line()
-                if imgui.button(state.playback_type == "LEGACY" and "[x] Доп. слот авто (Legacy)" or "[ ] Доп. слот авто (Legacy)", 220, 26) then
-                    state.playback_type = "LEGACY"
-                end
-
-                imgui.spacing()
-
-                if state.mode == "PLAYING" then
-                    if imgui.button("[❚❚] Пауза", 110, 32) then
-                        toggle_pause()
-                    end
-                    imgui.same_line()
-                    if imgui.button("[■] Стоп (F7)", 110, 32) then
-                        stop_playback()
-                    end
-                elseif state.mode == "PAUSED" then
-                    if imgui.button("[▶] Продолжить", 130, 32) then
-                        toggle_pause()
-                    end
-                    imgui.same_line()
-                    if imgui.button("[■] Стоп (F7)", 110, 32) then
-                        stop_playback()
-                    end
-                else
-                    if imgui.button("[▶] Воспроизвести заезд (F7)", 250, 34) then
-                        start_playback()
-                    end
-                end
-
-                local max_time = replay.get_duration()
-                if max_time > 0 then
-                    imgui.spacing()
-                    local slider_changed, new_time = imgui.slider_float("Таймлайн", state.playback_time, 0.0, max_time)
-                    if slider_changed then
-                        state.playback_time = new_time
-                        if state.mode == "PAUSED" and state.using_ghost_clone then
-                            apply_ghost_time(state.playback_time)
-                        end
-                    end
-                    imgui.text(string.format("Время: %.2f / %.2f сек", state.playback_time, max_time))
-                end
-
-                imgui.spacing()
-                local speed_changed, new_speed = imgui.slider_float("Скорость", state.playback_speed, 0.25, 2.0)
-                if speed_changed then state.playback_speed = new_speed end
-
-                local off_changed, new_off = imgui.slider_float("Смещение вбок (м)", state.playback_offset, -8.0, 8.0)
-                if off_changed then state.playback_offset = new_off end
-
-                local delay_changed, new_delay = imgui.slider_float("Задержка старта (сек)", state.start_delay, 0.0, 10.0)
-                if delay_changed then state.start_delay = new_delay end
-
-                local loop_changed, new_loop = imgui.checkbox("Зациклить (Loop)", state.playback_loop)
-                if loop_changed then state.playback_loop = new_loop end
-
-                if replay.is_loaded() and replay.get_tracks then
-                    local tracks = replay.get_tracks()
-                    if tracks and #tracks > 1 then
-                        imgui.spacing()
-                        imgui.text_colored(0.65, 0.9, 0.75, 1.0, string.format("Треки в памяти (%d авто):", #tracks))
-                        for _, tr in ipairs(tracks) do
-                            local badge = tr.is_local and " [ВЫ]" or ""
-                            imgui.text(string.format("  %d. %s%s (%d кадров)", tr.index, tr.car_name or "?", badge, tr.frames or 0))
-                        end
-                    end
-                end
-
-                if state.mode == "PLAYING" and state.countdown > 0 then
-                    imgui.spacing()
-                    imgui.text_colored(1.0, 0.9, 0.2, 1.0, string.format("Старт через: %.1f сек (займите позицию)", state.countdown))
-                end
-
-                imgui.end_tab_item()
-            end
-
-            -- ===================== TAB 3: SELECTIVE COLLISION (KINO) =====================
-            if imgui.begin_tab_item("[KINO] Встречка / Игроки") then
-                imgui.spacing()
-                imgui.text_colored(0.45, 0.90, 1.0, 1.0, "Выборочная коллизия (Kino-режим):")
-                imgui.text("Отключает столкновения только со встречкой или выбранными игроками.")
-                imgui.text_colored(0.65, 0.85, 0.65, 1.0, "Машины в вашу сторону (попутка) и стены остаются твёрдыми.")
-                imgui.spacing()
-                imgui.separator()
-
-                local en_ch, en_val = imgui.checkbox("Включить выборочную коллизию [J]", state.ghost_cfg.enabled)
-                if en_ch then
-                    state.ghost_cfg.enabled = en_val
-                    sync_selective_ghost_cfg()
-                end
-
-                local aww_ch, aww_val = imgui.checkbox("Авто-призрак для встречки (Анти-встречка)", state.ghost_cfg.anti_wrong_way)
-                if aww_ch then
-                    state.ghost_cfg.anti_wrong_way = aww_val
-                    sync_selective_ghost_cfg()
-                end
-
-                local hud_ch, hud_val = imgui.checkbox("Показывать мини-радар на трассе (Ghost Radar)", state.ghost_cfg.show_hud_alert)
-                if hud_ch then
-                    state.ghost_cfg.show_hud_alert = hud_val
-                    sync_selective_ghost_cfg()
-                end
-
-                if imgui.collapsing_header("Параметры детектора встречного движения") then
-                    local s1, v1 = imgui.slider_float("Мин. скорость встречки (км/ч)", state.ghost_cfg.min_speed_kmh, 0.0, 60.0)
-                    if s1 then state.ghost_cfg.min_speed_kmh = v1; sync_selective_ghost_cfg() end
-
-                    local s2, v2 = imgui.slider_float("Порог встречного курса (dot)", state.ghost_cfg.dot_threshold, -0.85, 0.0)
-                    if s2 then state.ghost_cfg.dot_threshold = v2; sync_selective_ghost_cfg() end
-
-                    local s3, v3 = imgui.slider_float("Дистанция (м, 0 = вся карта)", state.ghost_cfg.max_distance, 0.0, 300.0)
-                    if s3 then state.ghost_cfg.max_distance = v3; sync_selective_ghost_cfg() end
-
-                    imgui.text_colored(0.65, 0.68, 0.75, 1.0, "dot = -0.25 (~105° навстречу). Защита перекрытия: <6м до разъезда.")
-                end
-
-                imgui.spacing()
-                imgui.separator()
-                imgui.text_colored(0.85, 0.85, 0.35, 1.0, "Выборочная коллизия по игрокам:")
-                if carx.clear_car_ghost_modes then
-                    imgui.same_line()
-                    if imgui.button("Сбросить всё в Авто##sg_clear", 160, 22) then
-                        carx.clear_car_ghost_modes()
-                    end
-                end
-                imgui.spacing()
-
-                local cars = get_player_list()
-                local other_count = 0
-                for idx, c in ipairs(cars) do
-                    if not c.is_local_player then
-                        other_count = other_count + 1
-                        local mode = c.ghost_mode or 0
-                        local dist = c.dist_to_player or 0.0
-                        local spd = c.speed_kmh or 0.0
-                        local dot = c.heading_dot or 1.0
-
-                        local status_txt = "ТВЁРДЫЙ"
-                        local sr, sg, sb = 0.45, 0.90, 0.45
-                        if not state.ghost_cfg.enabled then
-                            status_txt = "ВЫКЛ (Твёрдый)"
-                            sr, sg, sb = 0.65, 0.68, 0.75
-                        elseif c.is_selectively_ghosted then
-                            status_txt = c.is_wrong_way and "ПРИЗРАК (Встречка)" or "ПРИЗРАК"
-                            sr, sg, sb = 0.35, 0.90, 1.0
-                        end
-
-                        local dir_tag = (dot < (state.ghost_cfg.dot_threshold or -0.25)) and "встречка" or "попутка"
-                        imgui.text(string.format("#%d %s | %.0fм | %.0f км/ч | %s (dot %.2f)",
-                            idx, c.unity_name or ("Авто #" .. idx), dist, spd, dir_tag, dot))
-                        imgui.same_line()
-                        imgui.text_colored(sr, sg, sb, 1.0, "[" .. status_txt .. "]")
-
-                        if carx.set_car_ghost_mode then
-                            local target_id = c.unity_name or c.ptr
-                            if imgui.button((mode == 0 and "[x] Авто" or "Авто") .. "##sg_a_" .. idx, 95, 22) then
-                                carx.set_car_ghost_mode(target_id, 0)
-                            end
-                            imgui.same_line()
-                            if imgui.button((mode == 1 and "[x] Призрак" or "Призрак") .. "##sg_g_" .. idx, 110, 22) then
-                                carx.set_car_ghost_mode(target_id, 1)
-                            end
-                            imgui.same_line()
-                            if imgui.button((mode == 2 and "[x] Твёрдый" or "Твёрдый") .. "##sg_s_" .. idx, 110, 22) then
-                                carx.set_car_ghost_mode(target_id, 2)
-                            end
-                        end
-                    end
-                end
-
-                if other_count == 0 then
-                    imgui.text_colored(0.75, 0.75, 0.80, 1.0, "  Других игроков на трассе пока нет.")
-                end
-
-                imgui.end_tab_item()
-            end
-
-            -- ===================== TAB 4: INFO =====================
-            if imgui.begin_tab_item("[INFO] О моде") then
-                imgui.spacing()
-                imgui.text_colored(0.4, 0.8, 1.0, 1.0, "CarX Drift Racing Online 2 Replay & Ghost Mod")
-                imgui.text("Лицензия: MIT (Полностью открытый и свободный код)")
-                imgui.spacing()
-                imgui.separator()
-                imgui.text("Горячие клавиши:")
-                imgui.text("  F4 / Insert  - Открыть / скрыть меню мода")
-                imgui.text("  F6           - Быстрый старт / стоп записи (Player List)")
-                imgui.text("  F7           - Быстрый запуск / стоп 3D-призраков")
-                imgui.text("  F8           - Меню 3D-болванки и сцены Unity")
-                imgui.text("  M            - Живое зеркало (+3.8 м)")
-                imgui.text("  K            - Вкл / выкл коллизию 3D-призраков реплея")
-                imgui.text("  J            - Вкл / выкл анти-встречку (Kino-коллизия)")
-                imgui.text("  F9           - Горячая перезагрузка C++ ядра (Hot-Reload DLL)")
-                imgui.spacing()
-                imgui.separator()
-                imgui.text_colored(0.35, 0.85, 0.45, 1.0, "Живой Hot-Reload скриптов:")
-                imgui.text("Файлы в scripts/ можно редактировать на лету без перезапуска игры.")
-                imgui.end_tab_item()
-            end
-
-            imgui.end_tab_bar()
-        end
-    end
-    imgui.end_window()
 end)
 
-log.info("CarX2 Replay & Ghost Mod v2 (Multi-Car & Collision) ready!")
+-- ================= ОКНО 1: РЕПЛЕИ 3D =================
+
+local function render_replay_window()
+    local tab_ch, new_tab = ui.segmented("rep_tab_seg", state.ui_tab, { "Запись [F6]", "Воспроизведение [F7]" })
+    if tab_ch then
+        state.ui_tab = new_tab
+    end
+    ui.spacing(4)
+
+    if state.ui_tab == 1 then
+        if state.mode == "RECORDING" then
+            ui.card("Идет запись телеметрии", "Multi-Car v3", function()
+                local rec_tracks = (replay.get_record_track_count and replay.get_record_track_count()) or 1
+                ui.badge("REC", "red")
+                ui.same_line(0, 8)
+                ui.text("Запись активна")
+                ui.spacing(4)
+
+                ui.stat_row({
+                    { label = "Авто", value = tostring(rec_tracks), tone = "accent" },
+                    { label = "Время", value = string.format("%.1f с", replay.get_record_duration()), tone = "default" },
+                    { label = "Кадры", value = tostring(replay.get_record_frame_count()), tone = "muted" },
+                })
+
+                ui.spacing(6)
+                if ui.button("Остановить и сохранить [F6]##rep_rec_stop", ui.avail_width(), 32, "danger") then
+                    stop_recording()
+                end
+            end)
+        else
+            ui.card("Новая запись", "Сохранение в replays/*.cxr2", function()
+                local changed, new_name = ui.input_text("Имя файла##rep_fname", state.custom_filename, 128)
+                if changed then state.custom_filename = new_name end
+
+                ui.spacing(4)
+                if ui.button("Начать запись заезда [F6]##rep_rec_start", ui.avail_width(), 32, "primary") then
+                    start_recording()
+                end
+            end)
+
+            local cars = get_player_list()
+            local local_car = nil
+            for _, c in ipairs(cars) do
+                if c.is_local_player then local_car = c; break end
+            end
+
+            ui.card("Список машин на трассе", string.format("Найдено: %d", #cars), function()
+                local bw = (ui.avail_width() - 8) * 0.5
+                if ui.button("Выбрать всех (" .. tostring(#cars) .. ")##rep_all", bw, 26) then
+                    for _, c in ipairs(cars) do
+                        state.selected_cars[tostring(c.ptr)] = true
+                    end
+                end
+                ui.same_line(0, 8)
+                if ui.button("Только моя##rep_me", bw, 26, "ghost") then
+                    for _, c in ipairs(cars) do
+                        state.selected_cars[tostring(c.ptr)] = (c.is_local_player == true)
+                    end
+                end
+
+                ui.spacing(4)
+                if #cars == 0 then
+                    ui.text_dim("На трассе не найдено активных машин.")
+                else
+                    for idx, c in ipairs(cars) do
+                        local key = tostring(c.ptr)
+                        local checked = state.selected_cars[key] == true
+                        local dist_str = ""
+                        if local_car and not c.is_local_player and c.x and local_car.x then
+                            local dx, dy, dz = c.x - local_car.x, c.y - local_car.y, c.z - local_car.z
+                            local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+                            dist_str = string.format("%.0fм | ", d)
+                        end
+                        local tag = c.is_local_player and " [ВЫ]" or ""
+                        local name = c.unity_name or ("Авто #" .. tostring(idx))
+                        local label = string.format("#%d %s%s (%s%.0f км/ч)##rec_car_%d",
+                            idx, name, tag, dist_str, c.speed_kmh or 0.0, idx)
+                        local cb_ch, cb_val = ui.toggle(label, checked)
+                        if cb_ch then
+                            state.selected_cars[key] = cb_val
+                        end
+                    end
+                end
+            end)
+
+            ui.text_wrapped("v3 Multi-Car: кузов, 4 колеса, суппорты, угол руля и дым.", "muted")
+        end
+    else
+        local filenames = {}
+        for _, r in ipairs(state.saved_replays) do
+            table.insert(filenames, r.filename)
+        end
+
+        ui.card("Выбор реплея", string.format("Файлов: %d", #filenames), function()
+            if #filenames > 0 then
+                local c_ch, new_idx = ui.combo("Файл реплея##rep_file", state.selected_replay_idx, filenames)
+                if c_ch then
+                    state.selected_replay_idx = new_idx
+                    replay.load(filenames[new_idx])
+                end
+                local sel = state.saved_replays[state.selected_replay_idx]
+                if sel then
+                    ui.spacing(4)
+                    ui.stat_row({
+                        { label = "Авто", value = sel.car or "?", tone = "default" },
+                        { label = "Треков", value = tostring(sel.tracks or 1), tone = "accent" },
+                        { label = "Длина", value = string.format("%.1f с", sel.duration or 0.0), tone = "muted" },
+                    })
+                end
+            else
+                ui.text_wrapped("Нет сохраненных реплеев в папке replays/", "yellow")
+            end
+
+            ui.spacing(4)
+            if ui.button("Обновить список файлов##rep_refresh", ui.avail_width(), 26, "ghost") then
+                refresh_replays()
+            end
+        end)
+
+        ui.card("Режим и управление", state.mode, function()
+            if carx.is_ghost_collision and carx.set_ghost_collision then
+                local col_cur = carx.is_ghost_collision()
+                local col_ch, col_new = ui.toggle("Коллизия призраков (Твёрдый кузов) [K]##rep_col", col_cur)
+                if col_ch then
+                    carx.set_ghost_collision(col_new)
+                end
+            end
+
+            ui.spacing(2)
+            ui.text_dim("Режим воспроизведения")
+            local ptype_idx = (state.playback_type == "GHOST") and 1 or 2
+            local pt_ch, new_pt = ui.segmented("rep_ptype_seg", ptype_idx, { "3D-Призрак", "Слот авто (Legacy)" })
+            if pt_ch then
+                state.playback_type = (new_pt == 1) and "GHOST" or "LEGACY"
+            end
+
+            ui.spacing(6)
+            local bw = (ui.avail_width() - 8) * 0.5
+            if state.mode == "PLAYING" then
+                if ui.button("Пауза##rep_pause", bw, 32) then
+                    toggle_pause()
+                end
+                ui.same_line(0, 8)
+                if ui.button("Стоп [F7]##rep_stop", bw, 32, "danger") then
+                    stop_playback()
+                end
+            elseif state.mode == "PAUSED" then
+                if ui.button("Продолжить##rep_res", bw, 32, "primary") then
+                    toggle_pause()
+                end
+                ui.same_line(0, 8)
+                if ui.button("Стоп [F7]##rep_stop2", bw, 32, "danger") then
+                    stop_playback()
+                end
+            else
+                if ui.button("Воспроизвести заезд [F7]##rep_play", ui.avail_width(), 32, "primary") then
+                    start_playback()
+                end
+            end
+
+            local max_time = replay.get_duration()
+            if max_time > 0 then
+                ui.spacing(6)
+                local sl_ch, new_time = ui.slider_float("Таймлайн##rep_tl", state.playback_time, 0.0, max_time, "%.2f с")
+                if sl_ch then
+                    state.playback_time = new_time
+                    if state.mode == "PAUSED" and state.using_ghost_clone then
+                        apply_ghost_time(state.playback_time)
+                    end
+                end
+                ui.progress_bar(state.playback_time / math.max(max_time, 0.001), -1, 6)
+                ui.text_dim(string.format("Позиция: %.2f / %.2f сек", state.playback_time, max_time))
+            end
+
+            if state.mode == "PLAYING" and state.countdown > 0 then
+                ui.spacing(4)
+                ui.badge("СТАРТ", "yellow")
+                ui.same_line(0, 8)
+                ui.text(string.format("Через %.1f сек — займите позицию", state.countdown))
+            end
+        end)
+
+        ui.card("Настройки заезда", "Тайминг и смещение", function()
+            local sp_ch, new_sp = ui.slider_float("Скорость##rep_spd", state.playback_speed, 0.25, 2.0, "%.2fx")
+            if sp_ch then state.playback_speed = new_sp end
+
+            local off_ch, new_off = ui.slider_float("Смещение вбок (м)##rep_off", state.playback_offset, -8.0, 8.0, "%+.1f м")
+            if off_ch then state.playback_offset = new_off end
+
+            local del_ch, new_del = ui.slider_float("Задержка старта##rep_del", state.start_delay, 0.0, 10.0, "%.1f с")
+            if del_ch then state.start_delay = new_del end
+
+            local lp_ch, new_lp = ui.toggle("Зациклить воспроизведение (Loop)##rep_loop", state.playback_loop)
+            if lp_ch then state.playback_loop = new_lp end
+
+            if replay.is_loaded() and replay.get_tracks then
+                local tracks = replay.get_tracks()
+                if tracks and #tracks > 1 and ui.collapsing(string.format("Треки в памяти (%d авто)", #tracks), false) then
+                    for _, tr in ipairs(tracks) do
+                        local badge = tr.is_local and " [ВЫ]" or ""
+                        ui.text(string.format("%d. %s%s (%d кадр.)", tr.index, tr.car_name or "?", badge, tr.frames or 0))
+                    end
+                end
+            end
+        end)
+    end
+
+    ui.text_dim(state.status_msg)
+end
+
+-- ================= ОКНО 2: АНТИ-ВСТРЕЧКА (KINO) =================
+
+local function render_anticollision_window()
+    ui.card("Защита от встречки", "Выборочная коллизия [J]", function()
+        local en_ch, en_val = ui.toggle("Включить выборочную коллизию [J]##sg_en", state.ghost_cfg.enabled)
+        if en_ch then
+            state.ghost_cfg.enabled = en_val
+            sync_selective_ghost_cfg()
+        end
+
+        local aww_ch, aww_val = ui.toggle("Авто-призрак для встречного потока##sg_aww", state.ghost_cfg.anti_wrong_way)
+        if aww_ch then
+            state.ghost_cfg.anti_wrong_way = aww_val
+            sync_selective_ghost_cfg()
+        end
+
+        local hud_ch, hud_val = ui.toggle("Мини-радар встречки на трассе##sg_hud", state.ghost_cfg.show_hud_alert)
+        if hud_ch then
+            state.ghost_cfg.show_hud_alert = hud_val
+            sync_selective_ghost_cfg()
+        end
+
+        ui.text_wrapped("Попутные машины и стены остаются твёрдыми; встречные и выбранные игроки становятся прозрачными.", "muted")
+
+        if ui.collapsing("Параметры детектора встречки", false) then
+            local s1, v1 = ui.slider_float("Мин. скорость встречки##sg_v", state.ghost_cfg.min_speed_kmh, 0.0, 60.0, "%.0f км/ч")
+            if s1 then state.ghost_cfg.min_speed_kmh = v1; sync_selective_ghost_cfg() end
+
+            local s2, v2 = ui.slider_float("Порог встречного курса (dot)##sg_dot", state.ghost_cfg.dot_threshold, -0.85, 0.0, "%.2f")
+            if s2 then state.ghost_cfg.dot_threshold = v2; sync_selective_ghost_cfg() end
+
+            local s3, v3 = ui.slider_float("Дистанция (0 = вся карта)##sg_dist", state.ghost_cfg.max_distance, 0.0, 300.0, "%.0f м")
+            if s3 then state.ghost_cfg.max_distance = v3; sync_selective_ghost_cfg() end
+
+            ui.text_dim("dot = -0.25 (~105° навстречу). Защита перекрытия: <6м до разъезда.")
+        end
+    end)
+
+    local cars = get_player_list()
+    local other_count = 0
+    for _, c in ipairs(cars) do
+        if not c.is_local_player then other_count = other_count + 1 end
+    end
+
+    ui.card("Игроки на трассе", string.format("Соперников: %d", other_count), function()
+        if carx.clear_car_ghost_modes and other_count > 0 then
+            if ui.button("Сбросить всё в «Авто»##sg_clear", ui.avail_width(), 26, "ghost") then
+                carx.clear_car_ghost_modes()
+            end
+            ui.spacing(4)
+        end
+
+        if other_count == 0 then
+            ui.text_dim("Других игроков на трассе пока нет.")
+        else
+            local drawn = 0
+            for idx, c in ipairs(cars) do
+                if not c.is_local_player then
+                    drawn = drawn + 1
+                    local mode = c.ghost_mode or 0
+                    local dist = c.dist_to_player or 0.0
+                    local spd = c.speed_kmh or 0.0
+                    local dot = c.heading_dot or 1.0
+
+                    local status_txt = "ТВЁРДЫЙ"
+                    local tone = "green"
+                    if not state.ghost_cfg.enabled then
+                        status_txt = "ВЫКЛ"
+                        tone = "muted"
+                    elseif c.is_selectively_ghosted then
+                        status_txt = c.is_wrong_way and "ВСТРЕЧКА" or "ПРИЗРАК"
+                        tone = "accent"
+                    end
+
+                    local dir_tag = (dot < (state.ghost_cfg.dot_threshold or -0.25)) and "встречка" or "попутка"
+                    ui.badge(status_txt, tone)
+                    ui.same_line(0, 8)
+                    ui.text(string.format("%s  •  %.0fм  %.0f км/ч (%s)",
+                        c.unity_name or ("Авто #" .. idx), dist, spd, dir_tag))
+
+                    if carx.set_car_ghost_mode then
+                        local target_id = c.unity_name or c.ptr
+                        local seg_ch, new_m = ui.segmented("sg_car_mode_" .. tostring(idx), mode + 1, { "Авто", "Призрак", "Твёрдый" })
+                        if seg_ch then
+                            carx.set_car_ghost_mode(target_id, new_m - 1)
+                        end
+                    end
+
+                    if drawn < other_count then ui.spacing(4) end
+                end
+            end
+        end
+    end)
+
+    ui.text_dim("Хоткей: [J] переключить выборочную коллизию в один клик")
+end
+
+if urushi and urushi.register_window then
+    urushi.register_window({
+        id = "replay",
+        title = "Реплеи 3D",
+        icon = "play",
+        order = 30,
+        default_open = false,
+        default_pinned = false,
+        x = 264,
+        y = 24,
+        width = 430,
+        render = render_replay_window,
+    })
+
+    urushi.register_window({
+        id = "anticollision",
+        title = "Анти-встречка",
+        icon = "shield",
+        order = 40,
+        default_open = false,
+        default_pinned = false,
+        x = 710,
+        y = 24,
+        width = 420,
+        render = render_anticollision_window,
+    })
+end
+
+log.info("CarX2 Replay, 3D Ghost & Anti-Wrong-Way Mod ready!")

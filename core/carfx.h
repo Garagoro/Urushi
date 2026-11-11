@@ -42,6 +42,34 @@ struct TargetTexturesInput {
     bool valid = false;
 };
 
+struct SpatialProximityInput {
+    float carPos[4] = { 0.0f, 0.0f, 0.0f, 0.95f };         // xyz: world origin, w: halfWidth
+    float carRight[4] = { 1.0f, 0.0f, 0.0f, 2.20f };       // xyz: world right, w: halfLength
+    float carUp[4] = { 0.0f, 1.0f, 0.0f, 1.30f };          // xyz: world up, w: height
+    float carFwd[4] = { 0.0f, 0.0f, 1.0f, 0.0f };          // xyz: world forward, w: spatialValid (0/1)
+    float camPos[4] = { 0.0f, 0.0f, 0.0f, 0.0f };          // xyz: main camera world pos, w: camValid (0/1)
+
+    float nearCarPos[4] = { 0.0f, 0.0f, 0.0f, 999.0f };    // xyz: nearest car OBB center, w: car gap (m)
+    float nearCarRight[4] = { 1.0f, 0.0f, 0.0f, 0.96f };   // xyz: right, w: halfWidth
+    float nearCarFwd[4] = { 0.0f, 0.0f, 1.0f, 2.25f };     // xyz: forward, w: halfLength
+    float nearCarClosest[4] = { 0.0f, 0.0f, 0.0f, 0.65f }; // xyz: closest point on other car OBB, w: halfHeight
+
+    float wallDirDist[4] = { 999.0f, 999.0f, 999.0f, 999.0f }; // x:Front, y:Rear, z:Left, w:Right gap (m)
+    float wallNearestHit[4] = { 0.0f, 0.0f, 0.0f, 999.0f };    // xyz: closest wall point, w: min gap (m)
+    float wallNearestNormal[4] = { 0.0f, 1.0f, 0.0f, 0.0f };   // xyz: wall normal, w: hitMask (F=1,B=2,L=4,R=8)
+    float wallFrontHit[4] = { 0.0f, 0.0f, 0.0f, 999.0f };
+    float wallRearHit[4] = { 0.0f, 0.0f, 0.0f, 999.0f };
+    float wallLeftHit[4] = { 0.0f, 0.0f, 0.0f, 999.0f };
+    float wallRightHit[4] = { 0.0f, 0.0f, 0.0f, 999.0f };
+    float wallDoorLeftHit[4] = { 0.0f, 0.0f, 0.0f, 999.0f };   // xyz: left door (between wheels), w: gap (m)
+    float wallDoorRightHit[4] = { 0.0f, 0.0f, 0.0f, 999.0f };  // xyz: right door (between wheels), w: gap (m)
+    float wallFrontLeftHit[4] = { 0.0f, 0.0f, 0.0f, 999.0f };
+    float wallFrontRightHit[4] = { 0.0f, 0.0f, 0.0f, 999.0f };
+    float wallRearLeftHit[4] = { 0.0f, 0.0f, 0.0f, 999.0f };
+    float wallRearRightHit[4] = { 0.0f, 0.0f, 0.0f, 999.0f };
+    float driftState[4] = { 0.0f, 0.0f, 0.0f, 0.0f };        // x: slipDeg, y: signedSlipDeg, z: norm65, w: speedKmh
+};
+
 struct DiagnosticStatus {
     bool initialized = false;
     bool enabled = false;
@@ -114,12 +142,15 @@ int GetOverrideStealth(int target);
 
 // Parameter & texture control
 bool SetParamByName(int target, const char* name, const float* values, int count);
+bool GetParamByName(int target, const char* name, float* outValues, int maxCount);
 bool SetParamSlot(int target, int slot, const float* values, int count);
 bool GetParamSlot(int target, int slot, float out[4]);
 bool SetUserTexture(int target, int texSlot, const std::string& imagePathUtf8, std::string* outError = nullptr);
 void ClearUserTexture(int target, int texSlot);
 void SetGameInput(int index, float value);
 float GetGameInput(int index);
+void SetSpatialProximity(const SpatialProximityInput& input);
+SpatialProximityInput GetSpatialProximity();
 
 // Draw interception entry point (called from D3D11 DrawIndexed / DrawIndexedInstanced hooks)
 // Returns true if CarFX handled & issued the draw(s); false if caller should invoke original as normal.

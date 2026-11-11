@@ -14,9 +14,10 @@ public:
     static bool Init(const std::wstring& scriptsDir);
     static void Shutdown();
 
-    // Hot-reload
+    // Hot-reload & Dev Eval
     static void Reload();
     static void OnScriptModified(const std::string& filename);
+    static bool Eval(const std::string& code, std::string& outOutput, std::string& outError);
 
     // Callbacks from Game Loop & Render
     static void OnMainUpdate(float dt);

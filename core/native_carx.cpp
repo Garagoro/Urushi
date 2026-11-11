@@ -6,6 +6,7 @@
 std::recursive_mutex NativeCarX::s_mutex;
 std::vector<CarTelemetry> NativeCarX::s_trackedCars;
 void* NativeCarX::s_playerCarPtr = nullptr;
+void* NativeCarX::s_knownPlayerCarPtr = nullptr;
 void* NativeCarX::s_managerPtr = nullptr;
 HMODULE NativeCarX::s_nativeCarXModule = nullptr;
 bool NativeCarX::s_initialized = false;
@@ -38,6 +39,7 @@ NativeCarX::t_CX_DestroyCar NativeCarX::pfn_DestroyCar = nullptr;
 NativeCarX::t_CX_CarGetRigidBody NativeCarX::pfn_GetRigidBody = nullptr;
 NativeCarX::t_CX_CarSetRigidBody NativeCarX::pfn_SetRigidBody = nullptr;
 NativeCarX::t_CX_CarGetVelocity NativeCarX::pfn_GetVelocity = nullptr;
+NativeCarX::t_CX_CarGetVelocity NativeCarX::pfn_GetAngularVelocity = nullptr;
 
 bool NativeCarX::Init() {
     if (s_initialized) return true;
@@ -73,6 +75,7 @@ bool NativeCarX::Init() {
     pfn_GetRigidBody = (t_CX_CarGetRigidBody)GetProcAddress(s_nativeCarXModule, "CX_CarGetRigidBody");
     pfn_SetRigidBody = (t_CX_CarSetRigidBody)GetProcAddress(s_nativeCarXModule, "CX_CarSetRigidBody");
     pfn_GetVelocity = (t_CX_CarGetVelocity)GetProcAddress(s_nativeCarXModule, "CX_CarGetVelocity");
+    pfn_GetAngularVelocity = (t_CX_CarGetVelocity)GetProcAddress(s_nativeCarXModule, "CX_CarGetAngularVelocity");
 
     void* pfn_DestroyManager = (void*)GetProcAddress(s_nativeCarXModule, "CX_DestroyManager");
 
@@ -184,6 +187,7 @@ void NativeCarX::Hooked_CX_DestroyManager(void* manager) {
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
     s_trackedCars.clear();
     s_playerCarPtr = nullptr;
+    s_knownPlayerCarPtr = nullptr;
     if (s_managerPtr == manager) {
         s_managerPtr = nullptr;
     }
@@ -229,6 +233,25 @@ void NativeCarX::PruneStaleCarsLocked() {
         if (!stillPresent) {
             s_playerCarPtr = nullptr;
         }
+    }
+    if (s_knownPlayerCarPtr) {
+        bool stillPresent = std::any_of(s_trackedCars.begin(), s_trackedCars.end(),
+            [](const CarTelemetry& c) { return c.carPtr == s_knownPlayerCarPtr; });
+        if (!stillPresent) {
+            s_knownPlayerCarPtr = nullptr;
+        }
+    }
+}
+
+void NativeCarX::SetKnownPlayerCarPtr(void* car) {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    s_knownPlayerCarPtr = car;
+    if (car) {
+        s_playerCarPtr = car;
+    }
+    void* activePtr = s_knownPlayerCarPtr ? s_knownPlayerCarPtr : s_playerCarPtr;
+    for (auto& c : s_trackedCars) {
+        c.isLocalPlayer = (activePtr && c.carPtr == activePtr);
     }
 }
 
@@ -280,15 +303,10 @@ void NativeCarX::Hooked_CX_CarSetRenderMatrix(void* car, const float* matrix, fl
         it->posY = matrix[13];
         it->posZ = matrix[14];
 
-        // If local player car pointer not set yet, set it to the first active car
-        if (!s_playerCarPtr) {
-            s_playerCarPtr = car;
-            it->isLocalPlayer = true;
-        } else if (s_playerCarPtr == car) {
-            it->isLocalPlayer = true;
-        } else {
-            it->isLocalPlayer = false;
-        }
+        // Never blindly lock s_playerCarPtr onto whichever car updates first (often an AI/remote car).
+        // Authoritative identification arrives from Unity CarBehaviour::m_isPlayer via SetKnownPlayerCarPtr.
+        void* activePlayer = s_knownPlayerCarPtr ? s_knownPlayerCarPtr : s_playerCarPtr;
+        it->isLocalPlayer = (activePlayer && car == activePlayer);
     }
 }
 
@@ -339,17 +357,29 @@ CarTelemetry NativeCarX::GetPlayerCarTelemetry() {
         return CarTelemetry();
     }
 
-    // 1. Look for explicit player car pointer
-    if (s_playerCarPtr) {
+    // 1. Authoritative CarBehaviour::m_isPlayer car pointer from Unity MainThread
+    if (s_knownPlayerCarPtr) {
         for (auto& c : s_trackedCars) {
-            if (c.carPtr == s_playerCarPtr) {
+            if (c.carPtr == s_knownPlayerCarPtr) {
+                c.isLocalPlayer = true;
                 UpdateCarTelemetry(c);
                 return c;
             }
         }
     }
 
-    // 2. Look for any car receiving user inputs
+    // 2. Fallback to explicit player car pointer
+    if (s_playerCarPtr) {
+        for (auto& c : s_trackedCars) {
+            if (c.carPtr == s_playerCarPtr) {
+                c.isLocalPlayer = true;
+                UpdateCarTelemetry(c);
+                return c;
+            }
+        }
+    }
+
+    // 3. Fallback: look for any car receiving user inputs
     for (auto& c : s_trackedCars) {
         UpdateCarTelemetry(c);
         if (c.accel > 0.05f || c.brake > 0.05f || c.handbrake > 0.05f || abs(c.steerAngle) > 0.05f) {
@@ -359,17 +389,18 @@ CarTelemetry NativeCarX::GetPlayerCarTelemetry() {
         }
     }
 
-    // 3. Fallback: return the first active car in session
-    s_playerCarPtr = s_trackedCars.front().carPtr;
-    s_trackedCars.front().isLocalPlayer = true;
-    UpdateCarTelemetry(s_trackedCars.front());
-    return s_trackedCars.front();
+    // 4. Transient fallback: return front car without latching s_playerCarPtr onto it
+    CarTelemetry frontCopy = s_trackedCars.front();
+    UpdateCarTelemetry(frontCopy);
+    return frontCopy;
 }
 
 std::vector<CarTelemetry> NativeCarX::GetAllCarsTelemetry() {
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
     PruneStaleCarsLocked();
+    void* activePlayer = s_knownPlayerCarPtr ? s_knownPlayerCarPtr : s_playerCarPtr;
     for (auto& c : s_trackedCars) {
+        c.isLocalPlayer = (activePlayer && c.carPtr == activePlayer);
         UpdateCarTelemetry(c);
     }
     return s_trackedCars;
@@ -389,7 +420,7 @@ void NativeCarX::SetCarRenderMatrix(void* car, const float* matrix16, float fact
 
 void* NativeCarX::GetPlayerCarPtr() {
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    return s_playerCarPtr;
+    return s_knownPlayerCarPtr ? s_knownPlayerCarPtr : s_playerCarPtr;
 }
 
 void NativeCarX::SetCarActive(void* car, bool active) {
@@ -426,6 +457,12 @@ bool NativeCarX::SetCarRigidBody(void* car, const float inRb[29]) {
 bool NativeCarX::GetCarVelocity(void* car, float outVel[3]) {
     if (!pfn_GetVelocity || !car || !outVel) return false;
     pfn_GetVelocity(car, outVel);
+    return true;
+}
+
+bool NativeCarX::GetCarAngularVelocity(void* car, float outAngVel[3]) {
+    if (!pfn_GetAngularVelocity || !car || !outAngVel) return false;
+    pfn_GetAngularVelocity(car, outAngVel);
     return true;
 }
 

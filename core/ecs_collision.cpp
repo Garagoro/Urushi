@@ -20,14 +20,21 @@ constexpr uintptr_t RVA_WORLD_CLASS            = 0x844C9E0; // Unity.Entities.Wo
 constexpr uintptr_t RVA_ECS_CLASS              = 0x8428C98; // EntityComponentStore class static_fields -> s_chunkStore
 constexpr uintptr_t RVA_CHUNK_META_CLASS       = 0x843CB48; // SharedStatic chunk meta table
 constexpr uintptr_t RVA_TYPE_NAMES_SS          = 0x83F57D8; // TypeManager.TypeNames SharedStatic<UnsafeList>
+constexpr uintptr_t RVA_COLLISION_WORLD_CAST_RAY    = 0x2717C40; // Unity.Physics.CollisionWorld.CastRay(RaycastInput, out RaycastHit)
+constexpr uintptr_t RVA_COLLISION_WORLD_SPHERE_CAST = 0x5B57270; // Unity.Physics.CollisionWorld.SphereCast(float3, float, float3, float, out ColliderCastHit, CollisionFilter, QueryInteraction)
+constexpr uintptr_t RVA_CAST_RAY_MI_PTR           = 0x8387960; // Generic MethodInfo* slot for CollisionWorld.CastRay<RaycastHit>
+constexpr uintptr_t RVA_INIT_RUNTIME_METADATA  = 0x09264A0; // il2cpp_codegen_initialize_runtime_metadata
+constexpr uintptr_t RVA_RAYCAST_INPUT_START    = 0x5B65A80; // RaycastInput.set_Start
+constexpr uintptr_t RVA_RAYCAST_INPUT_END      = 0x5B65A30; // RaycastInput.set_End
 
-constexpr uint32_t FALLBACK_TIDX_PHYSICS_COLLIDER = 0x5BA;
-constexpr uint32_t FALLBACK_TIDX_PHYSICS_VELOCITY = 0x5BE;
-constexpr uint32_t FALLBACK_TIDX_PLAYER_CAR_TAG   = 0x5E2;
-constexpr uint32_t FALLBACK_TIDX_OTHER_CAR_TAG    = 0x5E3;
-constexpr uint32_t FALLBACK_TIDX_LOCAL_TO_WORLD   = 0x8A9;
-constexpr uint32_t FALLBACK_TIDX_LOCAL_TRANSFORM  = 0x8AA;
-constexpr uint32_t FALLBACK_TIDX_GHOST_CAR_TAG    = 0x8B2;
+constexpr uint32_t FALLBACK_TIDX_PHYSICS_COLLIDER  = 0x5BA;
+constexpr uint32_t FALLBACK_TIDX_PHYSICS_VELOCITY  = 0x5BE;
+constexpr uint32_t FALLBACK_TIDX_PHYSICS_WORLD_SGL = 0x5C6;
+constexpr uint32_t FALLBACK_TIDX_PLAYER_CAR_TAG    = 0x5E2;
+constexpr uint32_t FALLBACK_TIDX_OTHER_CAR_TAG     = 0x5E3;
+constexpr uint32_t FALLBACK_TIDX_LOCAL_TO_WORLD    = 0x8A9;
+constexpr uint32_t FALLBACK_TIDX_LOCAL_TRANSFORM   = 0x8AA;
+constexpr uint32_t FALLBACK_TIDX_GHOST_CAR_TAG     = 0x8B2;
 
 constexpr uint32_t CHUNK_HEADER_BYTES = 0x40;
 constexpr uint32_t CHUNK_SIZE_SHIFT   = 14; // 16 KB chunks
@@ -49,13 +56,14 @@ struct CollisionFilter {
 
 struct EcsTypeIndices {
     bool resolvedFromTypeNames = false;
-    uint32_t physicsCollider = FALLBACK_TIDX_PHYSICS_COLLIDER;
-    uint32_t physicsVelocity = FALLBACK_TIDX_PHYSICS_VELOCITY;
-    uint32_t playerCarTag    = FALLBACK_TIDX_PLAYER_CAR_TAG;
-    uint32_t otherCarTag     = FALLBACK_TIDX_OTHER_CAR_TAG;
-    uint32_t localToWorld    = FALLBACK_TIDX_LOCAL_TO_WORLD;
-    uint32_t localTransform  = FALLBACK_TIDX_LOCAL_TRANSFORM;
-    uint32_t ghostCarTag     = FALLBACK_TIDX_GHOST_CAR_TAG;
+    uint32_t physicsCollider       = FALLBACK_TIDX_PHYSICS_COLLIDER;
+    uint32_t physicsVelocity       = FALLBACK_TIDX_PHYSICS_VELOCITY;
+    uint32_t physicsWorldSingleton = FALLBACK_TIDX_PHYSICS_WORLD_SGL;
+    uint32_t playerCarTag          = FALLBACK_TIDX_PLAYER_CAR_TAG;
+    uint32_t otherCarTag           = FALLBACK_TIDX_OTHER_CAR_TAG;
+    uint32_t localToWorld          = FALLBACK_TIDX_LOCAL_TO_WORLD;
+    uint32_t localTransform        = FALLBACK_TIDX_LOCAL_TRANSFORM;
+    uint32_t ghostCarTag           = FALLBACK_TIDX_GHOST_CAR_TAG;
 };
 
 struct RawEcsCar {
@@ -100,6 +108,7 @@ static std::unordered_map<uintptr_t, CarGhostOverride>   s_overridesByPtr;
 static std::unordered_map<uint64_t, CachedColliderBaseline> s_baselines;
 static std::unordered_map<uint64_t, AutoLatchState>      s_autoLatch;
 static std::vector<uint32_t> s_cachedCarChunks;
+static uint32_t s_cachedPhysicsWorldChunk = UINT32_MAX;
 static std::vector<CarGhostState> s_latestStates;
 static std::chrono::steady_clock::time_point s_lastChunkScan{};
 static size_t s_lastSeenCarCount = 0;
@@ -189,6 +198,8 @@ static void TryResolveTypeIndices() {
             s_types.physicsCollider = i; ++matched;
         } else if (strcmp(nameBuf, "Unity.Physics.PhysicsVelocity") == 0) {
             s_types.physicsVelocity = i; ++matched;
+        } else if (strcmp(nameBuf, "Unity.Physics.PhysicsWorldSingleton") == 0) {
+            s_types.physicsWorldSingleton = i; ++matched;
         } else if (strcmp(nameBuf, "Framework.Views.Cars.PlayerCarTagComponentData") == 0) {
             s_types.playerCarTag = i; ++matched;
         } else if (strcmp(nameBuf, "Framework.Views.Cars.OtherCarTagComponentData") == 0) {
@@ -200,12 +211,12 @@ static void TryResolveTypeIndices() {
         } else if (strcmp(nameBuf, "Modules.CarX.Game.DR3.UIView.Components.GhostCarTag") == 0) {
             s_types.ghostCarTag = i; ++matched;
         }
-        if (matched >= 7) break;
+        if (matched >= 8) break;
     }
 
     if (matched >= 4) {
         s_types.resolvedFromTypeNames = true;
-        Logger::Info("EcsCollision resolved TypeManager indices dynamically (" + std::to_string(matched) + "/7).");
+        Logger::Info("EcsCollision resolved TypeManager indices dynamically (" + std::to_string(matched) + "/8).");
     }
 }
 
@@ -893,4 +904,273 @@ void EcsCollision::UpdateOnMainThread(float dt, const std::vector<LiveCarInfo>& 
     }
 
     s_latestStates = std::move(states);
+}
+
+static bool InspectPhysicsWorldChunk(const EcsStores& stores, uint32_t cidx, uintptr_t& outPtr) {
+    uint32_t page = cidx >> CHUNK_PAGE_SHIFT;
+    uint32_t sub  = cidx & CHUNK_PAGE_MASK;
+    uintptr_t cpage = 0;
+    if (!SafeRead(stores.chunkStore + static_cast<size_t>(page) * 8, cpage) || cpage < 0x10000) {
+        return false;
+    }
+
+    uintptr_t metaPtr = stores.chunkMetaBase + static_cast<size_t>(cidx) * 16;
+    uintptr_t arch = 0;
+    uint32_t countMeta = 0;
+    if (!SafeRead(metaPtr, arch) || arch < 0x10000) return false;
+    if (!SafeRead(metaPtr + 8, countMeta)) return false;
+
+    uint32_t count = countMeta & 0xFFFF;
+    if (count == 0 || count >= 16) return false;
+
+    uint32_t tcount = 0;
+    uintptr_t typesPtr = 0, offsPtr = 0, szsPtr = 0;
+    if (!SafeRead(arch + 0xA8, tcount) || tcount == 0 || tcount >= 160) return false;
+    if (!SafeRead(arch + 0x70, typesPtr) || typesPtr < 0x10000) return false;
+    if (!SafeRead(arch + 0xE0, offsPtr) || offsPtr < 0x10000) return false;
+    if (!SafeRead(arch + 0xE8, szsPtr) || szsPtr < 0x10000) return false;
+
+    for (uint32_t ti = 0; ti < tcount; ++ti) {
+        uint32_t rawType = 0;
+        if (!SafeRead(typesPtr + ti * 4, rawType)) return false;
+        if ((rawType & 0xFFFF) != s_types.physicsWorldSingleton) continue;
+
+        uint32_t off = 0;
+        uint16_t sz = 0;
+        if (!SafeRead(offsPtr + ti * 4, off) || !SafeRead(szsPtr + ti * 2, sz) || sz < 0x100) {
+            return false;
+        }
+        uintptr_t ptr = cpage + (static_cast<uintptr_t>(sub) << CHUNK_SIZE_SHIFT) + CHUNK_HEADER_BYTES + off;
+        uintptr_t bodiesPtr = 0;
+        uint32_t nTotal = 0;
+        if (!SafeRead(ptr + 0x00, bodiesPtr) || bodiesPtr < 0x10000) return false;
+        if (!SafeRead(ptr + 0x08, nTotal) || nTotal == 0 || nTotal > 200000) return false;
+        outPtr = ptr;
+        return true;
+    }
+    return false;
+}
+
+static uintptr_t ResolveCollisionWorldPtr() {
+    TryResolveTypeIndices();
+    EcsStores stores{};
+    if (!GetEcsStores(stores)) return 0;
+
+    uintptr_t cwPtr = 0;
+    if (s_cachedPhysicsWorldChunk != UINT32_MAX &&
+        InspectPhysicsWorldChunk(stores, s_cachedPhysicsWorldChunk, cwPtr)) {
+        return cwPtr;
+    }
+
+    s_cachedPhysicsWorldChunk = UINT32_MAX;
+    uint32_t lastValidPage = 0;
+    for (uint32_t page = 0; page < MAX_SCAN_PAGES; ++page) {
+        if (page > 128 && page > lastValidPage + 48) break;
+        uintptr_t cpage = 0;
+        if (!SafeRead(stores.chunkStore + static_cast<size_t>(page) * 8, cpage) || cpage < 0x10000) {
+            continue;
+        }
+        lastValidPage = page;
+        uint32_t baseCidx = page << CHUNK_PAGE_SHIFT;
+        for (uint32_t sub = 0; sub < 64; ++sub) {
+            if (InspectPhysicsWorldChunk(stores, baseCidx + sub, cwPtr)) {
+                s_cachedPhysicsWorldChunk = baseCidx + sub;
+                return cwPtr;
+            }
+        }
+    }
+    return 0;
+}
+
+static void* SafeGetOrInitCastRayMISeh(uintptr_t gaBase) {
+    __try {
+        uintptr_t* slot = reinterpret_cast<uintptr_t*>(gaBase + RVA_CAST_RAY_MI_PTR);
+        if (*slot == 0) {
+            auto initFn = reinterpret_cast<void(__fastcall*)(void*)>(gaBase + RVA_INIT_RUNTIME_METADATA);
+            initFn(slot);
+        }
+        uintptr_t val = *slot;
+        return (val > 0x10000) ? reinterpret_cast<void*>(val) : nullptr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+static bool SafeDotsCastRaySEH(void* fnCastRay, void* cwPtr, void* miPtr,
+                               void* fnSetStart, void* fnSetEnd,
+                               const float* start3, const float* end3,
+                               uint32_t belongsTo, uint32_t collidesWith,
+                               uint32_t* outDwords16) {
+    __try {
+        alignas(16) uint8_t inputBuf[0x90] = { 0 };
+        auto setStart = reinterpret_cast<void(__fastcall*)(void*, const float*)>(fnSetStart);
+        auto setEnd   = reinterpret_cast<void(__fastcall*)(void*, const float*)>(fnSetEnd);
+        setStart(inputBuf, start3);
+        setEnd(inputBuf, end3);
+        *reinterpret_cast<uint32_t*>(inputBuf + 0x00) = belongsTo;
+        *reinterpret_cast<uint32_t*>(inputBuf + 0x04) = collidesWith;
+        *reinterpret_cast<int32_t*>(inputBuf + 0x08)  = 0;
+
+        alignas(16) uint8_t hitBuf[0x40] = { 0 };
+        *reinterpret_cast<float*>(hitBuf + 0x00) = 1.0f;
+
+        auto castFn = reinterpret_cast<uint8_t(__fastcall*)(void*, const void*, void*, void*)>(fnCastRay);
+        uint8_t hit = castFn(cwPtr, inputBuf, hitBuf, miPtr);
+        if (hit && outDwords16) {
+            memcpy(outDwords16, hitBuf, 16 * sizeof(uint32_t));
+        }
+        return hit != 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool EcsCollision::CastRay(const float start[3], const float end[3],
+                           uint32_t belongsTo, uint32_t collidesWith,
+                           DotsRaycastHit& outHit) {
+    outHit = DotsRaycastHit{};
+    if (!ResolveGameAssembly()) return false;
+
+    uintptr_t cwPtr = ResolveCollisionWorldPtr();
+    if (!cwPtr) return false;
+
+    void* miPtr = SafeGetOrInitCastRayMISeh(s_gaBase);
+    if (!miPtr) return false;
+
+    void* fnCastRay  = reinterpret_cast<void*>(s_gaBase + RVA_COLLISION_WORLD_CAST_RAY);
+    void* fnSetStart = reinterpret_cast<void*>(s_gaBase + RVA_RAYCAST_INPUT_START);
+    void* fnSetEnd   = reinterpret_cast<void*>(s_gaBase + RVA_RAYCAST_INPUT_END);
+
+    if (!SafeDotsCastRaySEH(fnCastRay, reinterpret_cast<void*>(cwPtr), miPtr,
+                            fnSetStart, fnSetEnd, start, end,
+                            belongsTo, collidesWith, outHit.rawDwords)) {
+        return false;
+    }
+
+    const float* rf = reinterpret_cast<const float*>(outHit.rawDwords);
+    outHit.fraction = std::clamp(rf[0], 0.0f, 1.0f);
+    outHit.point[0] = start[0] + (end[0] - start[0]) * outHit.fraction;
+    outHit.point[1] = start[1] + (end[1] - start[1]) * outHit.fraction;
+    outHit.point[2] = start[2] + (end[2] - start[2]) * outHit.fraction;
+
+    // Verified on live Unity.Physics.RaycastHit (64 bytes): Position @ +0x28..+0x33, SurfaceNormal @ +0x34..+0x3F
+    float nx = rf[13], ny = rf[14], nz = rf[15];
+    float nLen = sqrtf(nx * nx + ny * ny + nz * nz);
+    if (nLen > 1e-4f) {
+        outHit.normal[0] = nx / nLen;
+        outHit.normal[1] = ny / nLen;
+        outHit.normal[2] = nz / nLen;
+    }
+    return true;
+}
+
+namespace {
+
+struct alignas(4) DotsCollisionFilterRaw {
+    uint32_t belongsTo;
+    uint32_t collidesWith;
+    int32_t  groupIndex;
+};
+
+struct alignas(16) DotsColliderCastHitRaw {
+    uint8_t bytes[0x40]; // Unity.Physics.ColliderCastHit is 0x3C bytes
+};
+
+static bool SafeDotsSphereCastSEH(void* fnSphereCast, void* cwPtr,
+                                  const float* origin3, float radius,
+                                  const float* dir3, float maxDistance,
+                                  uint32_t belongsTo, uint32_t collidesWith,
+                                  uint8_t queryInteraction,
+                                  DotsColliderCastHitRaw* outRawHit) {
+    __try {
+        alignas(16) float origAligned[4] = { origin3[0], origin3[1], origin3[2], 0.0f };
+        alignas(16) float dirAligned[4]  = { dir3[0],    dir3[1],    dir3[2],    0.0f };
+        DotsCollisionFilterRaw flt{ belongsTo, collidesWith, 0 };
+        DotsColliderCastHitRaw hitBuf = {};
+        *reinterpret_cast<float*>(hitBuf.bytes + 0x00) = 1.0f;
+
+        typedef uint8_t(__fastcall* t_SphereCast)(
+            void* cw,
+            const float* origin,
+            float radius,
+            const float* direction,
+            float maxDistance,
+            void* outColliderCastHit,
+            const DotsCollisionFilterRaw* filter,
+            uint8_t queryInteraction,
+            const void* methodInfo);
+
+        auto castFn = reinterpret_cast<t_SphereCast>(fnSphereCast);
+        uint8_t hit = castFn(cwPtr, origAligned, radius, dirAligned, maxDistance,
+                             &hitBuf, &flt, queryInteraction, nullptr);
+        if (hit && outRawHit) {
+            memcpy(outRawHit, &hitBuf, sizeof(DotsColliderCastHitRaw));
+        }
+        return hit != 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+} // namespace
+
+bool EcsCollision::SphereCast(const float origin[3], float radius, const float dir[3], float maxDistance,
+                              uint32_t belongsTo, uint32_t collidesWith,
+                              SphereCastHit& outHit, uint8_t queryInteraction,
+                              bool* outQueryExecuted) {
+    outHit = SphereCastHit{};
+    if (outQueryExecuted) *outQueryExecuted = false;
+    if (!origin || !dir) return false;
+    for (int i = 0; i < 3; ++i) {
+        if (!std::isfinite(origin[i]) || !std::isfinite(dir[i])) return false;
+    }
+    if (!std::isfinite(radius) || radius < 0.005f || !std::isfinite(maxDistance) || maxDistance < 0.005f) {
+        return false;
+    }
+    const float dLen = sqrtf(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+    if (dLen < 1e-4f) return false;
+    const float uDir[3] = { dir[0] / dLen, dir[1] / dLen, dir[2] / dLen };
+
+    if (!ResolveGameAssembly()) return false;
+    uintptr_t cwPtr = ResolveCollisionWorldPtr();
+    if (!cwPtr) return false;
+    if (outQueryExecuted) *outQueryExecuted = true;
+
+    void* fnSphereCast = reinterpret_cast<void*>(s_gaBase + RVA_COLLISION_WORLD_SPHERE_CAST);
+    DotsColliderCastHitRaw rawHit{};
+    if (!SafeDotsSphereCastSEH(fnSphereCast, reinterpret_cast<void*>(cwPtr),
+                               origin, radius, uDir, maxDistance,
+                               belongsTo, collidesWith, queryInteraction, &rawHit)) {
+        return false;
+    }
+
+    // Verified from GameAssembly.dll 0x185B57270 / 0x182098B30 / 0x18178A94A:
+    // ColliderCastHit (0x3C bytes): Fraction@+0x00, RigidBodyIndex@+0x04, Position@+0x20, SurfaceNormal@+0x2C
+    const float rawFrac = *reinterpret_cast<const float*>(rawHit.bytes + 0x00);
+    const int32_t rbIdx = *reinterpret_cast<const int32_t*>(rawHit.bytes + 0x04);
+    const float* posPtr = reinterpret_cast<const float*>(rawHit.bytes + 0x20);
+    const float* nrmPtr = reinterpret_cast<const float*>(rawHit.bytes + 0x2C);
+
+    if (!std::isfinite(rawFrac) ||
+        !std::isfinite(posPtr[0]) || !std::isfinite(posPtr[1]) || !std::isfinite(posPtr[2])) {
+        return false;
+    }
+
+    outHit.hasHit = true;
+    outHit.fraction = std::clamp(rawFrac, 0.0f, 1.0f);
+    outHit.rigidBodyIndex = rbIdx;
+    outHit.position[0] = posPtr[0];
+    outHit.position[1] = posPtr[1];
+    outHit.position[2] = posPtr[2];
+
+    float nx = nrmPtr[0], ny = nrmPtr[1], nz = nrmPtr[2];
+    if (std::isfinite(nx) && std::isfinite(ny) && std::isfinite(nz)) {
+        float nLen = sqrtf(nx * nx + ny * ny + nz * nz);
+        if (nLen > 1e-4f) {
+            outHit.surfaceNormal[0] = nx / nLen;
+            outHit.surfaceNormal[1] = ny / nLen;
+            outHit.surfaceNormal[2] = nz / nLen;
+        }
+    }
+    return true;
 }

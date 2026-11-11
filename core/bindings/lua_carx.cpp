@@ -397,6 +397,192 @@ int LuaCarX::ClearCarGhostModes(lua_State* L) {
     return 1;
 }
 
+int LuaCarX::GetRigidBody(lua_State* L) {
+    TeleportPose pose{};
+    std::string carName;
+    bool hasPose = UnityBridge::GetPlayerCurrentPose(pose, &carName);
+
+    CarTelemetry player = NativeCarX::GetPlayerCarTelemetry();
+    if (!hasPose && !player.carPtr) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    if (!pose.hasRb && player.carPtr) {
+        if (NativeCarX::GetCarRigidBody(player.carPtr, pose.rb)) {
+            pose.hasRb = true;
+            NativeCarX::GetCarVelocity(player.carPtr, pose.linVel);
+            NativeCarX::GetCarAngularVelocity(player.carPtr, pose.angVel);
+            if (!hasPose) {
+                pose.pos[0] = pose.rb[20];
+                pose.pos[1] = pose.rb[21];
+                pose.pos[2] = pose.rb[22];
+                hasPose = true;
+            }
+        }
+    }
+
+    if (!hasPose && !pose.hasRb) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    lua_newtable(L);
+
+    if (pose.hasRb) {
+        lua_newtable(L);
+        for (int i = 0; i < 29; ++i) {
+            lua_pushnumber(L, pose.rb[i]);
+            lua_rawseti(L, -2, i + 1);
+        }
+        lua_setfield(L, -2, "rb");
+    }
+
+    lua_pushnumber(L, pose.pos[0]); lua_setfield(L, -2, "x");
+    lua_pushnumber(L, pose.pos[1]); lua_setfield(L, -2, "y");
+    lua_pushnumber(L, pose.pos[2]); lua_setfield(L, -2, "z");
+
+    if (pose.hasQuat) {
+        lua_pushnumber(L, pose.rot[0]); lua_setfield(L, -2, "qx");
+        lua_pushnumber(L, pose.rot[1]); lua_setfield(L, -2, "qy");
+        lua_pushnumber(L, pose.rot[2]); lua_setfield(L, -2, "qz");
+        lua_pushnumber(L, pose.rot[3]); lua_setfield(L, -2, "qw");
+    }
+
+    if (!carName.empty()) {
+        lua_pushstring(L, carName.c_str());
+        lua_setfield(L, -2, "unity_name");
+    }
+
+    lua_pushnumber(L, player.speedKmh); lua_setfield(L, -2, "speed_kmh");
+    lua_pushnumber(L, player.rpm); lua_setfield(L, -2, "rpm");
+    lua_pushinteger(L, player.gear); lua_setfield(L, -2, "gear");
+
+    lua_newtable(L);
+    for (int i = 0; i < 3; ++i) { lua_pushnumber(L, pose.linVel[i]); lua_rawseti(L, -2, i + 1); }
+    lua_setfield(L, -2, "vel");
+
+    lua_newtable(L);
+    for (int i = 0; i < 3; ++i) { lua_pushnumber(L, pose.angVel[i]); lua_rawseti(L, -2, i + 1); }
+    lua_setfield(L, -2, "ang_vel");
+
+    return 1;
+}
+
+static bool ReadLuaVecField(lua_State* L, int tableIdx, const char* name, float out[3]) {
+    lua_getfield(L, tableIdx, name);
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        return false;
+    }
+    for (int i = 0; i < 3; ++i) {
+        lua_rawgeti(L, -1, i + 1);
+        out[i] = lua_isnumber(L, -1) ? static_cast<float>(lua_tonumber(L, -1)) : 0.0f;
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    return true;
+}
+
+static bool ReadLuaFloatField(lua_State* L, int tableIdx, const char* name, float& outVal) {
+    lua_getfield(L, tableIdx, name);
+    bool ok = lua_isnumber(L, -1) != 0;
+    if (ok) {
+        outVal = static_cast<float>(lua_tonumber(L, -1));
+    }
+    lua_pop(L, 1);
+    return ok;
+}
+
+int LuaCarX::TeleportRigidBody(lua_State* L) {
+    if (!lua_istable(L, 1)) {
+        lua_pushboolean(L, false);
+        return 1;
+    }
+
+    TeleportPose pose{};
+
+    // Check for nested `.rb` array or direct 29-element array in arg 1
+    int rbTableIdx = 0;
+    bool pushedSub = false;
+    lua_getfield(L, 1, "rb");
+    if (lua_istable(L, -1)) {
+        rbTableIdx = lua_gettop(L);
+        pushedSub = true;
+    } else {
+        lua_pop(L, 1);
+        lua_rawgeti(L, 1, 1);
+        if (lua_isnumber(L, -1)) {
+            rbTableIdx = 1;
+        }
+        lua_pop(L, 1);
+    }
+
+    if (rbTableIdx != 0) {
+        for (int i = 0; i < 29; ++i) {
+            lua_rawgeti(L, rbTableIdx, i + 1);
+            pose.rb[i] = lua_isnumber(L, -1) ? static_cast<float>(lua_tonumber(L, -1)) : 0.0f;
+            lua_pop(L, 1);
+        }
+        pose.hasRb = true;
+        pose.pos[0] = pose.rb[20]; pose.pos[1] = pose.rb[21]; pose.pos[2] = pose.rb[22];
+        pose.linVel[0] = pose.rb[23]; pose.linVel[1] = pose.rb[24]; pose.linVel[2] = pose.rb[25];
+        pose.angVel[0] = pose.rb[26]; pose.angVel[1] = pose.rb[27]; pose.angVel[2] = pose.rb[28];
+        if (pushedSub) lua_pop(L, 1);
+    }
+
+    // Explicit position / quaternion / velocity overrides from snapshot or synthetic table
+    bool hasX = ReadLuaFloatField(L, 1, "x", pose.pos[0]);
+    bool hasY = ReadLuaFloatField(L, 1, "y", pose.pos[1]);
+    bool hasZ = ReadLuaFloatField(L, 1, "z", pose.pos[2]);
+    if (hasX || hasY || hasZ) {
+        pose.rb[20] = pose.pos[0];
+        pose.rb[21] = pose.pos[1];
+        pose.rb[22] = pose.pos[2];
+    } else if (!pose.hasRb) {
+        lua_pushboolean(L, false);
+        return 1;
+    }
+
+    float qx = 0.0f, qy = 0.0f, qz = 0.0f, qw = 1.0f;
+    if (ReadLuaFloatField(L, 1, "qx", qx) &&
+        ReadLuaFloatField(L, 1, "qy", qy) &&
+        ReadLuaFloatField(L, 1, "qz", qz) &&
+        ReadLuaFloatField(L, 1, "qw", qw)) {
+        pose.rot[0] = qx;
+        pose.rot[1] = qy;
+        pose.rot[2] = qz;
+        pose.rot[3] = qw;
+        pose.hasQuat = true;
+    }
+
+    if (ReadLuaVecField(L, 1, "vel", pose.linVel)) {
+        pose.rb[23] = pose.linVel[0];
+        pose.rb[24] = pose.linVel[1];
+        pose.rb[25] = pose.linVel[2];
+    }
+    if (ReadLuaVecField(L, 1, "ang_vel", pose.angVel)) {
+        pose.rb[26] = pose.angVel[0];
+        pose.rb[27] = pose.angVel[1];
+        pose.rb[28] = pose.angVel[2];
+    }
+
+    int velMode = 0;
+    if (lua_type(L, 2) == LUA_TNUMBER) {
+        velMode = static_cast<int>(lua_tointeger(L, 2));
+    } else if (lua_type(L, 2) == LUA_TSTRING) {
+        const char* s = lua_tostring(L, 2);
+        if (s) {
+            if (_stricmp(s, "saved") == 0) velMode = 1;
+            else if (_stricmp(s, "keep") == 0) velMode = 2;
+        }
+    }
+
+    bool ok = UnityBridge::RequestTeleportPlayerPose(pose, velMode);
+    lua_pushboolean(L, ok);
+    return 1;
+}
+
 int LuaCarX::GetTime(lua_State* L) {
     auto now = std::chrono::steady_clock::now();
     float elapsed = std::chrono::duration<float>(now - g_startTime).count();
@@ -437,6 +623,8 @@ static const luaL_Reg carx_funcs[] = {
     { "get_selective_ghost_config", LuaCarX::GetSelectiveGhostConfig },
     { "set_car_ghost_mode", LuaCarX::SetCarGhostMode },
     { "clear_car_ghost_modes", LuaCarX::ClearCarGhostModes },
+    { "get_rigid_body", LuaCarX::GetRigidBody },
+    { "teleport_rigid_body", LuaCarX::TeleportRigidBody },
     { "get_time", LuaCarX::GetTime },
     { "get_delta_time", LuaCarX::GetDeltaTime },
     { nullptr, nullptr }

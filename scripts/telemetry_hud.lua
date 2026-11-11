@@ -1,34 +1,63 @@
--- Telemetry HUD Module
-local show_hud = true
+-- Telemetry HUD Module (Lacquered Urushi Floating HUD)
 
-events.on_render(function()
-    if not show_hud then return end
-
-    local player = carx.get_player_car()
-    if not player then return end
-
-    local isOpen, keepOpen = imgui.begin_window("Telemetry HUD", true)
-    if isOpen then
-        imgui.push_font("mono")
-
-        imgui.text_colored(0.4, 0.8, 1.0, 1.0, string.format("Speed:     %6.1f km/h", player.speed_kmh))
-        imgui.text_colored(1.0, 0.6, 0.2, 1.0, string.format("RPM:       %6.0f", player.rpm))
-
-        local gear_text = "N"
-        if player.gear == 0 then gear_text = "R"
-        elseif player.gear > 0 then gear_text = tostring(player.gear) end
-        imgui.text(string.format("Gear:           %s", gear_text))
-
-        imgui.separator()
-        imgui.text(string.format("Steer:     %6.1f°", player.steer_angle * 57.2958))
-        imgui.text(string.format("Pos:       [%6.1f, %6.1f, %6.1f]", player.x, player.y, player.z))
-
-        imgui.separator()
-        imgui.text(string.format("Throttle:  %5.0f%%", player.accel * 100))
-        imgui.text(string.format("Brake:     %5.0f%%", player.brake * 100))
-        imgui.text(string.format("Handbrake: %s", player.handbrake > 0.5 and "ON" or "OFF"))
-
-        imgui.pop_font()
+local function render_telemetry_hud()
+    local player = carx.get_player_car and carx.get_player_car() or nil
+    if not player then
+        ui.card("Нет данных", "Вне трассы", function()
+            ui.text_dim("Выйдите на трассу на автомобиле для отображения телеметрии.")
+        end)
+        return
     end
-    imgui.end_window()
-end)
+
+    local gear_text = "N"
+    if player.gear == 0 then gear_text = "R"
+    elseif (player.gear or -1) > 0 then gear_text = tostring(player.gear) end
+
+    ui.card("Телеметрия", nil, function()
+        ui.stat_row({
+            { label = "КМ/Ч", value = string.format("%.0f", player.speed_kmh or 0.0), tone = "accent" },
+            { label = "ПЕРЕДАЧА", value = gear_text, tone = "default" },
+            { label = "ОБОРОТЫ", value = string.format("%.0f", player.rpm or 0.0), tone = "muted" },
+        })
+
+        ui.spacing(4)
+        local rpm_frac = math.min(math.max((player.rpm or 0.0) / 8500.0, 0.0), 1.0)
+        ui.progress_bar(rpm_frac, -1, 6)
+        ui.spacing(6)
+
+        ui.stat_row({
+            { label = "РУЛЬ", value = string.format("%.1f°", (player.steer_angle or 0.0) * 57.2958) },
+            { label = "ГАЗ", value = string.format("%.0f%%", (player.accel or 0.0) * 100.0), tone = "green" },
+            {
+                label = "ТОРМОЗ",
+                value = string.format("%.0f%%", (player.brake or 0.0) * 100.0),
+                tone = (player.brake or 0.0) > 0.1 and "red" or "muted",
+            },
+        })
+
+        if (player.handbrake or 0.0) > 0.5 then
+            ui.spacing(4)
+            ui.badge("РУЧНИК ВКЛ", "yellow")
+        end
+
+        ui.spacing(4)
+        ui.text_dim(string.format("XYZ: %.1f  %.1f  %.1f", player.x or 0.0, player.y or 0.0, player.z or 0.0))
+    end)
+end
+
+if urushi and urushi.register_window then
+    urushi.register_window({
+        id = "hud",
+        title = "Телеметрия HUD",
+        icon = "hud",
+        order = 60,
+        default_open = false,
+        default_pinned = true,
+        hud_no_inputs = true,
+        anchor_right = true,
+        x = 20,
+        y = 24,
+        width = 276,
+        render = render_telemetry_hud,
+    })
+end

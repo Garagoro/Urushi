@@ -1,12 +1,17 @@
 #include "lua_engine.h"
 #include "logger.h"
 #include "ui_schema.h"
+#include "d3d11_hook.h"
+#include "urushi_ui.h"
 #include "bindings/lua_carx.h"
+#include "bindings/lua_steer.h"
 #include "bindings/lua_carfx.h"
 #include "bindings/lua_imgui.h"
 #include "bindings/lua_replay.h"
 #include "bindings/lua_memory.h"
 #include "bindings/lua_updater.h"
+#include "bindings/lua_optimizer.h"
+#include "bindings/lua_urushi.h"
 #include <chrono>
 
 std::recursive_mutex LuaEngine::s_mutex;
@@ -39,15 +44,19 @@ bool LuaEngine::Init(const std::wstring& scriptsDir) {
 
     // Register our custom modules
     LuaCarX::Register(s_L);
+    LuaSteer::Register(s_L);
     LuaCarFX::Register(s_L);
     LuaImGui::Register(s_L);
     LuaReplay::Register(s_L);
     LuaMemory::Register(s_L);
     LuaUpdater::Register(s_L);
+    LuaOptimizer::Register(s_L);
+    LuaUrushi::Register(s_L);
     RegisterEventsModule(s_L);
     RegisterLogModule(s_L);
 
     UiSchema::Init();
+    UrushiUI::BeginLuaReload();
 
     s_initialized = true;
     Logger::Info("Lua engine initialized.");
@@ -70,6 +79,7 @@ bool LuaEngine::Init(const std::wstring& scriptsDir) {
         }
         Logger::Info("Loaded scripts/main.lua successfully.");
     }
+    UrushiUI::EndLuaReload();
 
     return true;
 }
@@ -79,6 +89,7 @@ void LuaEngine::Shutdown() {
     if (!s_initialized) return;
 
     UiSchema::Shutdown();
+    UrushiUI::ClearLuaRefs(s_L);
 
     if (s_L) {
         lua_close(s_L);
@@ -166,9 +177,12 @@ void LuaEngine::OnRender() {
     OnFixedUpdate(0.01666f);
 
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    if (!s_initialized || !s_L || s_renderCallbacks.empty()) return;
+    if (!s_initialized || !s_L) return;
 
-    CallLuaCallbacks(s_renderCallbacks, 0);
+    if (!s_renderCallbacks.empty()) {
+        CallLuaCallbacks(s_renderCallbacks, 0);
+    }
+    UrushiUI::Render(D3D11Hook::IsMenuOpen(), s_L);
 }
 
 void LuaEngine::OnKeyEvent(int vkey, bool isDown) {
@@ -266,4 +280,73 @@ void LuaEngine::RegisterLogModule(lua_State* L) {
 
 std::wstring LuaEngine::GetScriptsDirectory() {
     return s_scriptsDir;
+}
+
+bool LuaEngine::Eval(const std::string& code, std::string& outOutput, std::string& outError) {
+    outOutput.clear();
+    outError.clear();
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    if (!s_initialized || !s_L) {
+        outError = "Lua engine not initialized";
+        return false;
+    }
+
+    struct PrintCtx {
+        std::string* buf;
+    } ctx{ &outOutput };
+
+    auto capturePrint = [](lua_State* L) -> int {
+        auto* pc = static_cast<PrintCtx*>(lua_touserdata(L, lua_upvalueindex(1)));
+        int n = lua_gettop(L);
+        for (int i = 1; i <= n; ++i) {
+            size_t len = 0;
+            const char* s = luaL_tolstring(L, i, &len);
+            if (i > 1 && pc && pc->buf) pc->buf->push_back('\t');
+            if (s && pc && pc->buf) pc->buf->append(s, len);
+            lua_pop(L, 1);
+        }
+        if (pc && pc->buf) pc->buf->push_back('\n');
+        return 0;
+    };
+
+    lua_getglobal(s_L, "print"); // save old print at stack -1
+    lua_pushlightuserdata(s_L, &ctx);
+    lua_pushcclosure(s_L, capturePrint, 1);
+    lua_setglobal(s_L, "print");
+
+    int baseTop = lua_gettop(s_L);
+    std::string expr = "return " + code;
+    int loadRes = luaL_loadbuffer(s_L, expr.data(), expr.size(), "=eval");
+    if (loadRes != LUA_OK) {
+        lua_pop(s_L, 1);
+        loadRes = luaL_loadbuffer(s_L, code.data(), code.size(), "=eval");
+    }
+
+    bool ok = false;
+    if (loadRes != LUA_OK) {
+        const char* err = lua_tostring(s_L, -1);
+        outError = err ? err : "syntax error";
+        lua_pop(s_L, 1);
+    } else if (lua_pcall(s_L, 0, LUA_MULTRET, 0) != LUA_OK) {
+        const char* err = lua_tostring(s_L, -1);
+        outError = err ? err : "runtime error";
+        lua_pop(s_L, 1);
+    } else {
+        ok = true;
+        int nres = lua_gettop(s_L) - baseTop;
+        for (int i = 1; i <= nres; ++i) {
+            size_t len = 0;
+            const char* s = luaL_tolstring(s_L, baseTop + i, &len);
+            if (s && len > 0) {
+                if (!outOutput.empty() && outOutput.back() != '\n') outOutput.push_back('\t');
+                outOutput.append(s, len);
+            }
+            lua_pop(s_L, 1);
+        }
+        lua_pop(s_L, nres);
+    }
+
+    // Restore original print
+    lua_setglobal(s_L, "print");
+    return ok;
 }

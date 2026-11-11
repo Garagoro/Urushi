@@ -1,4 +1,5 @@
 #include "updater.h"
+#include "urushi_ui.h"
 #include "logger.h"
 
 #include <winhttp.h>
@@ -850,79 +851,127 @@ void RenderUI(bool menuOpen) {
                              st.state == State::RestartRequired);
     if (!showBanner) return;
 
+    const float S = UrushiUI::GetUiScale();
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const float pad = 18.0f;
+    const float pad = 18.0f * S;
     ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - pad, vp->WorkPos.y + pad),
                             ImGuiCond_Always, ImVec2(1.0f, 0.0f));
 
     if (!menuOpen) {
-        ImGui::SetNextWindowBgAlpha(0.75f);
-        ImGui::Begin("##urushi_update_toast", nullptr,
-                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
-                     ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
-        ImGui::TextColored(ImVec4(0.35f, 0.95f, 0.65f, 1.0f),
-                           "URUSHI: доступно обновление (%u ф.) — нажмите F4", st.filesTotal);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.045f, 0.045f, 0.060f, 0.86f));
+        ImGui::PushStyleColor(ImGuiCol_Border, UrushiUI::GetAccentVec4(0.45f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f * S);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f * S, 8.0f * S));
+        if (ImGui::Begin("##urushi_update_toast", nullptr,
+                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                         ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+            UrushiUI::Badge("ОБНОВЛЕНИЕ", UrushiUI::Tone::Accent);
+            ImGui::SameLine(0.0f, 8.0f * S);
+            ImGui::TextColored(ImVec4(0.92f, 0.92f, 0.95f, 1.0f),
+                               "%u ф. — нажмите F4", st.filesTotal);
+        }
         ImGui::End();
+        ImGui::PopStyleVar(3);
+        ImGui::PopStyleColor(2);
         return;
     }
 
-    ImGui::SetNextWindowSize(ImVec2(410.0f, 0.0f), ImGuiCond_Always);
-    if (!ImGui::Begin("URUSHI // Обновление", nullptr,
-                      ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
+    const float winW = (std::min)(400.0f * S, (std::max)(240.0f * S, vp->WorkSize.x - pad * 2.0f));
+    ImGui::SetNextWindowSize(ImVec2(winW, 0.0f), ImGuiCond_Always);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.050f, 0.050f, 0.068f, 0.96f));
+    ImGui::PushStyleColor(ImGuiCol_Border, UrushiUI::GetAccentVec4(0.40f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f * S);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f * S, 12.0f * S));
+    const bool opened = ImGui::Begin("URUSHI // Обновление##urushi_updater_banner", nullptr,
+                                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
+                                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings);
+    if (!opened) {
         ImGui::End();
+        ImGui::PopStyleVar(3);
+        ImGui::PopStyleColor(2);
         return;
     }
+
+    UrushiUI::Badge("ОБНОВЛЕНИЕ", UrushiUI::Tone::Accent);
+    ImGui::SameLine(0.0f, 8.0f * S);
+    UrushiUI::Text("Обновление URUSHI");
+    UrushiUI::Spacing(6.0f * S);
 
     if (st.state == State::UpdateAvailable) {
         const std::string verStr = st.remoteVersion.empty()
             ? ("обновлений: " + std::to_string(st.filesTotal))
             : ("v" + st.localVersion + " -> v" + st.remoteVersion);
-        ImGui::TextColored(ImVec4(0.30f, 0.95f, 0.65f, 1.0f), "Доступно обновление (%s)", verStr.c_str());
 
         const double kb = static_cast<double>(st.bytesTotal) / 1024.0;
-        ImGui::Text("Файлов: %u (%.1f КБ)", st.filesTotal, kb);
+        char sizeBuf[48];
+        snprintf(sizeBuf, sizeof(sizeBuf), "%u (%.1f КБ)", st.filesTotal, kb);
+
+        UrushiUI::BeginCard("Доступна новая версия", verStr);
+        UrushiUI::StatRow({
+            { "Файлов", sizeBuf, UrushiUI::Tone::Accent },
+            { "Статус", "Готово к установке", UrushiUI::Tone::Green }
+        });
 
         if (!st.releaseNotes.empty()) {
-            ImGui::TextWrapped("%s", st.releaseNotes.c_str());
+            UrushiUI::Spacing(4.0f * S);
+            UrushiUI::TextWrapped(st.releaseNotes, UrushiUI::Tone::Muted);
         }
 
-        if (ImGui::TreeNode("Изменённые файлы")) {
+        if (!st.files.empty() && UrushiUI::CollapsingSection("Изменённые файлы", false)) {
             for (const auto& f : st.files) {
-                ImGui::BulletText("%s (%.1f КБ)", f.repoPath.c_str(), static_cast<double>(f.size) / 1024.0);
+                char lineBuf[320];
+                snprintf(lineBuf, sizeof(lineBuf), "- %s (%.1f КБ)", f.repoPath.c_str(), static_cast<double>(f.size) / 1024.0);
+                UrushiUI::Text(lineBuf, UrushiUI::Tone::Muted);
             }
-            ImGui::TreePop();
         }
 
-        ImGui::Spacing();
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.14f, 0.62f, 0.42f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.18f, 0.75f, 0.50f, 1.0f));
-        if (ImGui::Button("Обновить", ImVec2(220.0f, 30.0f))) {
+        UrushiUI::Spacing(6.0f * S);
+        const float gap = 8.0f * S;
+        const float cw = UrushiUI::CurrentContentWidth();
+        const float bw1 = (cw - gap) * 0.62f;
+        const float bw2 = (cw - gap) * 0.38f;
+        if (UrushiUI::Button("Обновить", bw1, 30.0f * S, UrushiUI::ButtonStyle::Primary)) {
             StartInstallAsync();
         }
-        ImGui::PopStyleColor(2);
-        ImGui::SameLine();
-        if (ImGui::Button("Позже", ImVec2(140.0f, 30.0f))) {
+        ImGui::SameLine(0.0f, gap);
+        if (UrushiUI::Button("Позже", bw2, 30.0f * S, UrushiUI::ButtonStyle::Ghost)) {
             SetDismissed(true);
         }
+        UrushiUI::EndCard();
     } else if (st.state == State::Downloading) {
-        ImGui::TextColored(ImVec4(0.45f, 0.85f, 1.0f, 1.0f), "%s", st.statusText.c_str());
+        UrushiUI::BeginCard("Загрузка файлов", st.statusText);
         float frac = (st.filesTotal > 0) ? (static_cast<float>(st.filesDone) / static_cast<float>(st.filesTotal)) : 0.0f;
-        ImGui::ProgressBar(frac, ImVec2(-1.0f, 18.0f));
+        char progBuf[48];
+        snprintf(progBuf, sizeof(progBuf), "%u / %u", st.filesDone, st.filesTotal);
+        UrushiUI::ProgressBar(frac, -1.0f, 14.0f * S, progBuf);
+        UrushiUI::EndCard();
     } else if (st.state == State::Reinjecting) {
-        ImGui::TextColored(ImVec4(0.35f, 1.0f, 0.55f, 1.0f), "Файлы скачаны! Выполняется реинжект URUSHI...");
+        UrushiUI::BeginCard("Установка", "Файлы скачаны");
+        UrushiUI::TextWrapped("Выполняется реинжект URUSHI...", UrushiUI::Tone::Green);
+        UrushiUI::EndCard();
     } else if (st.state == State::RestartRequired) {
-        ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.25f, 1.0f), "%s", st.statusText.c_str());
-        ImGui::Spacing();
-        if (ImGui::Button("Перезапустить игру", ImVec2(220.0f, 30.0f))) {
+        UrushiUI::BeginCard("Требуется перезапуск", "Обновление ядра");
+        UrushiUI::TextWrapped(st.statusText, UrushiUI::Tone::Yellow);
+        UrushiUI::Spacing(6.0f * S);
+        const float gap = 8.0f * S;
+        const float cw = UrushiUI::CurrentContentWidth();
+        const float bw1 = (cw - gap) * 0.62f;
+        const float bw2 = (cw - gap) * 0.38f;
+        if (UrushiUI::Button("Перезапустить игру", bw1, 30.0f * S, UrushiUI::ButtonStyle::Primary)) {
             RestartGame();
         }
-        ImGui::SameLine();
-        if (ImGui::Button("Закрыть", ImVec2(140.0f, 30.0f))) {
+        ImGui::SameLine(0.0f, gap);
+        if (UrushiUI::Button("Закрыть", bw2, 30.0f * S, UrushiUI::ButtonStyle::Ghost)) {
             SetDismissed(true);
         }
+        UrushiUI::EndCard();
     }
 
     ImGui::End();
+    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor(2);
 }
 
 } // namespace Updater

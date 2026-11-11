@@ -33,6 +33,8 @@ public:
     static int GetSelectiveGhostConfig(lua_State* L);
     static int SetCarGhostMode(lua_State* L);
     static int ClearCarGhostModes(lua_State* L);
+    static int GetRigidBody(lua_State* L);
+    static int TeleportRigidBody(lua_State* L);
     static int GetTime(lua_State* L);
     static int GetDeltaTime(lua_State* L);
 };

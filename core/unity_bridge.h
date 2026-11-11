@@ -36,10 +36,18 @@ struct LiveCarInfo {
     void* rootGo = nullptr;
     void* rootTf = nullptr;
     void* modelGo = nullptr;
+    void* carBehaviour = nullptr;
+    void* raceCarPtr = nullptr;
     bool isLocalPlayer = false;
     float x = 0.0f;
     float y = 0.0f;
     float z = 0.0f;
+    float qx = 0.0f;
+    float qy = 0.0f;
+    float qz = 0.0f;
+    float qw = 1.0f;
+    bool hasPos = false;
+    bool hasRot = false;
     float speedKmh = 0.0f;
     bool isWrongWay = false;
     bool isSelectivelyGhosted = false;
@@ -47,6 +55,16 @@ struct LiveCarInfo {
     int ghostOverride = 0;
     float headingDot = 1.0f;
     float distToPlayer = 0.0f;
+};
+
+struct TeleportPose {
+    float pos[3] = { 0.0f, 0.0f, 0.0f };
+    float rot[4] = { 0.0f, 0.0f, 0.0f, 1.0f }; // Unity Quaternion (x, y, z, w)
+    float linVel[3] = { 0.0f, 0.0f, 0.0f };
+    float angVel[3] = { 0.0f, 0.0f, 0.0f };
+    float rb[29] = { 0.0f };
+    bool hasQuat = false;
+    bool hasRb = false;
 };
 
 class UnityBridge {
@@ -100,6 +118,11 @@ public:
     static void ApplyReplayFrameToGhost(const ReplayFrame& frame, float offsetRight = 0.0f);
     static void ApplyReplayTimeToAllGhosts(float targetTime, float offsetRight = 0.0f);
 
+    // Player Teleportation (main-thread synchronized vanilla RaceCar + Transform + RigidBody)
+    static bool RequestTeleportPlayerRigidBody(const float rb[29], int velMode = 0);
+    static bool RequestTeleportPlayerPose(const TeleportPose& pose, int velMode = 0);
+    static bool GetPlayerCurrentPose(TeleportPose& outPose, std::string* outCarName = nullptr);
+
     static void SetGhostCollisionEnabled(bool enabled);
     static bool IsGhostCollisionEnabled();
 
@@ -138,8 +161,14 @@ private:
         void* rootGo = nullptr;
         void* rootTf = nullptr;
         void* modelGo = nullptr;
+        void* carBehaviour = nullptr;
+        void* raceCarPtr = nullptr;
+        void* nativeCarPtr = nullptr;
+        bool isPlayer = false;
         UnityVector3 pos{};
+        UnityVector4 rot{ 0.0f, 0.0f, 0.0f, 1.0f };
         bool hasPos = false;
+        bool hasRot = false;
     };
 
     static void Hooked_ExecutePlayerLoop(void* playerLoopSystem);
@@ -155,6 +184,8 @@ private:
     static void ApplyGhostPoseToSlot(size_t slotIdx, const float* bodyMatrix, const float wheelMatrices[4][16], const float caliperMatrices[4][16], float steerAngle, const UnityVector3& worldOffset, float dt);
     static void ApplyAllReplayTracksAtTimeInternal(float targetTime, float offsetRight, float dt);
     static void ResolveGhostCollisions();
+    static bool ApplyTeleportPlayerInternal(const TeleportPose& pose, int velMode);
+    static void UpdateCarFXSpatialProximityOnMainThread(const std::vector<LiveCarInfo>& liveSnapshot);
 
     typedef void (*t_ExecutePlayerLoop)(void* playerLoopSystem);
     static t_ExecutePlayerLoop s_originalExecutePlayerLoop;
@@ -170,6 +201,8 @@ private:
     typedef void  (*t_Transform_set_rotation)(void* nativeTf, const UnityVector4* rot);
     typedef void  (*t_Transform_get_position)(void* nativeTf, UnityVector3* outPos);
     typedef void  (*t_Transform_get_rotation)(void* nativeTf, UnityVector4* outRot);
+    typedef void* (*t_GetMainCameraNative)();
+    typedef bool  (*t_InternalRaycast)(const uint64_t* physicsSceneHandle, const void* ray, float maxDistance, void* outHit, int layerMask, int queryTriggerInteraction);
 
     static t_Find pfn_Find;
     static t_Internal_CloneSingle pfn_CloneSingle;
@@ -181,6 +214,8 @@ private:
     static t_Transform_set_rotation pfn_Transform_set_rotation;
     static t_Transform_get_position pfn_Transform_get_position;
     static t_Transform_get_rotation pfn_Transform_get_rotation;
+    static t_GetMainCameraNative pfn_GetMainCameraNative;
+    static t_InternalRaycast pfn_InternalRaycast;
 
     static uintptr_t s_unityBase;
     static uintptr_t s_unitySize;
@@ -206,6 +241,9 @@ private:
     static float s_pendingMultiReplayOffset;
     static std::atomic<bool> s_ghostCollisionEnabled;
     static std::atomic<bool> s_pendingCollisionSync;
+    static std::atomic<bool> s_pendingTeleport;
+    static TeleportPose s_pendingTeleportPose;
+    static int s_pendingTeleportVelMode;
     static UnityVector3 s_pendingPos;
     static UnityVector4 s_pendingRot;
 };

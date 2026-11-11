@@ -25,4 +25,5 @@ public:
     static int GetGameInput(lua_State* L);
     static int ListShaders(lua_State* L);
     static int GetStatus(lua_State* L);
+    static int GetSpatial(lua_State* L);
 };

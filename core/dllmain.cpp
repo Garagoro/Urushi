@@ -3,12 +3,15 @@
 #include "logger.h"
 #include "hook_manager.h"
 #include "native_carx.h"
+#include "steer_assist.h"
 #include "unity_bridge.h"
+#include "car_sim_optimizer.h"
 #include "d3d11_hook.h"
 #include "carfx.h"
 #include "replay_engine.h"
 #include "file_watcher.h"
 #include "lua_engine.h"
+#include "dev_pipe.h"
 #include "updater.h"
 
 #pragma comment(lib, "shlwapi.lib")
@@ -42,9 +45,16 @@ extern "C" __declspec(dllexport) void ScriptHook_Unload() {
     }
 
     Logger::Info("ScriptHook_Unload invoked. Draining active hooks...");
-    if (CarFX::ShouldBypassDepthPrePass() || CarFX::ShouldHideCarInternals()) {
-        // Give Unity MainThread frames to restore car_body renderQueue and hidden stealth renderers before detaching hooks
+    const bool needCarFxDrain = CarFX::ShouldBypassDepthPrePass() || CarFX::ShouldHideCarInternals();
+    const bool needOptDrain = CarSimOptimizer::GetConfig().enabled;
+    if (needCarFxDrain) {
         CarFX::SetEnabled(false);
+    }
+    if (needOptDrain) {
+        CarSimOptimizer::ResetDefaults();
+    }
+    if (needCarFxDrain || needOptDrain) {
+        // Give Unity MainThread frames to restore materials, car effects, and kinematic states before detaching hooks
         Sleep(80);
     }
     D3D11Hook::DetachWndProc();
@@ -53,10 +63,13 @@ extern "C" __declspec(dllexport) void ScriptHook_Unload() {
     Sleep(50);
 
     FileWatcher::Stop();
+    DevPipe::Shutdown();
     Updater::Shutdown();
     LuaEngine::Shutdown();
+    CarSimOptimizer::Shutdown();
     D3D11Hook::Shutdown();
     UnityBridge::Shutdown();
+    SteerAssist::Shutdown();
     NativeCarX::Shutdown();
     HookManager::Shutdown();
     Logger::Shutdown();
@@ -92,8 +105,16 @@ static DWORD WINAPI InitThread(LPVOID) {
             Logger::Warn("NativeCarX failed initial hook, will continue...");
         }
 
+        if (!SteerAssist::Init()) {
+            Logger::Warn("SteerAssist failed initial patch, will retry on access...");
+        }
+
         if (!UnityBridge::Init()) {
             Logger::Warn("UnityBridge failed initial hook, will retry...");
+        }
+
+        if (!CarSimOptimizer::Init()) {
+            Logger::Warn("CarSimOptimizer failed initial hook, will retry...");
         }
 
         if (!D3D11Hook::Init()) {
@@ -108,6 +129,9 @@ static DWORD WINAPI InitThread(LPVOID) {
         FileWatcher::Start(scriptsDir, [](const std::string& filename) {
             LuaEngine::OnScriptModified(filename);
         });
+
+        // Start named pipe server for dev MCP (backbuffer shots, UI inspection, reload)
+        DevPipe::Init(exeDir);
 
         // Start async auto-update check against GitHub repository (Garagoro/Urushi)
         Updater::Init(exeDir, g_module);

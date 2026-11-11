@@ -37,6 +37,14 @@ struct CarGhostState {
     int32_t colliderGroupIndex = 0;
 };
 
+struct DotsRaycastHit {
+    float fraction = 1.0f;
+    float point[3] = { 0.0f, 0.0f, 0.0f };
+    float normal[3] = { 0.0f, 0.0f, 0.0f };
+    int32_t rigidBodyIndex = -1;
+    uint32_t rawDwords[16] = { 0 };
+};
+
 // Selective per-player and Anti-Wrong-Way (Kino-style) ECS PhysicsCollider filter controller.
 // All GameAssembly ECS memory mutations run strictly on the Unity Main Thread with SEH protection.
 class EcsCollision {
@@ -45,6 +53,23 @@ public:
     static void Shutdown();
 
     static void UpdateOnMainThread(float dt, const std::vector<LiveCarInfo>& liveCars);
+
+    static bool CastRay(const float start[3], const float end[3],
+                        uint32_t belongsTo, uint32_t collidesWith,
+                        DotsRaycastHit& outHit);
+
+    struct SphereCastHit {
+        float fraction = 1.0f;
+        int32_t rigidBodyIndex = -1;
+        float position[3] = { 0.0f, 0.0f, 0.0f };
+        float surfaceNormal[3] = { 0.0f, 1.0f, 0.0f };
+        bool hasHit = false;
+    };
+
+    static bool SphereCast(const float origin[3], float radius, const float dir[3], float maxDistance,
+                           uint32_t belongsTo, uint32_t collidesWith,
+                           SphereCastHit& outHit, uint8_t queryInteraction = 1,
+                           bool* outQueryExecuted = nullptr);
 
     static void SetConfig(const SelectiveGhostConfig& cfg);
     static SelectiveGhostConfig GetConfig();
