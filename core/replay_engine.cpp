@@ -15,10 +15,14 @@ bool ReplayEngine::s_isRecording = false;
 float ReplayEngine::s_recordStartTime = 0.0f;
 std::vector<ReplayTrack> ReplayEngine::s_recordedTracks;
 ReplayHeader ReplayEngine::s_currentHeader;
+int ReplayEngine::s_currentCarFxTrackIdx = 0;
+CarFX::ReplayShaderConfig ReplayEngine::s_currentCarFx{};
 
 bool ReplayEngine::s_isLoaded = false;
 std::vector<ReplayTrack> ReplayEngine::s_loadedTracks;
 ReplayHeader ReplayEngine::s_loadedHeader;
+int ReplayEngine::s_loadedCarFxTrackIdx = 0;
+CarFX::ReplayShaderConfig ReplayEngine::s_loadedCarFx{};
 
 void ReplayEngine::Init(const std::wstring& replaysDir) {
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
@@ -82,7 +86,7 @@ bool ReplayEngine::StartRecordingMulti(const std::string& trackName, const std::
     }
 
     s_currentHeader = ReplayHeader();
-    s_currentHeader.version = 3;
+    s_currentHeader.version = 4;
     strncpy_s(s_currentHeader.trackName, trackName.c_str(), sizeof(s_currentHeader.trackName) - 1);
 
     std::string headerCarSummary = s_recordedTracks[0].carName;
@@ -93,9 +97,13 @@ bool ReplayEngine::StartRecordingMulti(const std::string& trackName, const std::
     s_currentHeader.recordedTimestamp = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
 
+    s_currentCarFx = CarFX::CaptureActiveConfig(CarFX::kTargetBody);
+    s_currentCarFxTrackIdx = 0;
+
     s_recordStartTime = -1.0f;
     s_isRecording = true;
-    Logger::Info("Replay recording started (" + std::to_string(s_recordedTracks.size()) + " cars): " + headerCarSummary + " on " + trackName);
+    Logger::Info("Replay recording started (" + std::to_string(s_recordedTracks.size()) + " cars): " + headerCarSummary + " on " + trackName +
+                 (s_currentCarFx.enabled ? (" [CarFX: " + s_currentCarFx.shaderPath + "]") : ""));
     return true;
 }
 
@@ -171,7 +179,7 @@ bool ReplayEngine::StopRecording(const std::string& customFilename) {
         }
     }
 
-    s_currentHeader.version = 3;
+    s_currentHeader.version = 4;
     s_currentHeader.frameCount = maxFrames;
     s_currentHeader.duration = maxDuration;
 
@@ -206,7 +214,10 @@ bool ReplayEngine::StopRecording(const std::string& customFilename) {
     uint32_t trackCount = static_cast<uint32_t>(s_recordedTracks.size());
     out.write(reinterpret_cast<const char*>(&trackCount), sizeof(trackCount));
 
-    for (const auto& track : s_recordedTracks) {
+    int localTrackIdx = 0;
+    for (size_t ti = 0; ti < s_recordedTracks.size(); ++ti) {
+        const auto& track = s_recordedTracks[ti];
+        if (track.isLocalPlayer) localTrackIdx = static_cast<int>(ti);
         ReplayTrackHeader th;
         strncpy_s(th.carName, track.carName.c_str(), sizeof(th.carName) - 1);
         th.isLocalPlayer = track.isLocalPlayer ? 1 : 0;
@@ -214,6 +225,22 @@ bool ReplayEngine::StopRecording(const std::string& customFilename) {
         out.write(reinterpret_cast<const char*>(&th), sizeof(ReplayTrackHeader));
         out.write(reinterpret_cast<const char*>(track.frames.data()), track.frames.size() * sizeof(ReplayFrame));
     }
+
+    ReplayCarFxFooter cfx{};
+    cfx.enabled = s_currentCarFx.enabled ? 1 : 0;
+    cfx.overrideMode = static_cast<uint8_t>(s_currentCarFx.overrideMode);
+    cfx.overrideStealth = static_cast<uint8_t>(s_currentCarFx.overrideStealth);
+    cfx.trackIndex = localTrackIdx;
+    if (s_currentCarFx.enabled && !s_currentCarFx.shaderPath.empty()) {
+        strncpy_s(cfx.shaderPath, s_currentCarFx.shaderPath.c_str(), sizeof(cfx.shaderPath) - 1);
+        memcpy(cfx.params, s_currentCarFx.params, sizeof(cfx.params));
+        for (int i = 0; i < 4; ++i) {
+            if (!s_currentCarFx.texPaths[i].empty()) {
+                strncpy_s(cfx.texPaths[i], s_currentCarFx.texPaths[i].c_str(), sizeof(cfx.texPaths[i]) - 1);
+            }
+        }
+    }
+    out.write(reinterpret_cast<const char*>(&cfx), sizeof(ReplayCarFxFooter));
     out.close();
 
     Logger::Info("Replay saved (" + std::to_string(trackCount) + " tracks, " + std::to_string(maxFrames) +
@@ -335,10 +362,35 @@ bool ReplayEngine::LoadReplay(const std::string& filename) {
             }
         }
     }
+    s_loadedCarFx = CarFX::ReplayShaderConfig{};
+    s_loadedCarFxTrackIdx = 0;
+
+    if (header.version >= 4) {
+        ReplayCarFxFooter cfx{};
+        in.read(reinterpret_cast<char*>(&cfx), sizeof(ReplayCarFxFooter));
+        if (in.good() && cfx.footerMagic[0] == 'C' && cfx.footerMagic[1] == 'F' &&
+            cfx.footerMagic[2] == 'X' && cfx.footerMagic[3] == '1') {
+            if (cfx.enabled != 0 && cfx.shaderPath[0] != '\0') {
+                s_loadedCarFx.enabled = true;
+                s_loadedCarFx.overrideMode = cfx.overrideMode;
+                s_loadedCarFx.overrideStealth = cfx.overrideStealth;
+                cfx.shaderPath[sizeof(cfx.shaderPath) - 1] = '\0';
+                s_loadedCarFx.shaderPath = cfx.shaderPath;
+                memcpy(s_loadedCarFx.params, cfx.params, sizeof(s_loadedCarFx.params));
+                for (int i = 0; i < 4; ++i) {
+                    cfx.texPaths[i][sizeof(cfx.texPaths[i]) - 1] = '\0';
+                    if (cfx.texPaths[i][0] != '\0') s_loadedCarFx.texPaths[i] = cfx.texPaths[i];
+                }
+                s_loadedCarFxTrackIdx = std::clamp(cfx.trackIndex, 0,
+                    static_cast<int>(s_loadedTracks.empty() ? 0 : s_loadedTracks.size() - 1));
+            }
+        }
+    }
     in.close();
 
     if (s_loadedTracks.empty()) {
         s_isLoaded = false;
+        s_loadedCarFx = CarFX::ReplayShaderConfig{};
         Logger::Error("Loaded replay contained 0 valid tracks: " + filename);
         return false;
     }
@@ -347,7 +399,8 @@ bool ReplayEngine::LoadReplay(const std::string& filename) {
     s_isLoaded = true;
 
     Logger::Info("Loaded replay: " + filename + " (" + std::to_string(s_loadedTracks.size()) +
-        " tracks, " + std::to_string(header.frameCount) + " frames, " + std::to_string(header.duration) + "s)");
+        " tracks, " + std::to_string(header.frameCount) + " frames, " + std::to_string(header.duration) + "s)" +
+        (s_loadedCarFx.enabled ? (" [CarFX: " + s_loadedCarFx.shaderPath + "]") : ""));
     return true;
 }
 
@@ -355,6 +408,26 @@ void ReplayEngine::UnloadReplay() {
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
     s_isLoaded = false;
     s_loadedTracks.clear();
+    s_loadedCarFx = CarFX::ReplayShaderConfig{};
+    s_loadedCarFxTrackIdx = 0;
+}
+
+bool ReplayEngine::GetLoadedCarFx(CarFX::ReplayShaderConfig& outConfig, int* outTrackIdx) {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    if (!s_isLoaded || !s_loadedCarFx.enabled || s_loadedCarFx.shaderPath.empty()) {
+        outConfig = CarFX::ReplayShaderConfig{};
+        if (outTrackIdx) *outTrackIdx = 0;
+        return false;
+    }
+    outConfig = s_loadedCarFx;
+    if (outTrackIdx) *outTrackIdx = s_loadedCarFxTrackIdx;
+    return true;
+}
+
+std::string ReplayEngine::GetLoadedCarFxShaderName() {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    if (!s_isLoaded || !s_loadedCarFx.enabled) return "";
+    return s_loadedCarFx.shaderPath;
 }
 
 bool ReplayEngine::IsReplayLoaded() {
@@ -579,6 +652,24 @@ std::vector<ReplayInfo> ReplayEngine::ListSavedReplays() {
                         in.read(reinterpret_cast<char*>(&tc), sizeof(tc));
                         if (in.good() && tc > 0 && tc <= 64) {
                             info.trackCount = tc;
+                        }
+                    }
+                    if (h.version >= 4) {
+                        in.clear();
+                        in.seekg(0, std::ios::end);
+                        std::streamoff fileSz = in.tellg();
+                        if (fileSz >= static_cast<std::streamoff>(sizeof(ReplayHeader) + sizeof(ReplayCarFxFooter))) {
+                            in.seekg(-static_cast<std::streamoff>(sizeof(ReplayCarFxFooter)), std::ios::end);
+                            ReplayCarFxFooter cfx{};
+                            in.read(reinterpret_cast<char*>(&cfx), sizeof(ReplayCarFxFooter));
+                            if (in.good() && cfx.footerMagic[0] == 'C' && cfx.footerMagic[1] == 'F' &&
+                                cfx.footerMagic[2] == 'X' && cfx.footerMagic[3] == '1' && cfx.enabled != 0) {
+                                cfx.shaderPath[sizeof(cfx.shaderPath) - 1] = '\0';
+                                if (cfx.shaderPath[0] != '\0') {
+                                    info.hasCarFx = true;
+                                    info.carFxShader = cfx.shaderPath;
+                                }
+                            }
                         }
                     }
 

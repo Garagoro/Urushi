@@ -5,11 +5,12 @@
 #include <mutex>
 #include <cstdint>
 #include "native_carx.h"
+#include "carfx.h"
 
 #pragma pack(push, 1)
 struct ReplayHeader {
     char magic[4] = { 'C', 'X', 'R', '2' };
-    uint32_t version = 3;
+    uint32_t version = 4;
     uint32_t frameCount = 0;
     float duration = 0.0f;
     char trackName[64] = { 0 };
@@ -36,6 +37,18 @@ struct ReplayFrame {
     uint32_t flags = 0; // bit 0: brake, bit 1: handbrake, bit 2: accel
     float caliperMatrices[4][16] = { 0 };
 };
+
+struct ReplayCarFxFooter {
+    uint8_t enabled = 0;
+    uint8_t overrideMode = 0;
+    uint8_t overrideStealth = 0;
+    uint8_t reserved = 0;
+    int32_t trackIndex = 0;
+    char shaderPath[128] = { 0 };
+    float params[8][4] = { { 0.0f } };
+    char texPaths[4][128] = { { 0 } };
+    char footerMagic[4] = { 'C', 'F', 'X', '1' };
+};
 #pragma pack(pop)
 
 struct ReplayTrack {
@@ -59,6 +72,8 @@ struct ReplayInfo {
     uint32_t frameCount = 0;
     uint32_t trackCount = 1;
     std::string recordedDate;
+    bool hasCarFx = false;
+    std::string carFxShader;
 };
 
 class ReplayEngine {
@@ -88,6 +103,8 @@ public:
     static uint32_t GetReplayTrackFrameCount(int trackIdx);
     static bool GetInterpolatedFrame(float targetTime, ReplayFrame& outFrame);
     static bool GetInterpolatedTrackFrame(int trackIdx, float targetTime, ReplayFrame& outFrame);
+    static bool GetLoadedCarFx(CarFX::ReplayShaderConfig& outConfig, int* outTrackIdx = nullptr);
+    static std::string GetLoadedCarFxShaderName();
 
     // File Management
     static std::vector<ReplayInfo> ListSavedReplays();
@@ -105,8 +122,12 @@ private:
     static float s_recordStartTime;
     static std::vector<ReplayTrack> s_recordedTracks;
     static ReplayHeader s_currentHeader;
+    static int s_currentCarFxTrackIdx;
+    static CarFX::ReplayShaderConfig s_currentCarFx;
 
     static bool s_isLoaded;
     static std::vector<ReplayTrack> s_loadedTracks;
     static ReplayHeader s_loadedHeader;
+    static int s_loadedCarFxTrackIdx;
+    static CarFX::ReplayShaderConfig s_loadedCarFx;
 };

@@ -93,8 +93,9 @@ struct CompiledEffect {
 
 struct TargetSlotState {
     std::mutex publishMtx;
-    CompiledEffect* published = nullptr;   // Owned ref; published atomically via s_publishedPs or publishedMtx? Wait: swap atomic!
+    CompiledEffect* published = nullptr;
     std::atomic<ID3D11PixelShader*> ps{ nullptr };
+    std::atomic<bool> slotEnabled{ true };
     std::atomic<int> declMode{ kDeclModeReplace };
     std::atomic<int> overrideMode{ kModeAuto };
     std::atomic<bool> declStealth{ false };
@@ -104,6 +105,7 @@ struct TargetSlotState {
     std::atomic<bool> usesLivery{ false };
     std::atomic<float> param[kParams][4]{};
     std::atomic<ID3D11ShaderResourceView*> userTex[kTextures]{};
+    std::string userTexPaths[kTextures];
 
     std::string shaderPath;
     FILETIME lastWriteTime{};
@@ -111,6 +113,7 @@ struct TargetSlotState {
     std::string lastError;
     uint32_t compiles = 0;
     uint32_t failures = 0;
+    uint32_t syncedSrcCompiles = 0;
     LARGE_INTEGER loadQpc{};
 };
 
@@ -217,16 +220,41 @@ ID3D11ShaderResourceView* s_depthSrv = nullptr;
 D3D11_TEXTURE2D_DESC s_depthDesc{};
 
 TargetSlotState s_targets[kTargetCount];
+std::atomic<uint32_t> s_activeGhostShaderMask{ 0 };
 
 // Game SRVs double-check lock (main thread writes, render thread reads)
 SRWLOCK s_gameTexLock = SRWLOCK_INIT;
 GameSrvSnapshot s_gameTex[kTargetCount];
 std::atomic<uint64_t> s_gameTexGen{ 1 };
 
-std::atomic<float> s_gameInputs[kGameInputs]{};
+std::atomic<float> s_gameInputs[kTargetCount][kGameInputs]{};
 
-SRWLOCK s_spatialLock = SRWLOCK_INIT;
-SpatialProximityInput s_spatialInput{};
+SRWLOCK s_spatialLock[kTargetCount] = {};
+SpatialProximityInput s_spatialInput[kTargetCount]{};
+
+inline bool ValidTarget(int t) { return t >= 0 && t < kTargetCount; }
+
+void UpdateGhostShaderMask() {
+    uint32_t m = 0;
+    for (int t = kTargetGhostBase; t < kTargetCount; ++t) {
+        if (s_targets[t].slotEnabled.load(std::memory_order_acquire) &&
+            s_targets[t].ps.load(std::memory_order_acquire) != nullptr) {
+            m |= (1u << (t - kTargetGhostBase));
+        }
+    }
+    s_activeGhostShaderMask.store(m, std::memory_order_release);
+}
+
+bool IsTargetActiveInternal(int target) {
+    if (!ValidTarget(target)) return false;
+    if (IsGhostTarget(target)) {
+        return s_targets[target].slotEnabled.load(std::memory_order_acquire) &&
+               (s_targets[target].ps.load(std::memory_order_acquire) != nullptr);
+    }
+    return s_enabled.load(std::memory_order_acquire) &&
+           s_targets[target].slotEnabled.load(std::memory_order_acquire) &&
+           (s_targets[target].ps.load(std::memory_order_acquire) != nullptr);
+}
 
 std::mutex s_graveMtx;
 std::vector<RetiredObject> s_graveyard;
@@ -309,10 +337,6 @@ void SweepGraveyard(bool releaseAll) {
     for (IUnknown* p : toRelease) {
         SafeReleaseRaw(p);
     }
-}
-
-bool ValidTarget(int t) {
-    return t >= 0 && t < kTargetCount;
 }
 
 std::wstring Utf8ToWide(const std::string& s) {
@@ -673,6 +697,7 @@ bool CompileEffectFile(int targetIdx, const std::wstring& fullPath, std::string*
     ts.decl = decl;
     ts.lastError.clear();
     ts.compiles++;
+    UpdateGhostShaderMask();
 
     if (outErr) outErr->clear();
     Logger::Info("CarFX compiled [" + narrowPath + "] mode=" +
@@ -712,10 +737,8 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
     // Render-thread cache keyed by s_gameTexGen: avoids SRWLock + 20-slot GetResource on every draw call!
     static uint64_t s_rtCachedGen = 0;
     static GameSrvSnapshot s_rtSnap[kTargetCount]{};
-    static ID3D11ShaderResourceView* s_rtAlbSrv = nullptr;
-    static ID3D11ShaderResourceView* s_rtPackSrv = nullptr;
-    static int s_rtAlbSlot = -1;
-    static int s_rtPackSlot = -1;
+    static int s_rtKnownAlbSlot = -1;
+    static int s_rtKnownPackSlot = -1;
     static uint32_t s_rtRediscoveryFrame = ~0u;
 
     const uint64_t curGen = s_gameTexGen.load(std::memory_order_acquire);
@@ -724,119 +747,197 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
         for (int i = 0; i < kTargetCount; ++i) s_rtSnap[i] = s_gameTex[i];
         s_rtCachedGen = s_gameTexGen.load(std::memory_order_relaxed);
         ReleaseSRWLockShared(&s_gameTexLock);
-        s_rtAlbSrv = s_rtSnap[kTargetBody].albedoSrv;
-        s_rtPackSrv = s_rtSnap[kTargetBody].packedSrv;
-        s_rtAlbSlot = -1;
-        s_rtPackSlot = -1;
         s_rtRediscoveryFrame = ~0u;
     }
 
-    const GameSrvSnapshot& body = s_rtSnap[kTargetBody];
-    if (!body.valid) return false;
-    if (body.albedoIsDefault && body.packedIsDefault) {
-        return false;
+    auto targetHasMatchableSrv = [](const GameSrvSnapshot& gs) -> bool {
+        return gs.valid && (!gs.albedoIsDefault || !gs.packedIsDefault);
+    };
+
+    bool anyGhostTex = false;
+    bool needAlbSlot = !s_rtSnap[kTargetBody].albedoIsDefault && s_rtSnap[kTargetBody].valid;
+    bool needPackSlot = false;
+    if (s_rtSnap[kTargetBody].valid && !s_rtSnap[kTargetBody].packedIsDefault) {
+        needPackSlot = true;
+    }
+    for (int t = kTargetGhostBase; t < kTargetCount; ++t) {
+        if (targetHasMatchableSrv(s_rtSnap[t])) {
+            anyGhostTex = true;
+            if (!s_rtSnap[t].packedIsDefault) needPackSlot = true;
+            if (!s_rtSnap[t].albedoIsDefault) needAlbSlot = true;
+        }
     }
 
+    const GameSrvSnapshot& body = s_rtSnap[kTargetBody];
+    const bool playerCanMatch = targetHasMatchableSrv(body);
+    if (!playerCanMatch && !anyGhostTex) return false;
+
+    int matchedTarget = kTargetNone;
     uint32_t mask = 0;
     ID3D11ShaderResourceView* matchedAlbedoSrv = nullptr;
     int discoveredAlbSlot = -1;
     int discoveredPackSlot = -1;
-    ID3D11ShaderResourceView* discoveredAlbSrv = nullptr;
-    ID3D11ShaderResourceView* discoveredPackSrv = nullptr;
 
-    const bool needBothSlots = !body.albedoIsDefault && !body.packedIsDefault &&
-                               (body.packedSrv || body.packedRes) && (body.albedoRes != body.packedRes);
-    const int primaryCachedSlot = !body.albedoIsDefault ? s_rtAlbSlot : s_rtPackSlot;
-    ID3D11ShaderResourceView* primaryCachedSrv = !body.albedoIsDefault ? s_rtAlbSrv : s_rtPackSrv;
+    const bool bodyNeedBoth = playerCanMatch && !body.albedoIsDefault && !body.packedIsDefault &&
+                              (body.packedSrv || body.packedRes) && (body.albedoRes != body.packedRes);
 
-    if (primaryCachedSlot >= kScanStartSlot && primaryCachedSrv != nullptr) {
-        ID3D11ShaderResourceView* vPrim = nullptr;
-        c->PSGetShaderResources(static_cast<UINT>(primaryCachedSlot), 1, &vPrim);
-        if (vPrim != primaryCachedSrv) {
-            if (vPrim) vPrim->Release();
+    auto srvMatches = [](ID3D11ShaderResourceView* bound, ID3D11Resource** cachedRes,
+                         ID3D11ShaderResourceView* targetSrv, ID3D11Resource* targetRes) -> bool {
+        if (!bound) return false;
+        if (targetSrv) return bound == targetSrv;
+        if (!targetRes) return false;
+        if (!*cachedRes) bound->GetResource(cachedRes);
+        return (*cachedRes == targetRes);
+    };
+
+    const bool haveFastSlots =
+        (!needAlbSlot || s_rtKnownAlbSlot >= kScanStartSlot) &&
+        (!needPackSlot || s_rtKnownPackSlot >= kScanStartSlot);
+
+    if (haveFastSlots) {
+        ID3D11ShaderResourceView* vAlb = nullptr;
+        ID3D11ShaderResourceView* vPack = nullptr;
+        ID3D11Resource* resAlb = nullptr;
+        ID3D11Resource* resPack = nullptr;
+        if (needAlbSlot && s_rtKnownAlbSlot >= kScanStartSlot) {
+            c->PSGetShaderResources(static_cast<UINT>(s_rtKnownAlbSlot), 1, &vAlb);
+        }
+        if (needPackSlot && s_rtKnownPackSlot >= kScanStartSlot) {
+            c->PSGetShaderResources(static_cast<UINT>(s_rtKnownPackSlot), 1, &vPack);
+        }
+
+        // Check active ghost targets FIRST so isolated ghost clones never leak into player target
+        if (anyGhostTex) {
+            for (int t = kTargetGhostBase; t < kTargetCount; ++t) {
+                const GameSrvSnapshot& gs = s_rtSnap[t];
+                if (!targetHasMatchableSrv(gs)) continue;
+                bool match = false;
+                if (!gs.packedIsDefault && (gs.packedSrv || gs.packedRes)) {
+                    match = srvMatches(vPack, &resPack, gs.packedSrv, gs.packedRes);
+                } else if (!gs.albedoIsDefault && (gs.albedoSrv || gs.albedoRes)) {
+                    match = srvMatches(vAlb, &resAlb, gs.albedoSrv, gs.albedoRes);
+                }
+                if (match) {
+                    matchedTarget = t;
+                    if (!gs.packedIsDefault && s_rtKnownPackSlot >= kScanStartSlot &&
+                        srvMatches(vPack, &resPack, gs.packedSrv, gs.packedRes)) {
+                        mask |= (1u << s_rtKnownPackSlot);
+                    }
+                    if (!gs.albedoIsDefault && s_rtKnownAlbSlot >= kScanStartSlot &&
+                        srvMatches(vAlb, &resAlb, gs.albedoSrv, gs.albedoRes)) {
+                        mask |= (1u << s_rtKnownAlbSlot);
+                        matchedAlbedoSrv = vAlb;
+                        matchedAlbedoSrv->AddRef();
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (matchedTarget == kTargetNone && playerCanMatch) {
+            bool match = false;
+            const bool albMatch = !body.albedoIsDefault && (body.albedoSrv || body.albedoRes) &&
+                                  srvMatches(vAlb, &resAlb, body.albedoSrv, body.albedoRes);
+            const bool packMatch = !body.packedIsDefault && (body.packedSrv || body.packedRes) &&
+                                   srvMatches(vPack, &resPack, body.packedSrv, body.packedRes);
+            if (!body.albedoIsDefault && (body.albedoSrv || body.albedoRes)) {
+                match = albMatch && (!bodyNeedBoth || packMatch);
+            } else if (!body.packedIsDefault && (body.packedSrv || body.packedRes)) {
+                match = packMatch;
+            }
+            if (match) {
+                matchedTarget = kTargetBody;
+                if (albMatch && vAlb) {
+                    mask |= (1u << s_rtKnownAlbSlot);
+                    matchedAlbedoSrv = vAlb;
+                    matchedAlbedoSrv->AddRef();
+                }
+                if (packMatch && s_rtKnownPackSlot >= kScanStartSlot) {
+                    mask |= (1u << s_rtKnownPackSlot);
+                }
+            }
+        }
+
+        if (resAlb) resAlb->Release();
+        if (resPack) resPack->Release();
+        if (vAlb) vAlb->Release();
+        if (vPack) vPack->Release();
+
+        if (matchedTarget == kTargetNone) {
             const uint32_t frameId = s_frameCounter.load(std::memory_order_relaxed);
             if (s_matchedDrawsLastFrame.load(std::memory_order_relaxed) == 0 && (frameId - s_rtRediscoveryFrame) >= 60) {
                 s_rtRediscoveryFrame = frameId;
-                s_rtAlbSlot = -1;
-                s_rtPackSlot = -1;
-                s_rtAlbSrv = body.albedoSrv;
-                s_rtPackSrv = body.packedSrv;
+                s_rtKnownAlbSlot = -1;
+                s_rtKnownPackSlot = -1;
             }
             return false;
-        }
-        mask |= (1u << primaryCachedSlot);
-
-        if (needBothSlots) {
-            bool packOk = false;
-            if (s_rtPackSlot >= kScanStartSlot && s_rtPackSrv != nullptr) {
-                ID3D11ShaderResourceView* vPack = nullptr;
-                c->PSGetShaderResources(static_cast<UINT>(s_rtPackSlot), 1, &vPack);
-                packOk = (vPack == s_rtPackSrv);
-                if (vPack) vPack->Release();
-                if (packOk) mask |= (1u << s_rtPackSlot);
-            }
-            if (!packOk) {
-                vPrim->Release();
-                return false;
-            }
-        }
-
-        if (!body.albedoIsDefault) {
-            matchedAlbedoSrv = vPrim; // already owns 1 AddRef from PSGetShaderResources
-        } else {
-            vPrim->Release();
         }
     } else {
         ID3D11ShaderResourceView* srvs[kScanSlotCount] = {};
         c->PSGetShaderResources(kScanStartSlot, kScanSlotCount, srvs);
+        ID3D11Resource* cachedRes[kScanSlotCount] = {};
 
-        bool foundAlbedo = false;
-        bool foundPacked = false;
-        for (int i = 0; i < kScanSlotCount; ++i) {
-            ID3D11ShaderResourceView* v = srvs[i];
-            if (!v) continue;
+        auto scanMatchForTarget = [&](int t, bool isGhost, bool requireBoth) -> bool {
+            const GameSrvSnapshot& gs = s_rtSnap[t];
+            if (!targetHasMatchableSrv(gs)) return false;
 
-            bool isAlb = (!body.albedoIsDefault && ((s_rtAlbSrv && v == s_rtAlbSrv)));
-            bool isPack = (!body.packedIsDefault && ((s_rtPackSrv && v == s_rtPackSrv)));
+            ID3D11ShaderResourceView* foundAlb = nullptr;
+            int foundAlbIdx = -1;
+            int foundPackIdx = -1;
 
-            if ((!isAlb && !body.albedoIsDefault && !s_rtAlbSrv && body.albedoRes) ||
-                (!isPack && !body.packedIsDefault && !s_rtPackSrv && body.packedRes)) {
-                ID3D11Resource* res = nullptr;
-                v->GetResource(&res);
-                if (res) {
-                    if (!isAlb && !body.albedoIsDefault && res == body.albedoRes) isAlb = true;
-                    if (!isPack && !body.packedIsDefault && res == body.packedRes) isPack = true;
-                    res->Release();
+            for (int i = 0; i < kScanSlotCount; ++i) {
+                ID3D11ShaderResourceView* v = srvs[i];
+                if (!v) continue;
+
+                const bool isAlb = !gs.albedoIsDefault && srvMatches(v, &cachedRes[i], gs.albedoSrv, gs.albedoRes);
+                const bool isPack = !gs.packedIsDefault && srvMatches(v, &cachedRes[i], gs.packedSrv, gs.packedRes);
+                if (isAlb && !foundAlb) {
+                    foundAlb = v;
+                    foundAlbIdx = kScanStartSlot + i;
+                }
+                if (isPack && foundPackIdx < 0) {
+                    foundPackIdx = kScanStartSlot + i;
                 }
             }
 
-            if (isAlb) {
-                foundAlbedo = true;
-                matchedAlbedoSrv = v;
-                discoveredAlbSlot = kScanStartSlot + i;
-                discoveredAlbSrv = v;
-                mask |= (1u << discoveredAlbSlot);
+            bool ok = false;
+            if (isGhost) {
+                if (!gs.packedIsDefault) ok = (foundPackIdx >= 0);
+                else if (!gs.albedoIsDefault) ok = (foundAlb != nullptr);
+            } else {
+                ok = requireBoth ? (foundAlb != nullptr && foundPackIdx >= 0)
+                                 : (!gs.albedoIsDefault ? (foundAlb != nullptr) : (foundPackIdx >= 0));
             }
-            if (isPack) {
-                foundPacked = true;
-                discoveredPackSlot = kScanStartSlot + i;
-                discoveredPackSrv = v;
-                mask |= (1u << discoveredPackSlot);
+            if (!ok) return false;
+
+            matchedTarget = t;
+            if (foundAlbIdx >= 0) {
+                discoveredAlbSlot = foundAlbIdx;
+                mask |= (1u << foundAlbIdx);
+                matchedAlbedoSrv = foundAlb;
+                matchedAlbedoSrv->AddRef();
             }
-            if ((body.albedoIsDefault || foundAlbedo) && (!needBothSlots ? (body.packedIsDefault || foundPacked || foundAlbedo) : foundPacked)) {
-                if (!needBothSlots || (foundAlbedo && foundPacked)) break;
+            if (foundPackIdx >= 0) {
+                discoveredPackSlot = foundPackIdx;
+                mask |= (1u << foundPackIdx);
+            }
+            return true;
+        };
+
+        if (anyGhostTex) {
+            for (int t = kTargetGhostBase; t < kTargetCount; ++t) {
+                if (scanMatchForTarget(t, true, false)) break;
             }
         }
+        if (matchedTarget == kTargetNone && playerCanMatch) {
+            scanMatchForTarget(kTargetBody, false, bodyNeedBoth);
+        }
 
-        if (matchedAlbedoSrv) matchedAlbedoSrv->AddRef();
         for (int i = 0; i < kScanSlotCount; ++i) {
+            if (cachedRes[i]) cachedRes[i]->Release();
             if (srvs[i]) srvs[i]->Release();
         }
-
-        const bool srvMatch = needBothSlots ? (foundAlbedo && foundPacked)
-                            : (!body.albedoIsDefault ? foundAlbedo : foundPacked);
-        if (!srvMatch) {
-            if (matchedAlbedoSrv) matchedAlbedoSrv->Release();
+        if (matchedTarget == kTargetNone) {
             return false;
         }
     }
@@ -886,17 +987,15 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
         return false;
     }
 
-    // Latch discovered slot/SRV pointers only after confirming main color RT!
-    if (discoveredAlbSlot >= kScanStartSlot && discoveredAlbSrv) {
-        s_rtAlbSlot = discoveredAlbSlot;
-        s_rtAlbSrv = discoveredAlbSrv;
+    // Latch discovered slot indices only after confirming main color RT!
+    if (discoveredAlbSlot >= kScanStartSlot) {
+        s_rtKnownAlbSlot = discoveredAlbSlot;
     }
-    if (discoveredPackSlot >= kScanStartSlot && discoveredPackSrv) {
-        s_rtPackSlot = discoveredPackSlot;
-        s_rtPackSrv = discoveredPackSrv;
+    if (discoveredPackSlot >= kScanStartSlot) {
+        s_rtKnownPackSlot = discoveredPackSlot;
     }
 
-    *outTarget = kTargetBody;
+    *outTarget = matchedTarget;
     *outMask = mask;
     *outAlbedoSrv = matchedAlbedoSrv;   // caller owns ref
     *outRtRes = rtRes;                  // caller owns ref
@@ -1148,6 +1247,12 @@ void SetPlayerTargetTextures(int target, const TargetTexturesInput& input) {
     }
 }
 
+void ClearTargetTextures(int target) {
+    if (!ValidTarget(target)) return;
+    TargetTexturesInput empty{};
+    SetPlayerTargetTextures(target, empty);
+}
+
 bool LoadShader(int target, const std::string& pathUtf8, std::string* outError) {
     if (!ValidTarget(target) || pathUtf8.empty()) return false;
     std::wstring full = ResolvePathW(pathUtf8);
@@ -1157,17 +1262,21 @@ bool LoadShader(int target, const std::string& pathUtf8, std::string* outError) 
 void UnloadShader(int target) {
     if (!ValidTarget(target)) return;
     TargetSlotState& ts = s_targets[target];
-    std::lock_guard<std::mutex> lk(ts.publishMtx);
-    ID3D11PixelShader* oldPs = ts.ps.exchange(nullptr, std::memory_order_release);
-    if (oldPs) Retire(oldPs);
-    ts.shaderPath.clear();
-    ts.lastWriteTime = {};
-    ts.lastError.clear();
-    ts.decl = {};
-    ts.declStealth.store(false, std::memory_order_relaxed);
-    ts.usesScene.store(false, std::memory_order_relaxed);
-    ts.usesDepth.store(false, std::memory_order_relaxed);
-    ts.usesLivery.store(false, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lk(ts.publishMtx);
+        ID3D11PixelShader* oldPs = ts.ps.exchange(nullptr, std::memory_order_release);
+        if (oldPs) Retire(oldPs);
+        ts.shaderPath.clear();
+        ts.lastWriteTime = {};
+        ts.lastError.clear();
+        ts.decl = {};
+        ts.syncedSrcCompiles = 0;
+        ts.declStealth.store(false, std::memory_order_relaxed);
+        ts.usesScene.store(false, std::memory_order_relaxed);
+        ts.usesDepth.store(false, std::memory_order_relaxed);
+        ts.usesLivery.store(false, std::memory_order_relaxed);
+    }
+    UpdateGhostShaderMask();
 }
 
 bool ReloadShader(int target, std::string* outError) {
@@ -1201,6 +1310,150 @@ void PollHotReload() {
     }
 }
 
+ReplayShaderConfig CaptureActiveConfig(int target) {
+    ReplayShaderConfig cfg{};
+    if (!ValidTarget(target)) return cfg;
+    if (target == kTargetBody && !s_enabled.load(std::memory_order_acquire)) return cfg;
+
+    TargetSlotState& ts = s_targets[target];
+    if (!ts.slotEnabled.load(std::memory_order_acquire)) return cfg;
+    if (ts.ps.load(std::memory_order_acquire) == nullptr) return cfg;
+
+    std::lock_guard<std::mutex> lk(ts.publishMtx);
+    if (ts.shaderPath.empty()) return cfg;
+
+    size_t slashPos = ts.shaderPath.find_last_of("\\/");
+    cfg.shaderPath = (slashPos != std::string::npos) ? ts.shaderPath.substr(slashPos + 1) : ts.shaderPath;
+    cfg.enabled = true;
+    cfg.overrideMode = ts.overrideMode.load(std::memory_order_relaxed);
+    cfg.overrideStealth = ts.overrideStealth.load(std::memory_order_relaxed);
+    for (int p = 0; p < kParams; ++p) {
+        for (int c = 0; c < 4; ++c) {
+            cfg.params[p][c] = ts.param[p][c].load(std::memory_order_relaxed);
+        }
+    }
+    for (int i = 0; i < kTextures; ++i) {
+        if (!ts.userTexPaths[i].empty()) {
+            size_t tSlash = ts.userTexPaths[i].find_last_of("\\/");
+            cfg.texPaths[i] = (tSlash != std::string::npos) ? ts.userTexPaths[i].substr(tSlash + 1) : ts.userTexPaths[i];
+        }
+    }
+    return cfg;
+}
+
+bool ApplyConfigToTarget(int target, const ReplayShaderConfig& cfg, std::string* outError) {
+    if (!ValidTarget(target)) return false;
+    if (!cfg.enabled || cfg.shaderPath.empty()) {
+        UnloadShader(target);
+        return true;
+    }
+
+    if (!LoadShader(target, cfg.shaderPath, outError)) {
+        return false;
+    }
+
+    TargetSlotState& ts = s_targets[target];
+    ts.overrideMode.store(cfg.overrideMode, std::memory_order_release);
+    ts.overrideStealth.store(cfg.overrideStealth, std::memory_order_release);
+    for (int p = 0; p < kParams; ++p) {
+        for (int c = 0; c < 4; ++c) {
+            ts.param[p][c].store(cfg.params[p][c], std::memory_order_relaxed);
+        }
+    }
+    for (int i = 0; i < kTextures; ++i) {
+        if (!cfg.texPaths[i].empty()) {
+            SetUserTexture(target, i, cfg.texPaths[i], nullptr);
+        } else {
+            ClearUserTexture(target, i);
+        }
+    }
+    ts.slotEnabled.store(true, std::memory_order_release);
+    UpdateGhostShaderMask();
+    return true;
+}
+
+void SyncTargetFromSource(int dstTarget, int srcTarget) {
+    if (!ValidTarget(dstTarget) || !ValidTarget(srcTarget) || dstTarget == srcTarget) return;
+
+    if (!IsTargetActiveInternal(srcTarget)) {
+        if (s_targets[dstTarget].ps.load(std::memory_order_acquire) != nullptr) {
+            UnloadShader(dstTarget);
+        }
+        return;
+    }
+
+    std::string srcPath;
+    uint32_t srcCompiles = 0;
+    std::string srcTex[kTextures];
+    {
+        std::lock_guard<std::mutex> lk(s_targets[srcTarget].publishMtx);
+        srcPath = s_targets[srcTarget].shaderPath;
+        srcCompiles = s_targets[srcTarget].compiles;
+        for (int i = 0; i < kTextures; ++i) srcTex[i] = s_targets[srcTarget].userTexPaths[i];
+    }
+    if (srcPath.empty()) {
+        UnloadShader(dstTarget);
+        return;
+    }
+
+    bool needLoad = false;
+    {
+        std::lock_guard<std::mutex> lk(s_targets[dstTarget].publishMtx);
+        if (s_targets[dstTarget].shaderPath != srcPath ||
+            s_targets[dstTarget].syncedSrcCompiles != srcCompiles ||
+            s_targets[dstTarget].ps.load(std::memory_order_relaxed) == nullptr) {
+            needLoad = true;
+        }
+    }
+
+    if (needLoad) {
+        if (!CompileEffectFile(dstTarget, Utf8ToWide(srcPath), nullptr)) {
+            return;
+        }
+        std::lock_guard<std::mutex> lk(s_targets[dstTarget].publishMtx);
+        s_targets[dstTarget].syncedSrcCompiles = srcCompiles;
+    }
+
+    TargetSlotState& src = s_targets[srcTarget];
+    TargetSlotState& dst = s_targets[dstTarget];
+    dst.overrideMode.store(src.overrideMode.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    dst.overrideStealth.store(src.overrideStealth.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    for (int p = 0; p < kParams; ++p) {
+        for (int c = 0; c < 4; ++c) {
+            dst.param[p][c].store(src.param[p][c].load(std::memory_order_relaxed), std::memory_order_relaxed);
+        }
+    }
+    for (int i = 0; i < kTextures; ++i) {
+        std::string dstTex;
+        {
+            std::lock_guard<std::mutex> lk(dst.publishMtx);
+            dstTex = dst.userTexPaths[i];
+        }
+        if (dstTex != srcTex[i]) {
+            if (!srcTex[i].empty()) SetUserTexture(dstTarget, i, srcTex[i], nullptr);
+            else ClearUserTexture(dstTarget, i);
+        }
+    }
+    dst.slotEnabled.store(true, std::memory_order_release);
+    UpdateGhostShaderMask();
+}
+
+void ResetGhostTargets() {
+    for (int t = kTargetGhostBase; t < kTargetCount; ++t) {
+        UnloadShader(t);
+        for (int i = 0; i < kTextures; ++i) {
+            ClearUserTexture(t, i);
+        }
+        ClearTargetTextures(t);
+        AcquireSRWLockExclusive(&s_spatialLock[t]);
+        s_spatialInput[t] = SpatialProximityInput{};
+        ReleaseSRWLockExclusive(&s_spatialLock[t]);
+        for (int i = 0; i < kGameInputs; ++i) {
+            s_gameInputs[t][i].store(0.0f, std::memory_order_relaxed);
+        }
+    }
+}
+
 void SetEnabled(bool enabled) {
     s_enabled.store(enabled, std::memory_order_release);
 }
@@ -1209,23 +1462,34 @@ bool IsEnabled() {
     return s_enabled.load(std::memory_order_acquire);
 }
 
-bool ShouldBypassDepthPrePass() {
-    return s_initialized.load(std::memory_order_acquire) &&
-           s_enabled.load(std::memory_order_acquire) &&
-           (s_targets[kTargetBody].ps.load(std::memory_order_acquire) != nullptr) &&
-           s_targets[kTargetBody].usesScene.load(std::memory_order_acquire);
+void SetTargetEnabled(int target, bool enabled) {
+    if (!ValidTarget(target)) return;
+    s_targets[target].slotEnabled.store(enabled, std::memory_order_release);
+    UpdateGhostShaderMask();
 }
 
-bool ShouldHideCarInternals() {
-    if (!s_initialized.load(std::memory_order_acquire) ||
-        !s_enabled.load(std::memory_order_acquire) ||
-        (s_targets[kTargetBody].ps.load(std::memory_order_acquire) == nullptr)) {
+bool IsTargetCompiled(int target) {
+    return ValidTarget(target) && (s_targets[target].ps.load(std::memory_order_acquire) != nullptr);
+}
+
+bool IsTargetActive(int target) {
+    return IsTargetActiveInternal(target);
+}
+
+bool ShouldBypassDepthPrePass(int target) {
+    return s_initialized.load(std::memory_order_acquire) &&
+           IsTargetActiveInternal(target) &&
+           s_targets[target].usesScene.load(std::memory_order_acquire);
+}
+
+bool ShouldHideCarInternals(int target) {
+    if (!s_initialized.load(std::memory_order_acquire) || !IsTargetActiveInternal(target)) {
         return false;
     }
-    const int ov = s_targets[kTargetBody].overrideStealth.load(std::memory_order_acquire);
+    const int ov = s_targets[target].overrideStealth.load(std::memory_order_acquire);
     if (ov == kStealthOn) return true;
     if (ov == kStealthOff) return false;
-    return s_targets[kTargetBody].declStealth.load(std::memory_order_acquire);
+    return s_targets[target].declStealth.load(std::memory_order_acquire);
 }
 
 void SetOverrideMode(int target, int overrideMode) {
@@ -1385,6 +1649,10 @@ bool SetUserTexture(int target, int texSlot, const std::string& imagePathUtf8, s
         return false;
     }
 
+    {
+        std::lock_guard<std::mutex> lk(s_targets[target].publishMtx);
+        s_targets[target].userTexPaths[texSlot] = imagePathUtf8;
+    }
     ID3D11ShaderResourceView* old = s_targets[target].userTex[texSlot].exchange(srv, std::memory_order_release);
     if (old) Retire(old);
     if (outError) outError->clear();
@@ -1395,30 +1663,37 @@ bool SetUserTexture(int target, int texSlot, const std::string& imagePathUtf8, s
 
 void ClearUserTexture(int target, int texSlot) {
     if (!ValidTarget(target) || texSlot < 0 || texSlot >= kTextures) return;
+    {
+        std::lock_guard<std::mutex> lk(s_targets[target].publishMtx);
+        s_targets[target].userTexPaths[texSlot].clear();
+    }
     ID3D11ShaderResourceView* old = s_targets[target].userTex[texSlot].exchange(nullptr, std::memory_order_release);
     if (old) Retire(old);
 }
 
-void SetGameInput(int index, float value) {
-    if (index >= 0 && index < kGameInputs) {
-        s_gameInputs[index].store(value, std::memory_order_relaxed);
+void SetGameInput(int index, float value, int target) {
+    if (ValidTarget(target) && index >= 0 && index < kGameInputs) {
+        s_gameInputs[target][index].store(value, std::memory_order_relaxed);
     }
 }
 
-float GetGameInput(int index) {
-    return (index >= 0 && index < kGameInputs) ? s_gameInputs[index].load(std::memory_order_relaxed) : 0.0f;
+float GetGameInput(int index, int target) {
+    return (ValidTarget(target) && index >= 0 && index < kGameInputs)
+        ? s_gameInputs[target][index].load(std::memory_order_relaxed) : 0.0f;
 }
 
-void SetSpatialProximity(const SpatialProximityInput& input) {
-    AcquireSRWLockExclusive(&s_spatialLock);
-    s_spatialInput = input;
-    ReleaseSRWLockExclusive(&s_spatialLock);
+void SetSpatialProximity(const SpatialProximityInput& input, int target) {
+    if (!ValidTarget(target)) return;
+    AcquireSRWLockExclusive(&s_spatialLock[target]);
+    s_spatialInput[target] = input;
+    ReleaseSRWLockExclusive(&s_spatialLock[target]);
 }
 
-SpatialProximityInput GetSpatialProximity() {
-    AcquireSRWLockShared(&s_spatialLock);
-    SpatialProximityInput copy = s_spatialInput;
-    ReleaseSRWLockShared(&s_spatialLock);
+SpatialProximityInput GetSpatialProximity(int target) {
+    if (!ValidTarget(target)) return SpatialProximityInput{};
+    AcquireSRWLockShared(&s_spatialLock[target]);
+    SpatialProximityInput copy = s_spatialInput[target];
+    ReleaseSRWLockShared(&s_spatialLock[target]);
     return copy;
 }
 
@@ -1428,13 +1703,12 @@ bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, Draw
 
     s_totalDrawsFrame.fetch_add(1, std::memory_order_relaxed);
 
-    // Quick exit when disabled and we aren't running initial diagnostic capture
-    const bool enabled = s_enabled.load(std::memory_order_acquire);
-    ID3D11PixelShader* customPs = s_targets[kTargetBody].ps.load(std::memory_order_acquire);
+    const bool playerWant = IsTargetActiveInternal(kTargetBody);
+    const bool anyGhostWant = (s_activeGhostShaderMask.load(std::memory_order_acquire) != 0);
 
-    // Run lightweight detection whenever shader is active & enabled, OR on first few draws for diagnostics
+    // Run detection when player or any ghost has an active shader, or every 30 frames for diagnostics
     const uint32_t frameId = s_frameCounter.load(std::memory_order_relaxed);
-    const bool runDiagOnly = (!enabled || !customPs) && ((frameId % 30) != 0);
+    const bool runDiagOnly = (!playerWant && !anyGhostWant) && ((frameId % 30) != 0);
     if (runDiagOnly) return false;
 
     int matchedTarget = kTargetNone;
@@ -1450,30 +1724,42 @@ bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, Draw
         return false;
     }
 
-    // Record telemetry for diagnostics
-    s_matchedDrawsFrame.fetch_add(1, std::memory_order_relaxed);
-    s_lastSlotMask.store(slotMask, std::memory_order_relaxed);
-    s_lastRtWidth.store(rtW, std::memory_order_relaxed);
-    s_lastRtHeight.store(rtH, std::memory_order_relaxed);
-    s_lastRtFormat.store(static_cast<uint32_t>(rtFmt), std::memory_order_relaxed);
+    // Record telemetry for player diagnostics (and first-time ghost verification)
+    if (matchedTarget == kTargetBody) {
+        s_matchedDrawsFrame.fetch_add(1, std::memory_order_relaxed);
+        s_lastSlotMask.store(slotMask, std::memory_order_relaxed);
+        s_lastRtWidth.store(rtW, std::memory_order_relaxed);
+        s_lastRtHeight.store(rtH, std::memory_order_relaxed);
+        s_lastRtFormat.store(static_cast<uint32_t>(rtFmt), std::memory_order_relaxed);
+    }
 
     ID3D11PixelShader* origPs = nullptr;
     context->PSGetShader(&origPs, nullptr, nullptr);
-    s_lastGamePs.store(reinterpret_cast<uintptr_t>(origPs), std::memory_order_relaxed);
+    if (matchedTarget == kTargetBody) {
+        s_lastGamePs.store(reinterpret_cast<uintptr_t>(origPs), std::memory_order_relaxed);
+    }
 
-    static bool s_loggedDrawOnce = false;
-    if (!s_loggedDrawOnce) {
-        s_loggedDrawOnce = true;
+    static bool s_loggedPlayerDrawOnce = false;
+    static bool s_loggedGhostDrawOnce = false;
+    if (matchedTarget == kTargetBody && !s_loggedPlayerDrawOnce) {
+        s_loggedPlayerDrawOnce = true;
         char buf[256];
         _snprintf_s(buf, sizeof(buf), _TRUNCATE,
                     "CarFX FIRST MATCHED PLAYER CAR DRAW: target=%d slots=0x%X rt=%ux%u fmt=%u origPs=%p",
                     matchedTarget, slotMask, rtW, rtH, static_cast<unsigned>(rtFmt), origPs);
         Logger::Info(buf);
+    } else if (IsGhostTarget(matchedTarget) && !s_loggedGhostDrawOnce) {
+        s_loggedGhostDrawOnce = true;
+        char buf[256];
+        _snprintf_s(buf, sizeof(buf), _TRUNCATE,
+                    "CarFX FIRST MATCHED GHOST CAR DRAW: target=%d slots=0x%X rt=%ux%u fmt=%u origPs=%p",
+                    matchedTarget, slotMask, rtW, rtH, static_cast<unsigned>(rtFmt), origPs);
+        Logger::Info(buf);
     }
 
     TargetSlotState& ts = s_targets[matchedTarget];
-    customPs = ts.ps.load(std::memory_order_acquire);
-    if (!enabled || !customPs || !s_cb) {
+    ID3D11PixelShader* customPs = ts.ps.load(std::memory_order_acquire);
+    if (!IsTargetActiveInternal(matchedTarget) || !customPs || !s_cb) {
         if (origPs) origPs->Release();
         if (albedoSrv) albedoSrv->Release();
         if (rtRes) rtRes->Release();
@@ -1534,13 +1820,13 @@ bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, Draw
     k.frameInfo[3] = static_cast<float>(mode);
 
     for (int i = 0; i < kGameInputs; ++i) {
-        k.game[i / 4][i % 4] = s_gameInputs[i].load(std::memory_order_relaxed);
+        k.game[i / 4][i % 4] = s_gameInputs[matchedTarget][i].load(std::memory_order_relaxed);
     }
 
     {
-        AcquireSRWLockShared(&s_spatialLock);
-        const SpatialProximityInput sp = s_spatialInput;
-        ReleaseSRWLockShared(&s_spatialLock);
+        AcquireSRWLockShared(&s_spatialLock[matchedTarget]);
+        const SpatialProximityInput sp = s_spatialInput[matchedTarget];
+        ReleaseSRWLockShared(&s_spatialLock[matchedTarget]);
         memcpy(k.carPos, sp.carPos, sizeof(k.carPos));
         memcpy(k.carRight, sp.carRight, sizeof(k.carRight));
         memcpy(k.carUp, sp.carUp, sizeof(k.carUp));
@@ -1628,7 +1914,9 @@ bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, Draw
 DiagnosticStatus GetStatus(int target) {
     DiagnosticStatus st{};
     st.initialized = s_initialized.load(std::memory_order_acquire);
-    st.enabled = s_enabled.load(std::memory_order_acquire);
+    st.enabled = IsGhostTarget(target)
+        ? (ValidTarget(target) && s_targets[target].slotEnabled.load(std::memory_order_acquire))
+        : s_enabled.load(std::memory_order_acquire);
     st.hookedDraw = s_hookedDraw.load(std::memory_order_acquire);
 
     st.totalDrawsFrame = s_totalDrawsLastFrame.load(std::memory_order_relaxed);
@@ -1642,8 +1930,9 @@ DiagnosticStatus GetStatus(int target) {
     st.lastRtFormat = s_lastRtFormat.load(std::memory_order_relaxed);
     st.lastGamePs = s_lastGamePs.load(std::memory_order_relaxed);
 
+    const int texIdx = ValidTarget(target) ? target : kTargetBody;
     AcquireSRWLockShared(&s_gameTexLock);
-    const GameSrvSnapshot& b = s_gameTex[kTargetBody];
+    const GameSrvSnapshot& b = s_gameTex[texIdx];
     st.bodyTargetsValid = b.valid;
     st.bodyAlbedoIsDefault = b.albedoIsDefault;
     st.bodyPackedIsDefault = b.packedIsDefault;

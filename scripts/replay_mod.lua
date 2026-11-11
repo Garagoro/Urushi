@@ -477,6 +477,12 @@ local function render_replay_window()
                         { label = T("Треков", "Tracks"), value = tostring(sel.tracks or 1), tone = "accent" },
                         { label = T("Длина", "Length"), value = string.format(T("%.1f с", "%.1f s"), sel.duration or 0.0), tone = "muted" },
                     })
+                    if sel.carfx_shader and sel.carfx_shader ~= "" then
+                        ui.spacing(4)
+                        ui.badge("CarFX", "accent")
+                        ui.same_line(0, 8)
+                        ui.text(sel.carfx_shader)
+                    end
                 end
             else
                 ui.text_wrapped(T("Папка replays/ пуста.", "No replays in replays/ folder."), "yellow")
@@ -554,6 +560,14 @@ local function render_replay_window()
             if del_ch then state.start_delay = new_del end
 
             if ui.collapsing(T("Дополнительно##rep_adv", "Advanced##rep_adv"), false) then
+                if replay.get_ghost_mirror_carfx and replay.set_ghost_mirror_carfx then
+                    local mir_cur = replay.get_ghost_mirror_carfx()
+                    local m_ch, m_val = ui.toggle(T("Наследовать CarFX (если не записан)##rep_cfx_mir", "Use Active CarFX if Unsaved##rep_cfx_mir"), mir_cur)
+                    if m_ch then
+                        replay.set_ghost_mirror_carfx(m_val)
+                    end
+                end
+
                 ui.text_dim(T("Режим спавна", "Spawn Method"))
                 local ptype_idx = (state.playback_type == "GHOST") and 1 or 2
                 local pt_ch, new_pt = ui.segmented("rep_ptype_seg", ptype_idx, T({ "3D-Призрак", "Слот авто" }, { "3D Ghost", "Car Slot" }))

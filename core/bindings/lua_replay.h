@@ -30,4 +30,7 @@ public:
     static int ApplyToGhost(lua_State* L);
     static int ApplyAllToGhosts(lua_State* L);
     static int ListSaved(lua_State* L);
+    static int GetCarFxShader(lua_State* L);
+    static int SetGhostMirrorCarFx(lua_State* L);
+    static int GetGhostMirrorCarFx(lua_State* L);
 };

@@ -39,6 +39,7 @@ std::atomic<bool> UnityBridge::s_pendingMultiReplayApply{ false };
 float UnityBridge::s_pendingMultiReplayTime = 0.0f;
 float UnityBridge::s_pendingMultiReplayOffset = 0.0f;
 std::atomic<bool> UnityBridge::s_ghostCollisionEnabled{ false };
+std::atomic<bool> UnityBridge::s_ghostMirrorPlayerShader{ true };
 std::atomic<bool> UnityBridge::s_pendingCollisionSync{ false };
 std::atomic<bool> UnityBridge::s_pendingTeleport{ false };
 TeleportPose UnityBridge::s_pendingTeleportPose{};
@@ -137,6 +138,71 @@ static bool SafeCallGetNativeTexPtr(uintptr_t fnAddr, void* nativeTex, void** ou
         return *outD3DPtr != nullptr;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         *outD3DPtr = nullptr;
+        return false;
+    }
+}
+
+typedef void* (*t_UP_MatGetTexture)(void* natMat, int32_t propId);
+typedef void  (*t_UP_MatSetTexture)(void* natMat, int32_t propId, void* natTex);
+typedef void  (*t_UP_GfxCopyTextureFull)(void* srcNatTex, void* dstNatTex);
+
+static void GetBuiltinNativeTextures(uintptr_t unityBase, void** outWhite, void** outBlack, void** outNormal) {
+    static void* s_natWhite = nullptr;
+    static void* s_natBlack = nullptr;
+    static void* s_natNormal = nullptr;
+    static bool s_resolved = false;
+    if (!s_resolved && unityBase) {
+        s_resolved = true;
+        ReadBuiltinNativeTexGlobal(unityBase + 0xA8CF0, &s_natWhite);
+        ReadBuiltinNativeTexGlobal(unityBase + 0xA8D30, &s_natBlack);
+        ReadBuiltinNativeTexGlobal(unityBase + 0xA8E30, &s_natNormal);
+    }
+    if (outWhite) *outWhite = s_natWhite;
+    if (outBlack) *outBlack = s_natBlack;
+    if (outNormal) *outNormal = s_natNormal;
+}
+
+static bool IsDefaultNativeTex(void* natTex, void* natWhite, void* natBlack, void* natNormal) {
+    return !natTex || natTex == natWhite || natTex == natBlack || natTex == natNormal;
+}
+
+static void* SafeGetMatTextureSEH(uintptr_t unityBase, void* natMat, int32_t propId) {
+    if (!unityBase || !natMat) return nullptr;
+    if (!IsReadableMem(reinterpret_cast<uintptr_t>(natMat), 0x58)) return nullptr;
+    const auto pfnGetTex = reinterpret_cast<t_UP_MatGetTexture>(unityBase + 0x603830);
+    __try {
+        return pfnGetTex(natMat, propId);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+static bool SafeSetMatTextureSEH(uintptr_t unityBase, void* natMat, int32_t propId, void* natTex) {
+    if (!unityBase || !natMat) return false;
+    if (!IsReadableMem(reinterpret_cast<uintptr_t>(natMat), 0x58)) return false;
+    if (natTex && !IsReadableMem(reinterpret_cast<uintptr_t>(natTex), 0x44)) return false;
+    const auto pfnSetTex = reinterpret_cast<t_UP_MatSetTexture>(unityBase + 0x9AE10);
+    __try {
+        pfnSetTex(natMat, propId, natTex);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static bool SafeCopyTextureFullSEH(uintptr_t unityBase, void* srcNatTex, void* dstNatTex) {
+    if (!unityBase || !srcNatTex || !dstNatTex || srcNatTex == dstNatTex) return false;
+    const uintptr_t sAddr = reinterpret_cast<uintptr_t>(srcNatTex);
+    const uintptr_t dAddr = reinterpret_cast<uintptr_t>(dstNatTex);
+    if (!IsReadableMemVQ(sAddr, 0x118) || !IsReadableMemVQ(dAddr, 0x118)) return false;
+    const uintptr_t sGfx = *reinterpret_cast<const uintptr_t*>(sAddr + 0x110);
+    const uintptr_t dGfx = *reinterpret_cast<const uintptr_t*>(dAddr + 0x110);
+    if (!IsReadableMemVQ(sGfx, 0x18) || !IsReadableMemVQ(dGfx, 0x18)) return false;
+    const auto pfnCopy = reinterpret_cast<t_UP_GfxCopyTextureFull>(unityBase + 0x7E620);
+    __try {
+        pfnCopy(srcNatTex, dstNatTex);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
 }
@@ -772,17 +838,10 @@ static void UpdateCarFXPlayerTexturesOnMainThread(uintptr_t unityBase, const std
         restoreAllStealthMaterials();
     }
 
-    // Resolve builtin Unity default textures once so we know if car has 0 decals
-    static void* s_natWhite = nullptr;
-    static void* s_natBlack = nullptr;
-    static void* s_natNormal = nullptr;
-    static bool s_builtinsResolved = false;
-    if (!s_builtinsResolved) {
-        s_builtinsResolved = true;
-        ReadBuiltinNativeTexGlobal(unityBase + 0xA8CF0, &s_natWhite);
-        ReadBuiltinNativeTexGlobal(unityBase + 0xA8D30, &s_natBlack);
-        ReadBuiltinNativeTexGlobal(unityBase + 0xA8E30, &s_natNormal);
-    }
+    void* s_natWhite = nullptr;
+    void* s_natBlack = nullptr;
+    void* s_natNormal = nullptr;
+    GetBuiltinNativeTextures(unityBase, &s_natWhite, &s_natBlack, &s_natNormal);
 
     void* natAlb = nullptr;
     void* natPack = nullptr;
@@ -1342,6 +1401,68 @@ void UnityBridge::ProcessPendingMainThreadTasks(float dt) {
         }
         EcsCollision::UpdateOnMainThread(dt, liveSnapshot);
         CarSimOptimizer::UpdateOnMainThread(dt, liveSnapshot);
+
+        if (s_pendingCollisionSync.exchange(false)) {
+            bool col = s_ghostCollisionEnabled.load(std::memory_order_relaxed);
+            std::lock_guard<std::recursive_mutex> lock(s_mutex);
+            for (auto& slot : s_ghostSlots) {
+                if (slot.gameObject) {
+                    ApplySlotCollisionVisuals(slot, col);
+                }
+            }
+        }
+
+        if (s_ghostMirrorMode.load(std::memory_order_relaxed)) {
+            if (s_ghostSlots.empty() || !s_ghostSlots[0].gameObject) {
+                SpawnGhostSlotInternal(0);
+            }
+            if (!s_ghostSlots.empty() && s_ghostSlots[0].gameObject) {
+                CarTelemetry tele = NativeCarX::GetPlayerCarTelemetry();
+                if (tele.carPtr) {
+                    float calMats[4][16];
+                    float whlMats[4][16];
+                    for (int w = 0; w < 4; ++w) {
+                        memcpy(whlMats[w], tele.wheels[w].matrix.data(), sizeof(float) * 16);
+                        memcpy(calMats[w], tele.wheels[w].caliperMatrix.data(), sizeof(float) * 16);
+                    }
+                    float off = s_ghostMirrorOffset;
+                    UnityVector3 worldOffset = {
+                        tele.transformMatrix[0] * off,
+                        tele.transformMatrix[1] * off,
+                        tele.transformMatrix[2] * off
+                    };
+                    ApplyGhostPoseToSlot(0, tele.transformMatrix.data(), whlMats, calMats, tele.steerAngle, worldOffset, dt);
+                    s_ghostSlots[0].replayTeleValid = false;
+                }
+            }
+        } else if (s_pendingMultiReplayApply.exchange(false)) {
+            ApplyAllReplayTracksAtTimeInternal(s_pendingMultiReplayTime, s_pendingMultiReplayOffset, dt);
+        } else if (s_pendingReplayApply.exchange(false)) {
+            if (s_ghostSlots.empty() || !s_ghostSlots[0].gameObject) {
+                SpawnGhostSlotInternal(0);
+            }
+            if (!s_ghostSlots.empty() && s_ghostSlots[0].gameObject) {
+                ReplayFrame copyFrame;
+                float off = 0.0f;
+                {
+                    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+                    copyFrame = s_pendingReplayFrameData;
+                    off = s_pendingReplayOffset;
+                }
+                UnityVector3 worldOffset = {
+                    copyFrame.transformMatrix[0] * off,
+                    copyFrame.transformMatrix[1] * off,
+                    copyFrame.transformMatrix[2] * off
+                };
+                ApplyGhostPoseToSlot(0, copyFrame.transformMatrix, copyFrame.wheelMatrices, copyFrame.caliperMatrices, copyFrame.steerAngle, worldOffset, dt);
+            }
+        } else if (s_pendingTransform.exchange(false)) {
+            std::lock_guard<std::recursive_mutex> lock(s_mutex);
+            if (!s_ghostSlots.empty() && s_ghostSlots[0].transform) {
+                SetTransformPosRotDirect(s_ghostSlots[0].transform, s_pendingPos, s_pendingRot);
+            }
+        }
+
         UpdateCarFXPlayerTexturesOnMainThread(s_unityBase, liveSnapshot);
         UpdateCarFXSpatialProximityOnMainThread(liveSnapshot);
     } else if (!s_liveCars.empty() || !s_sceneCarCache.empty()) {
@@ -1353,72 +1474,13 @@ void UnityBridge::ProcessPendingMainThreadTasks(float dt) {
         EcsCollision::UpdateOnMainThread(dt, {});
         CarSimOptimizer::UpdateOnMainThread(dt, {});
         UpdateCarFXPlayerTexturesOnMainThread(s_unityBase, {});
-        CarFX::SetSpatialProximity(CarFX::SpatialProximityInput{});
+        CarFX::ResetGhostTargets();
+        CarFX::SetSpatialProximity(CarFX::SpatialProximityInput{}, CarFX::kTargetBody);
     } else {
         EcsCollision::UpdateOnMainThread(dt, {});
         CarSimOptimizer::UpdateOnMainThread(dt, {});
         UpdateCarFXPlayerTexturesOnMainThread(s_unityBase, {});
-        CarFX::SetSpatialProximity(CarFX::SpatialProximityInput{});
-    }
-
-    if (s_pendingCollisionSync.exchange(false)) {
-        bool col = s_ghostCollisionEnabled.load(std::memory_order_relaxed);
-        std::lock_guard<std::recursive_mutex> lock(s_mutex);
-        for (auto& slot : s_ghostSlots) {
-            if (slot.gameObject) {
-                ApplySlotCollisionVisuals(slot, col);
-            }
-        }
-    }
-
-    if (s_ghostMirrorMode.load(std::memory_order_relaxed)) {
-        if ((s_ghostSlots.empty() || !s_ghostSlots[0].gameObject) && NativeCarX::IsInSession()) {
-            SpawnGhostSlotInternal(0);
-        }
-        if (!s_ghostSlots.empty() && s_ghostSlots[0].gameObject) {
-            CarTelemetry tele = NativeCarX::GetPlayerCarTelemetry();
-            if (tele.carPtr) {
-                float calMats[4][16];
-                float whlMats[4][16];
-                for (int w = 0; w < 4; ++w) {
-                    memcpy(whlMats[w], tele.wheels[w].matrix.data(), sizeof(float) * 16);
-                    memcpy(calMats[w], tele.wheels[w].caliperMatrix.data(), sizeof(float) * 16);
-                }
-                float off = s_ghostMirrorOffset;
-                UnityVector3 worldOffset = {
-                    tele.transformMatrix[0] * off,
-                    tele.transformMatrix[1] * off,
-                    tele.transformMatrix[2] * off
-                };
-                ApplyGhostPoseToSlot(0, tele.transformMatrix.data(), whlMats, calMats, tele.steerAngle, worldOffset, dt);
-            }
-        }
-    } else if (s_pendingMultiReplayApply.exchange(false)) {
-        ApplyAllReplayTracksAtTimeInternal(s_pendingMultiReplayTime, s_pendingMultiReplayOffset, dt);
-    } else if (s_pendingReplayApply.exchange(false)) {
-        if ((s_ghostSlots.empty() || !s_ghostSlots[0].gameObject) && NativeCarX::IsInSession()) {
-            SpawnGhostSlotInternal(0);
-        }
-        if (!s_ghostSlots.empty() && s_ghostSlots[0].gameObject) {
-            ReplayFrame copyFrame;
-            float off = 0.0f;
-            {
-                std::lock_guard<std::recursive_mutex> lock(s_mutex);
-                copyFrame = s_pendingReplayFrameData;
-                off = s_pendingReplayOffset;
-            }
-            UnityVector3 worldOffset = {
-                copyFrame.transformMatrix[0] * off,
-                copyFrame.transformMatrix[1] * off,
-                copyFrame.transformMatrix[2] * off
-            };
-            ApplyGhostPoseToSlot(0, copyFrame.transformMatrix, copyFrame.wheelMatrices, copyFrame.caliperMatrices, copyFrame.steerAngle, worldOffset, dt);
-        }
-    } else if (s_pendingTransform.exchange(false)) {
-        std::lock_guard<std::recursive_mutex> lock(s_mutex);
-        if (!s_ghostSlots.empty() && s_ghostSlots[0].transform) {
-            SetTransformPosRotDirect(s_ghostSlots[0].transform, s_pendingPos, s_pendingRot);
-        }
+        CarFX::SetSpatialProximity(CarFX::SpatialProximityInput{}, CarFX::kTargetBody);
     }
 }
 
@@ -2111,13 +2173,183 @@ void UnityBridge::ConfigureGhostSlot(GhostSlot& slot, void* clonedGo, float init
     }
 }
 
-void* UnityBridge::SpawnGhostSlotInternal(size_t slotIdx, const std::string& preferredCarName) {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-
-    if (slotIdx >= s_ghostSlots.size()) {
-        s_ghostSlots.resize(slotIdx + 1);
+static bool SafeResolveMatAndQueueSEH(uintptr_t unityBase, int32_t matId, void** outNatMat, int32_t* outQueue) {
+    if (!unityBase || matId >= 0 || !outNatMat || !outQueue) return false;
+    *outNatMat = nullptr;
+    *outQueue = 2200;
+    const auto pfnIdToObj = reinterpret_cast<t_UP_InstanceIDToObject>(unityBase + 0x107480);
+    const auto pfnGetRq = reinterpret_cast<t_UP_MatGetRenderQueue>(unityBase + 0x95eb0);
+    __try {
+        void* natMat = pfnIdToObj(&matId);
+        if (!natMat || !IsReadableMem(reinterpret_cast<uintptr_t>(natMat), 0x58)) return false;
+        *outNatMat = natMat;
+        *outQueue = pfnGetRq(natMat);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *outNatMat = nullptr;
+        return false;
     }
-    DestroyGhostSlotInternal(slotIdx);
+}
+
+void UnityBridge::IsolateGhostSlotCarFXTextures(size_t slotIdx, GhostSlot& slot) {
+    if (!s_unityBase || !slot.gameObject) return;
+    int gTarget = CarFX::GhostTargetFromSlot(static_cast<int>(slotIdx));
+    if (gTarget == CarFX::kTargetNone) return;
+
+    std::vector<CarRendererRef> renderers;
+    CollectCarRenderersOnMainThread(slot.gameObject, renderers);
+
+    struct BodyMatSlotRef { int32_t rendererId; int32_t slotIdx; int32_t origMatId; };
+    std::vector<BodyMatSlotRef> bodySlots;
+    for (const CarRendererRef& r : renderers) {
+        for (uint32_t si = 0; si < r.matCount; ++si) {
+            const int32_t mid = r.matIds[si];
+            if (SafeIsBodyMaterialIdSEH(s_unityBase, mid)) {
+                bodySlots.push_back({ r.instanceId, static_cast<int32_t>(si), mid });
+            }
+        }
+    }
+    if (bodySlots.empty()) {
+        CarFX::ClearTargetTextures(gTarget);
+        return;
+    }
+
+    int32_t isoMatId = 0;
+    if (!SafeCloneOrAssignRendererMatSEH(s_unityBase, bodySlots[0].rendererId, bodySlots[0].slotIdx, 0, &isoMatId) || isoMatId >= 0) {
+        CarFX::ClearTargetTextures(gTarget);
+        return;
+    }
+    for (size_t i = 1; i < bodySlots.size(); ++i) {
+        SafeCloneOrAssignRendererMatSEH(s_unityBase, bodySlots[i].rendererId, bodySlots[i].slotIdx, isoMatId, nullptr);
+    }
+
+    void* natMat = nullptr;
+    int32_t origQ = 2200;
+    if (!SafeResolveMatAndQueueSEH(s_unityBase, isoMatId, &natMat, &origQ) || !natMat) return;
+
+    slot.isolatedBodyMatId = isoMatId;
+    slot.savedBodyOrigQueue = origQ;
+
+    void* natWhite = nullptr;
+    void* natBlack = nullptr;
+    void* natNormal = nullptr;
+    GetBuiltinNativeTextures(s_unityBase, &natWhite, &natBlack, &natNormal);
+
+    void* origAlb = SafeGetMatTextureSEH(s_unityBase, natMat, 380);   // u_sTexture
+    void* origPack = SafeGetMatTextureSEH(s_unityBase, natMat, 1370); // u_sPackedMap
+    const bool albIsDef = IsDefaultNativeTex(origAlb, natWhite, natBlack, natNormal);
+    const bool packIsDef = IsDefaultNativeTex(origPack, natWhite, natBlack, natNormal);
+
+    const uintptr_t pfnGetNatPtr = s_unityBase + 0xA8710;
+    void* albSrvPtr = nullptr;
+    if (origAlb) SafeCallGetNativeTexPtr(pfnGetNatPtr, origAlb, &albSrvPtr);
+
+    void* srcPack = origPack ? origPack : (natBlack ? natBlack : natWhite);
+    void* clonedPack = srcPack ? CloneGameObjectDirect(srcPack) : nullptr;
+    void* packSrvPtr = nullptr;
+    bool copyOk = false;
+    if (clonedPack) {
+        if (!packIsDef && origPack) {
+            copyOk = SafeCopyTextureFullSEH(s_unityBase, origPack, clonedPack);
+        }
+        SafeCallGetNativeTexPtr(pfnGetNatPtr, clonedPack, &packSrvPtr);
+        if (!packSrvPtr) {
+            DestroyObjectDirect(clonedPack, 0.0f);
+            void* fallbackSrc = natBlack ? natBlack : natWhite;
+            clonedPack = fallbackSrc ? CloneGameObjectDirect(fallbackSrc) : nullptr;
+            if (clonedPack) {
+                SafeCallGetNativeTexPtr(pfnGetNatPtr, clonedPack, &packSrvPtr);
+            }
+        }
+    }
+
+    if (clonedPack && packSrvPtr && SafeSetMatTextureSEH(s_unityBase, natMat, 1370, clonedPack)) {
+        slot.clonedPackTex = clonedPack;
+        slot.carFxIsolated = true;
+    } else {
+        if (clonedPack) DestroyObjectDirect(clonedPack, 0.0f);
+        packSrvPtr = nullptr;
+        if (origPack) SafeCallGetNativeTexPtr(pfnGetNatPtr, origPack, &packSrvPtr);
+    }
+
+    CarFX::TargetTexturesInput in{};
+    in.nativeAlbedoPtr = albSrvPtr;
+    in.nativePackedPtr = packSrvPtr;
+    in.albedoIsDefault = albIsDef;
+    in.packedIsDefault = slot.carFxIsolated ? false : packIsDef;
+    in.valid = (in.nativePackedPtr != nullptr) || (in.nativeAlbedoPtr != nullptr);
+    CarFX::SetPlayerTargetTextures(gTarget, in);
+
+    char dbg[256];
+    _snprintf_s(dbg, sizeof(dbg), _TRUNCATE,
+                "Ghost[%zu] CarFX isolated: mat=%d bodySlots=%zu albSrv=%p(def=%d) packSrv=%p(iso=%d,copy=%d)",
+                slotIdx, isoMatId, bodySlots.size(), albSrvPtr, (int)albIsDef, packSrvPtr, (int)slot.carFxIsolated, (int)copyOk);
+    Logger::Info(dbg);
+}
+
+void UnityBridge::SyncGhostSlotCarFXMaterialsAndShader(size_t slotIdx, GhostSlot& slot, bool allowReplayShader) {
+    int gTarget = CarFX::GhostTargetFromSlot(static_cast<int>(slotIdx));
+    if (gTarget == CarFX::kTargetNone) return;
+
+    if (!allowReplayShader) {
+        if (CarFX::IsTargetCompiled(gTarget)) {
+            CarFX::UnloadShader(gTarget);
+        }
+    } else {
+        CarFX::ReplayShaderConfig recCfg;
+        int recTrackIdx = 0;
+        if (ReplayEngine::GetLoadedCarFx(recCfg, &recTrackIdx) && recTrackIdx == static_cast<int>(slotIdx)) {
+            if (!slot.replayShaderApplied) {
+                slot.replayShaderApplied = true;
+                slot.replayShaderSourceKey = recCfg.shaderPath;
+                CarFX::ApplyConfigToTarget(gTarget, recCfg);
+            }
+        } else if (s_ghostMirrorPlayerShader.load(std::memory_order_relaxed)) {
+            slot.replayShaderApplied = false;
+            CarFX::SyncTargetFromSource(gTarget, CarFX::kTargetBody);
+        } else {
+            slot.replayShaderApplied = false;
+            if (CarFX::IsTargetCompiled(gTarget)) {
+                CarFX::UnloadShader(gTarget);
+            }
+        }
+    }
+
+    if (slot.isolatedBodyMatId < 0 && s_unityBase) {
+        const bool wantTrans = CarFX::ShouldBypassDepthPrePass(gTarget);
+        const bool wantStl = CarFX::ShouldHideCarInternals(gTarget);
+        const int32_t targetQ = wantStl ? 2510 : 2590;
+        SafeSyncMaterialQueueAndDepthSEH(s_unityBase, slot.isolatedBodyMatId, wantTrans, targetQ, true, slot.savedBodyOrigQueue, nullptr, nullptr);
+    }
+}
+
+void UnityBridge::DestroyDetachedGhostSlot(size_t slotIdx, GhostSlot& detached) {
+    int gTarget = CarFX::GhostTargetFromSlot(static_cast<int>(slotIdx));
+    if (gTarget != CarFX::kTargetNone) {
+        CarFX::UnloadShader(gTarget);
+        CarFX::ClearTargetTextures(gTarget);
+    }
+    if (detached.clonedPackTex) {
+        DestroyObjectDirect(detached.clonedPackTex, 0.0f);
+    }
+    if (detached.gameObject) {
+        DestroyObjectDirect(detached.gameObject, 0.0f);
+    }
+    detached = GhostSlot{};
+}
+
+void* UnityBridge::SpawnGhostSlotInternal(size_t slotIdx, const std::string& preferredCarName) {
+    // Detach any prior slot under brief lock, then destroy/spawn/isolate outside s_mutex
+    // so synchronous Unity Gfx calls (GetNativeTexturePtr/CopyTexture) can never deadlock Present().
+    GhostSlot oldSlot;
+    {
+        std::lock_guard<std::recursive_mutex> lock(s_mutex);
+        if (slotIdx < s_ghostSlots.size()) {
+            oldSlot = std::move(s_ghostSlots[slotIdx]);
+            s_ghostSlots[slotIdx] = GhostSlot{};
+        }
+    }
+    DestroyDetachedGhostSlot(slotIdx, oldSlot);
 
     void* sourceRootTf = nullptr;
     void* modelGo = FindModelForCarName(preferredCarName, &sourceRootTf);
@@ -2134,15 +2366,10 @@ void* UnityBridge::SpawnGhostSlotInternal(size_t slotIdx, const std::string& pre
     }
 
     void* cloneTf = GetTransformOfGameObject(cloneGo);
-    GhostSlot& slot = s_ghostSlots[slotIdx];
-    slot = GhostSlot{};
+    GhostSlot slot;
     slot.gameObject = cloneGo;
     slot.transform = cloneTf;
     slot.sourceCarName = carName;
-
-    if (slotIdx == 0) {
-        s_playerNativeObj = modelGo;
-    }
 
     CarTelemetry tele = NativeCarX::GetPlayerCarTelemetry();
     UnityVector3 pos{};
@@ -2158,31 +2385,53 @@ void* UnityBridge::SpawnGhostSlotInternal(size_t slotIdx, const std::string& pre
 
     float initialSteer = (sourceRootTf && carName == LookupCarUnityName(tele.carPtr)) ? tele.steerAngle : 0.0f;
     ConfigureGhostSlot(slot, cloneGo, initialSteer);
+    IsolateGhostSlotCarFXTextures(slotIdx, slot);
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(s_mutex);
+        if (slotIdx >= s_ghostSlots.size()) {
+            s_ghostSlots.resize(slotIdx + 1);
+        }
+        s_ghostSlots[slotIdx] = std::move(slot);
+        if (slotIdx == 0) {
+            s_playerNativeObj = modelGo;
+        }
+    }
 
     Logger::Info("Spawned 3D Ghost[" + std::to_string(slotIdx) + "] from '" + carName + "/Model(Clone)'");
     return cloneGo;
 }
 
 void UnityBridge::DestroyGhostSlotInternal(size_t slotIdx) {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    if (slotIdx >= s_ghostSlots.size()) return;
-    GhostSlot& slot = s_ghostSlots[slotIdx];
-    if (slot.gameObject) {
-        DestroyObjectDirect(slot.gameObject, 0.0f);
+    GhostSlot detached;
+    {
+        std::lock_guard<std::recursive_mutex> lock(s_mutex);
+        if (slotIdx >= s_ghostSlots.size()) return;
+        detached = std::move(s_ghostSlots[slotIdx]);
+        s_ghostSlots[slotIdx] = GhostSlot{};
     }
-    slot = GhostSlot{};
+    DestroyDetachedGhostSlot(slotIdx, detached);
 }
 
 void UnityBridge::DestroyAllGhostSlotsInternal() {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    std::vector<GhostSlot> oldSlots;
+    {
+        std::lock_guard<std::recursive_mutex> lock(s_mutex);
+        oldSlots = std::move(s_ghostSlots);
+        s_ghostSlots.clear();
+    }
+    CarFX::ResetGhostTargets();
     int destroyed = 0;
-    for (size_t i = 0; i < s_ghostSlots.size(); ++i) {
-        if (s_ghostSlots[i].gameObject) {
-            DestroyObjectDirect(s_ghostSlots[i].gameObject, 0.0f);
+    for (size_t i = 0; i < oldSlots.size(); ++i) {
+        if (oldSlots[i].clonedPackTex) {
+            DestroyObjectDirect(oldSlots[i].clonedPackTex, 0.0f);
+            oldSlots[i].clonedPackTex = nullptr;
+        }
+        if (oldSlots[i].gameObject) {
+            DestroyObjectDirect(oldSlots[i].gameObject, 0.0f);
             destroyed++;
         }
     }
-    s_ghostSlots.clear();
     if (destroyed > 0) {
         Logger::Info("Destroyed " + std::to_string(destroyed) + " 3D Ghost Car visual(s).");
     }
@@ -2272,6 +2521,8 @@ void UnityBridge::ApplyAllReplayTracksAtTimeInternal(float targetTime, float off
     uint32_t trackCount = ReplayEngine::GetReplayTrackCount();
     if (trackCount == 0) return;
 
+    const float totalDur = ReplayEngine::GetReplayDuration();
+
     for (uint32_t t = 0; t < trackCount; ++t) {
         ReplayFrame frame;
         if (!ReplayEngine::GetInterpolatedTrackFrame(static_cast<int>(t), targetTime, frame)) {
@@ -2292,15 +2543,92 @@ void UnityBridge::ApplyAllReplayTracksAtTimeInternal(float targetTime, float off
             frame.transformMatrix[2] * offsetRight
         };
         ApplyGhostPoseToSlot(t, frame.transformMatrix, frame.wheelMatrices, frame.caliperMatrices, frame.steerAngle, worldOffset, dt);
+
+        // Compute clean velocity vector from adjacent replay samples (works even while paused or on frame 0!)
+        UnityVector3 velVec{ 0.0f, 0.0f, 0.0f };
+        const float eps = 0.04f;
+        const float t0 = (std::max)(0.0f, targetTime - eps);
+        const float t1 = (totalDur > 0.0f) ? (std::min)(totalDur, targetTime + eps) : (targetTime + eps);
+        ReplayFrame f0{}, f1{};
+        if ((t1 - t0) > 0.005f &&
+            ReplayEngine::GetInterpolatedTrackFrame(static_cast<int>(t), t0, f0) &&
+            ReplayEngine::GetInterpolatedTrackFrame(static_cast<int>(t), t1, f1)) {
+            const float invSpan = 1.0f / (t1 - t0);
+            velVec.x = ((f1.transformMatrix[12] + f1.transformMatrix[0] * offsetRight) -
+                        (f0.transformMatrix[12] + f0.transformMatrix[0] * offsetRight)) * invSpan;
+            velVec.y = ((f1.transformMatrix[13] + f1.transformMatrix[1] * offsetRight) -
+                        (f0.transformMatrix[13] + f0.transformMatrix[1] * offsetRight)) * invSpan;
+            velVec.z = ((f1.transformMatrix[14] + f1.transformMatrix[2] * offsetRight) -
+                        (f0.transformMatrix[14] + f0.transformMatrix[2] * offsetRight)) * invSpan;
+        }
+
+        bool hasActiveSlot = false;
+        float rAccel = (frame.flags & (1u << 2)) ? 1.0f : 0.0f;
+        float rBrake = (frame.flags & (1u << 0)) ? 1.0f : 0.0f;
+        float rHandbrake = (frame.flags & (1u << 1)) ? 1.0f : 0.0f;
+        float rSteerDeg = frame.steerAngle * 57.2957795f;
+        GhostSlot syncCopy;
+        {
+            std::lock_guard<std::recursive_mutex> lock(s_mutex);
+            if (t < s_ghostSlots.size() && s_ghostSlots[t].gameObject) {
+                GhostSlot& slot = s_ghostSlots[t];
+                slot.replayTeleValid = true;
+                slot.replaySpeedKmh = frame.speedKmh;
+                slot.replayRpm = frame.rpm;
+                slot.replayGear = frame.gear;
+                slot.replaySteerDeg = rSteerDeg;
+                slot.replayAccel = rAccel;
+                slot.replayBrake = rBrake;
+                slot.replayHandbrake = rHandbrake;
+                slot.replayWorldVel = velVec;
+                syncCopy.isolatedBodyMatId = slot.isolatedBodyMatId;
+                syncCopy.savedBodyOrigQueue = slot.savedBodyOrigQueue;
+                syncCopy.replayShaderApplied = slot.replayShaderApplied;
+                syncCopy.replayShaderSourceKey = slot.replayShaderSourceKey;
+                hasActiveSlot = true;
+            }
+        }
+
+        if (hasActiveSlot) {
+            const int gTarget = CarFX::GhostTargetFromSlot(static_cast<int>(t));
+            if (gTarget != CarFX::kTargetNone) {
+                SyncGhostSlotCarFXMaterialsAndShader(t, syncCopy, true);
+                {
+                    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+                    if (t < s_ghostSlots.size()) {
+                        s_ghostSlots[t].replayShaderApplied = syncCopy.replayShaderApplied;
+                        s_ghostSlots[t].replayShaderSourceKey = std::move(syncCopy.replayShaderSourceKey);
+                    }
+                }
+
+                const float speedFactor = std::clamp(frame.speedKmh / 35.0f, 0.0f, 1.0f);
+                const float steerRad = fabsf(frame.steerAngle);
+                const float driftNorm = std::clamp(steerRad * 2.2f * speedFactor +
+                    (rHandbrake > 0.5f ? 0.4f * speedFactor : 0.0f), 0.0f, 1.0f);
+
+                CarFX::SetGameInput(0, frame.speedKmh, gTarget);
+                CarFX::SetGameInput(1, frame.rpm, gTarget);
+                CarFX::SetGameInput(2, fabsf(rSteerDeg), gTarget);
+                CarFX::SetGameInput(3, driftNorm, gTarget);
+                CarFX::SetGameInput(4, rAccel, gTarget);
+                CarFX::SetGameInput(5, rBrake, gTarget);
+                CarFX::SetGameInput(6, static_cast<float>(frame.gear), gTarget);
+            }
+        }
     }
 
     // Remove surplus ghost slots if switching to a replay with fewer tracks
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    if (s_ghostSlots.size() > trackCount) {
-        for (size_t i = trackCount; i < s_ghostSlots.size(); ++i) {
-            DestroyGhostSlotInternal(i);
+    std::vector<GhostSlot> surplus;
+    {
+        std::lock_guard<std::recursive_mutex> lock(s_mutex);
+        if (s_ghostSlots.size() > trackCount) {
+            surplus.assign(std::make_move_iterator(s_ghostSlots.begin() + trackCount),
+                           std::make_move_iterator(s_ghostSlots.end()));
+            s_ghostSlots.resize(trackCount);
         }
-        s_ghostSlots.resize(trackCount);
+    }
+    for (size_t i = 0; i < surplus.size(); ++i) {
+        DestroyDetachedGhostSlot(trackCount + i, surplus[i]);
     }
 }
 
@@ -2384,78 +2712,70 @@ static UnityVector3 ClosestPointOnOBB(const UnityVector3& pt,
     };
 }
 
-void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<LiveCarInfo>& liveSnapshot) {
+struct VehicleOBBCandidate {
+    int ownerTag = 0; // -1 = local player, 0..999 = remote/AI, 1000+slot = ghost
+    UnityVector3 center{};
+    UnityVector3 right{ 1.0f, 0.0f, 0.0f };
+    UnityVector3 up{ 0.0f, 1.0f, 0.0f };
+    UnityVector3 fwd{ 0.0f, 0.0f, 1.0f };
+    float halfW = 0.96f;
+    float halfH = 0.65f;
+    float halfL = 2.25f;
+};
+
+struct CarSpatialTracker {
+    struct SmoothZone {
+        bool valid = false;
+        float missAge = 0.0f;
+        float localPt[3] = { 0.0f, 0.0f, 0.0f };
+        float gap = 999.0f;
+        UnityVector3 normal{ 0.0f, 1.0f, 0.0f };
+    } zones[11]{};
+    bool nearValid = false;
+    float nearGap = 999.0f;
+    float nearLocalCenter[3] = { 0.0f, 0.0f, 0.0f };
+    float nearLocalClosest[3] = { 0.0f, 0.0f, 0.0f };
+    float nearLocalRight[3] = { 1.0f, 0.0f, 0.0f };
+    float nearLocalFwd[3] = { 0.0f, 0.0f, 1.0f };
+    float nearExtents[3] = { 0.96f, 0.65f, 2.25f };
+    float smoothDriftAbs = 0.0f;
+    float smoothDriftSigned = 0.0f;
+    bool hasPrevPos = false;
+    UnityVector3 prevPos{};
+
+    void ResetSmooth() {
+        for (auto& z : zones) z = SmoothZone{};
+        nearValid = false;
+        nearGap = 999.0f;
+        smoothDriftAbs = 0.0f;
+        smoothDriftSigned = 0.0f;
+        hasPrevPos = false;
+    }
+};
+
+static void EvaluateCarSpatialTarget(
+    int carfxTarget,
+    int selfOwnerTag,
+    const UnityVector3& pPos,
+    const UnityVector3& pRight,
+    const UnityVector3& pUp,
+    const UnityVector3& pFwd,
+    float halfW, float halfH, float halfL,
+    float frontAxleZ, float rearAxleZ,
+    bool hasVel, const float rawVel[3],
+    bool hasCamPos, const UnityVector3& camPos,
+    void* fnRaycast,
+    float dt,
+    const std::vector<VehicleOBBCandidate>& otherCars,
+    CarSpatialTracker& tr)
+{
     CarFX::SpatialProximityInput sp{};
-
-    void* localRootTf = nullptr;
-    UnityVector3 pPos{};
-    UnityVector4 pRot{ 0.0f, 0.0f, 0.0f, 1.0f };
-    bool hasLocal = false;
-
-    for (const auto& c : liveSnapshot) {
-        if (c.isLocalPlayer) {
-            localRootTf = c.rootTf;
-            pPos = { c.x, c.y, c.z };
-            pRot = { c.qx, c.qy, c.qz, c.qw };
-            hasLocal = c.hasPos || c.hasRot;
-            break;
-        }
-    }
-    if (localRootTf && GetTransformPosRotDirect(localRootTf, pPos, pRot)) {
-        hasLocal = true;
-    }
-    if (!hasLocal) {
-        CarFX::SetSpatialProximity(sp);
-        return;
-    }
-
-    UnityVector3 pRight, pUp, pFwd;
-    QuatToAxes(pRot, pRight, pUp, pFwd);
-
-    float halfW = 0.96f, halfL = 2.20f, halfH = 0.65f;
-    float frontAxleZ = halfL * 0.62f;
-    float rearAxleZ  = -halfL * 0.62f;
-    CarTelemetry player = NativeCarX::GetPlayerCarTelemetry();
-    if (player.carPtr) {
-        float wheelMats[4][16];
-        for (int w = 0; w < 4; ++w) {
-            memcpy(wheelMats[w], player.wheels[w].matrix.data(), sizeof(float) * 16);
-        }
-        EstimateCarExtents(player.transformMatrix.data(), wheelMats, halfW, halfL);
-        halfW = std::clamp(halfW, 0.75f, 1.35f);
-        halfL = std::clamp(halfL, 1.65f, 2.75f);
-
-        float wMag = fabsf(wheelMats[0][12]) + fabsf(wheelMats[1][12]) + fabsf(wheelMats[2][12]) + fabsf(wheelMats[3][12]);
-        if (wMag > 0.01f) {
-            float wz[4] = {};
-            for (int w = 0; w < 4; ++w) {
-                UnityVector3 dw = { wheelMats[w][12] - pPos.x, wheelMats[w][13] - pPos.y, wheelMats[w][14] - pPos.z };
-                wz[w] = VecDot(dw, pFwd);
-            }
-            std::sort(wz, wz + 4);
-            float rZ = 0.5f * (wz[0] + wz[1]);
-            float fZ = 0.5f * (wz[2] + wz[3]);
-            if (fZ - rZ > 1.35f && fZ - rZ < 4.40f) {
-                frontAxleZ = fZ;
-                rearAxleZ  = rZ;
-            }
-        }
-    }
-
     sp.carPos[0] = pPos.x; sp.carPos[1] = pPos.y; sp.carPos[2] = pPos.z; sp.carPos[3] = halfW;
     sp.carRight[0] = pRight.x; sp.carRight[1] = pRight.y; sp.carRight[2] = pRight.z; sp.carRight[3] = halfL;
     sp.carUp[0] = pUp.x; sp.carUp[1] = pUp.y; sp.carUp[2] = pUp.z; sp.carUp[3] = halfH * 2.0f;
     sp.carFwd[0] = pFwd.x; sp.carFwd[1] = pFwd.y; sp.carFwd[2] = pFwd.z; sp.carFwd[3] = 1.0f;
-
-    UnityVector3 camPos{};
-    void* dbgCamNat = pfn_GetMainCameraNative ? pfn_GetMainCameraNative() : nullptr;
-    if (SafeGetMainCameraPosSEH(reinterpret_cast<void*>(pfn_GetMainCameraNative),
-                                reinterpret_cast<void*>(pfn_Transform_get_position),
-                                &camPos)) {
-        sp.camPos[0] = camPos.x;
-        sp.camPos[1] = camPos.y;
-        sp.camPos[2] = camPos.z;
-        sp.camPos[3] = 1.0f;
+    if (hasCamPos) {
+        sp.camPos[0] = camPos.x; sp.camPos[1] = camPos.y; sp.camPos[2] = camPos.z; sp.camPos[3] = 1.0f;
     }
 
     // 1. Volumetric perimeter proximity queries (3D SphereCasts + barrier layer + low-curb CastRays, 8 zones incl. doors)
@@ -2466,14 +2786,8 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
         UnityVector3 normal{ 0.0f, 1.0f, 0.0f };
     };
     enum ZoneId {
-        kZoneFront = 0,
-        kZoneRear,
-        kZoneDoorL,
-        kZoneDoorR,
-        kZoneFrontL,
-        kZoneFrontR,
-        kZoneRearL,
-        kZoneRearR,
+        kZoneFront = 0, kZoneRear, kZoneDoorL, kZoneDoorR,
+        kZoneFrontL, kZoneFrontR, kZoneRearL, kZoneRearR,
         kZoneCount
     };
     RawZoneHit rawZones[kZoneCount];
@@ -2486,8 +2800,6 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
 
         const float fbStart = (std::max)(0.35f, halfL - 1.15f);
         const float lrStart = (std::max)(0.10f, halfW - 0.72f);
-
-        // Door span between front & rear wheel arches
         const float doorCenterZ  = 0.5f * (frontAxleZ + rearAxleZ);
         const float doorHalfSpan = std::clamp(0.5f * (frontAxleZ - rearAxleZ) - 0.36f, 0.25f, 0.90f);
         const float frontSideZ   = (std::min)(halfL - 0.15f, frontAxleZ + 0.46f);
@@ -2505,7 +2817,6 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
 
         auto recordWallHit = [&](int hintZone, const UnityVector3& dir, const UnityVector3& hitPt, const UnityVector3& hitNorm) {
             const UnityVector3 rel = { hitPt.x - pPos.x, hitPt.y - pPos.y, hitPt.z - pPos.z };
-            // Ignore points completely behind the car relative to query direction
             if (VecDot(rel, dir) <= 0.05f) return;
 
             const float lx = VecDot(rel, pRight);
@@ -2520,7 +2831,6 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
 
             recordZoneCandidate(hintZone, gap, hitPt, hitNorm);
 
-            // Soft car-local OBB attribution across adjacent sectors so angled/curved walls never lose continuity
             if (lz >= halfL - 0.18f && fabsf(lx) <= halfW + 0.35f)
                 recordZoneCandidate(kZoneFront, gap, hitPt, hitNorm);
             if (lz <= -halfL + 0.18f && fabsf(lx) <= halfW + 0.35f)
@@ -2579,13 +2889,11 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
                 bool dotsExecuted = false;
                 bool hit = EcsCollision::SphereCast(origArr, curRadius, dirArr, remDist, dotsBelongs, collidesMask, shit, 1, &dotsExecuted);
                 sphereWorked = sphereWorked || dotsExecuted;
-                if (!hit) {
-                    break;
-                }
+                if (!hit) break;
+
                 UnityVector3 hitPt{ shit.position[0], shit.position[1], shit.position[2] };
                 UnityVector3 hitNorm{ shit.surfaceNormal[0], shit.surfaceNormal[1], shit.surfaceNormal[2] };
                 if (isGroundSlope(hitNorm, maxSlopeCos)) {
-                    // Climb past sloped road asphalt / curb apron so walls behind banks are never occluded
                     float advance = (std::max)(0.25f, shit.fraction * remDist + 0.14f);
                     if (advance >= remDist - 0.15f) break;
                     curOrig = {
@@ -2616,10 +2924,10 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
                     if (!isGroundSlope(hitNorm, maxSlopeCos)) {
                         recordWallHit(zone, dir, { dhit.point[0], dhit.point[1], dhit.point[2] }, hitNorm);
                     }
-                } else if (pfn_InternalRaycast) {
+                } else if (fnRaycast) {
                     UnityRay ray{ rayOrig, dir };
                     UnityRaycastHit hit{};
-                    if (SafePhysicsRaycastSEH(reinterpret_cast<void*>(pfn_InternalRaycast), &ray, rayLen, &hit, physxLayerMask)) {
+                    if (SafePhysicsRaycastSEH(fnRaycast, &ray, rayLen, &hit, physxLayerMask)) {
                         if (!isGroundSlope(hit.normal, maxSlopeCos)) {
                             recordWallHit(zone, dir, hit.point, hit.normal);
                         }
@@ -2645,7 +2953,6 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
             DotsRaycastHit dhit{};
             if (EcsCollision::CastRay(start, end, dotsBelongs, dotsCollidesStatic, dhit)) {
                 UnityVector3 hitNorm{ dhit.normal[0], dhit.normal[1], dhit.normal[2] };
-                // Strict curb vertical threshold (< ~52 deg flat/road excluded) so low rays never catch road camber
                 if (!isGroundSlope(hitNorm, 0.62f)) {
                     recordWallHit(zone, dir, { dhit.point[0], dhit.point[1], dhit.point[2] }, hitNorm);
                 }
@@ -2653,39 +2960,31 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
         };
 
         struct ProbeDef { int zone; float sx, sy, sz; float dx, dy, dz; };
-
-        // A) Overlapping volumetric beltline SphereCasts (r=0.27m @ y=0.62m -> 0.35m..0.89m continuous band)
         const ProbeDef mainProbes[] = {
-            // Front bumper curtain
             { kZoneFront,  -0.62f, 0.62f,  fbStart,   0.00f, 0.0f,  1.00f },
             { kZoneFront,  -0.22f, 0.62f,  fbStart,   0.00f, 0.0f,  1.00f },
             { kZoneFront,   0.22f, 0.62f,  fbStart,   0.00f, 0.0f,  1.00f },
             { kZoneFront,   0.62f, 0.62f,  fbStart,   0.00f, 0.0f,  1.00f },
-            // Rear bumper curtain
             { kZoneRear,   -0.62f, 0.62f, -fbStart,   0.00f, 0.0f, -1.00f },
             { kZoneRear,   -0.22f, 0.62f, -fbStart,   0.00f, 0.0f, -1.00f },
             { kZoneRear,    0.22f, 0.62f, -fbStart,   0.00f, 0.0f, -1.00f },
             { kZoneRear,    0.62f, 0.62f, -fbStart,   0.00f, 0.0f, -1.00f },
-            // Left door (3 overlapping lateral + 2 forward/aft splayed sweeps)
             { kZoneDoorL,  -lrStart, 0.62f, doorCenterZ - doorHalfSpan, -1.00f, 0.0f,  0.00f },
             { kZoneDoorL,  -lrStart, 0.62f, doorCenterZ,                -1.00f, 0.0f,  0.00f },
             { kZoneDoorL,  -lrStart, 0.62f, doorCenterZ + doorHalfSpan, -1.00f, 0.0f,  0.00f },
             { kZoneDoorL,  -lrStart, 0.62f, doorCenterZ,                -0.94f, 0.0f,  0.34f },
             { kZoneDoorL,  -lrStart, 0.62f, doorCenterZ,                -0.94f, 0.0f, -0.34f },
-            // Right door
             { kZoneDoorR,   lrStart, 0.62f, doorCenterZ - doorHalfSpan,  1.00f, 0.0f,  0.00f },
             { kZoneDoorR,   lrStart, 0.62f, doorCenterZ,                 1.00f, 0.0f,  0.00f },
             { kZoneDoorR,   lrStart, 0.62f, doorCenterZ + doorHalfSpan,  1.00f, 0.0f,  0.00f },
             { kZoneDoorR,   lrStart, 0.62f, doorCenterZ,                 0.94f, 0.0f,  0.34f },
             { kZoneDoorR,   lrStart, 0.62f, doorCenterZ,                 0.94f, 0.0f, -0.34f },
-            // Front-Left & Front-Right fenders / corners (360-deg angular continuity)
             { kZoneFrontL, -lrStart, 0.62f, frontAxleZ,                 -1.00f, 0.0f,  0.00f },
             { kZoneFrontL, -lrStart, 0.62f, frontSideZ,                 -0.80f, 0.0f,  0.60f },
             { kZoneFrontL, -0.48f,   0.62f, fbStart,                    -0.44f, 0.0f,  0.90f },
             { kZoneFrontR,  lrStart, 0.62f, frontAxleZ,                  1.00f, 0.0f,  0.00f },
             { kZoneFrontR,  lrStart, 0.62f, frontSideZ,                  0.80f, 0.0f,  0.60f },
             { kZoneFrontR,  0.48f,   0.62f, fbStart,                     0.44f, 0.0f,  0.90f },
-            // Rear-Left & Rear-Right quarters / corners
             { kZoneRearL,  -lrStart, 0.62f, rearAxleZ,                  -1.00f, 0.0f,  0.00f },
             { kZoneRearL,  -lrStart, 0.62f, rearSideZ,                  -0.80f, 0.0f, -0.60f },
             { kZoneRearL,  -0.48f,   0.62f,-fbStart,                    -0.44f, 0.0f, -0.90f },
@@ -2698,105 +2997,71 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
                             0.27f, dotsCollidesStatic, 0.72f, 2, true);
         }
 
-        // B) Dedicated barrier-layer wide SphereCasts (0x10000 = car barriers, r=0.38m -> 0.26m..1.02m, zero asphalt)
         const ProbeDef barrierProbes[] = {
-            { kZoneFront,   0.00f,   0.64f,  fbStart,                    0.00f, 0.0f,  1.00f },
-            { kZoneRear,    0.00f,   0.64f, -fbStart,                    0.00f, 0.0f, -1.00f },
-            { kZoneDoorL,  -lrStart, 0.64f, doorCenterZ - doorHalfSpan * 0.5f, -1.0f, 0.0f, 0.0f },
-            { kZoneDoorL,  -lrStart, 0.64f, doorCenterZ + doorHalfSpan * 0.5f, -1.0f, 0.0f, 0.0f },
-            { kZoneDoorR,   lrStart, 0.64f, doorCenterZ - doorHalfSpan * 0.5f,  1.0f, 0.0f, 0.0f },
-            { kZoneDoorR,   lrStart, 0.64f, doorCenterZ + doorHalfSpan * 0.5f,  1.0f, 0.0f, 0.0f },
-            { kZoneFrontL, -0.45f,   0.64f, frontSideZ,                 -0.71f, 0.0f,  0.71f },
-            { kZoneFrontR,  0.45f,   0.64f, frontSideZ,                  0.71f, 0.0f,  0.71f },
-            { kZoneRearL,  -0.45f,   0.64f, rearSideZ,                  -0.71f, 0.0f, -0.71f },
-            { kZoneRearR,   0.45f,   0.64f, rearSideZ,                   0.71f, 0.0f, -0.71f },
+            { kZoneFront,   0.00f,   0.64f,  fbStart,                           0.00f, 0.0f,  1.00f },
+            { kZoneRear,    0.00f,   0.64f, -fbStart,                           0.00f, 0.0f, -1.00f },
+            { kZoneDoorL,  -lrStart, 0.64f, doorCenterZ - doorHalfSpan * 0.5f, -1.0f,  0.0f,  0.0f },
+            { kZoneDoorL,  -lrStart, 0.64f, doorCenterZ + doorHalfSpan * 0.5f, -1.0f,  0.0f,  0.0f },
+            { kZoneDoorR,   lrStart, 0.64f, doorCenterZ - doorHalfSpan * 0.5f,  1.0f,  0.0f,  0.0f },
+            { kZoneDoorR,   lrStart, 0.64f, doorCenterZ + doorHalfSpan * 0.5f,  1.0f,  0.0f,  0.0f },
+            { kZoneFrontL, -0.45f,   0.64f, frontSideZ,                        -0.71f, 0.0f,  0.71f },
+            { kZoneFrontR,  0.45f,   0.64f, frontSideZ,                         0.71f, 0.0f,  0.71f },
+            { kZoneRearL,  -0.45f,   0.64f, rearSideZ,                         -0.71f, 0.0f, -0.71f },
+            { kZoneRearR,   0.45f,   0.64f, rearSideZ,                          0.71f, 0.0f, -0.71f },
         };
         for (const auto& pd : barrierProbes) {
             probeWallSphere(pd.zone, pd.sx, pd.sy, pd.sz, pd.dx, pd.dy, pd.dz,
                             0.38f, dotsCollidesBarrier, 0.88f, 0, false);
         }
 
-        // C) Upper-band SphereCasts (r=0.25m @ y=0.98m -> 0.73m..1.23m for tall posts, walls & fences)
         const ProbeDef highProbes[] = {
-            { kZoneFront,   0.00f,   0.98f,  fbStart,                    0.00f, 0.0f,  1.00f },
-            { kZoneRear,    0.00f,   0.98f, -fbStart,                    0.00f, 0.0f, -1.00f },
-            { kZoneDoorL,  -lrStart, 0.98f, doorCenterZ,                -1.00f, 0.0f,  0.00f },
-            { kZoneDoorR,   lrStart, 0.98f, doorCenterZ,                 1.00f, 0.0f,  0.00f },
-            { kZoneFrontL, -0.45f,   0.98f, frontSideZ,                 -0.71f, 0.0f,  0.71f },
-            { kZoneFrontR,  0.45f,   0.98f, frontSideZ,                  0.71f, 0.0f,  0.71f },
-            { kZoneRearL,  -0.45f,   0.98f, rearSideZ,                  -0.71f, 0.0f, -0.71f },
-            { kZoneRearR,   0.45f,   0.98f, rearSideZ,                   0.71f, 0.0f, -0.71f },
+            { kZoneFront,   0.00f,   0.98f,  fbStart,    0.00f, 0.0f,  1.00f },
+            { kZoneRear,    0.00f,   0.98f, -fbStart,    0.00f, 0.0f, -1.00f },
+            { kZoneDoorL,  -lrStart, 0.98f, doorCenterZ,-1.00f, 0.0f,  0.00f },
+            { kZoneDoorR,   lrStart, 0.98f, doorCenterZ, 1.00f, 0.0f,  0.00f },
+            { kZoneFrontL, -0.45f,   0.98f, frontSideZ, -0.71f, 0.0f,  0.71f },
+            { kZoneFrontR,  0.45f,   0.98f, frontSideZ,  0.71f, 0.0f,  0.71f },
+            { kZoneRearL,  -0.45f,   0.98f, rearSideZ,  -0.71f, 0.0f, -0.71f },
+            { kZoneRearR,   0.45f,   0.98f, rearSideZ,   0.71f, 0.0f, -0.71f },
         };
         for (const auto& pd : highProbes) {
             probeWallSphere(pd.zone, pd.sx, pd.sy, pd.sz, pd.dx, pd.dy, pd.dz,
                             0.25f, dotsCollidesStatic, 0.72f, 1, false);
         }
 
-        // D) Low-curb vertical-face support rays (y=0.24m)
         const ProbeDef curbRays[] = {
-            { kZoneFront,  -0.45f,   0.24f,  fbStart,    0.00f, 0.0f,  1.00f },
-            { kZoneFront,   0.45f,   0.24f,  fbStart,    0.00f, 0.0f,  1.00f },
-            { kZoneRear,   -0.45f,   0.24f, -fbStart,    0.00f, 0.0f, -1.00f },
-            { kZoneRear,    0.45f,   0.24f, -fbStart,    0.00f, 0.0f, -1.00f },
-            { kZoneDoorL,  -lrStart, 0.24f, doorCenterZ - doorHalfSpan * 0.5f, -1.0f, 0.0f, 0.0f },
-            { kZoneDoorL,  -lrStart, 0.24f, doorCenterZ + doorHalfSpan * 0.5f, -1.0f, 0.0f, 0.0f },
-            { kZoneDoorR,   lrStart, 0.24f, doorCenterZ - doorHalfSpan * 0.5f,  1.0f, 0.0f, 0.0f },
-            { kZoneDoorR,   lrStart, 0.24f, doorCenterZ + doorHalfSpan * 0.5f,  1.0f, 0.0f, 0.0f },
-            { kZoneFrontL, -0.45f,   0.24f, frontSideZ, -0.71f, 0.0f,  0.71f },
-            { kZoneFrontR,  0.45f,   0.24f, frontSideZ,  0.71f, 0.0f,  0.71f },
-            { kZoneRearL,  -0.45f,   0.24f, rearSideZ,  -0.71f, 0.0f, -0.71f },
-            { kZoneRearR,   0.45f,   0.24f, rearSideZ,   0.71f, 0.0f, -0.71f },
+            { kZoneFront,  -0.45f,   0.24f,  fbStart,                           0.00f, 0.0f,  1.00f },
+            { kZoneFront,   0.45f,   0.24f,  fbStart,                           0.00f, 0.0f,  1.00f },
+            { kZoneRear,   -0.45f,   0.24f, -fbStart,                           0.00f, 0.0f, -1.00f },
+            { kZoneRear,    0.45f,   0.24f, -fbStart,                           0.00f, 0.0f, -1.00f },
+            { kZoneDoorL,  -lrStart, 0.24f, doorCenterZ - doorHalfSpan * 0.5f, -1.0f,  0.0f,  0.0f },
+            { kZoneDoorL,  -lrStart, 0.24f, doorCenterZ + doorHalfSpan * 0.5f, -1.0f,  0.0f,  0.0f },
+            { kZoneDoorR,   lrStart, 0.24f, doorCenterZ - doorHalfSpan * 0.5f,  1.0f,  0.0f,  0.0f },
+            { kZoneDoorR,   lrStart, 0.24f, doorCenterZ + doorHalfSpan * 0.5f,  1.0f,  0.0f,  0.0f },
+            { kZoneFrontL, -0.45f,   0.24f, frontSideZ,                        -0.71f, 0.0f,  0.71f },
+            { kZoneFrontR,  0.45f,   0.24f, frontSideZ,                         0.71f, 0.0f,  0.71f },
+            { kZoneRearL,  -0.45f,   0.24f, rearSideZ,                         -0.71f, 0.0f, -0.71f },
+            { kZoneRearR,   0.45f,   0.24f, rearSideZ,                          0.71f, 0.0f, -0.71f },
         };
         for (const auto& pd : curbRays) {
             probeLowCurbRay(pd.zone, pd.sx, pd.sy, pd.sz, pd.dx, pd.dy, pd.dz);
         }
     }
 
-    // Smooth per-zone hits in vehicle-local space (prevents jumping/snapping and keeps moving smoothness independent of car speed)
-    struct SmoothZoneState {
-        bool valid = false;
-        float missAge = 0.0f;
-        float localPt[3] = { 0.0f, 0.0f, 0.0f };
-        float gap = 999.0f;
-        UnityVector3 normal{ 0.0f, 1.0f, 0.0f };
-    };
     enum SmoothSlot {
         kSmFront = 0, kSmRear, kSmDoorL, kSmDoorR,
         kSmFrontL, kSmFrontR, kSmRearL, kSmRearR,
         kSmSideL, kSmSideR, kSmNearest, kSmTotal
     };
-    static SmoothZoneState s_zoneSmooth[kSmTotal];
-    static std::chrono::steady_clock::time_point s_prevSpatTime{};
-    static bool  s_nearCarValid = false;
-    static float s_nearCarGap = 999.0f;
-    static float s_nearLocalCenter[3] = { 0.0f, 0.0f, 0.0f };
-    static float s_nearLocalClosest[3] = { 0.0f, 0.0f, 0.0f };
-    static float s_nearLocalRight[3] = { 1.0f, 0.0f, 0.0f };
-    static float s_nearLocalFwd[3]   = { 0.0f, 0.0f, 1.0f };
-    static float s_nearExtents[3]    = { 0.96f, 0.65f, 2.25f };
-
-    auto nowTp = std::chrono::steady_clock::now();
-    float dt = 0.016f;
-    if (s_prevSpatTime.time_since_epoch().count() != 0) {
-        dt = std::chrono::duration<float>(nowTp - s_prevSpatTime).count();
-    }
-    s_prevSpatTime = nowTp;
-    if (dt > 0.40f) {
-        for (auto& zs : s_zoneSmooth) zs = SmoothZoneState{};
-        s_nearCarValid = false;
-        s_nearCarGap = 999.0f;
-    }
-    dt = std::clamp(dt, 0.0005f, 0.08f);
-
     float flowSpeed = 6.0f;
-    CarFX::GetParamByName(CarFX::kTargetBody, "flowSpeed", &flowSpeed, 1);
+    CarFX::GetParamByName(carfxTarget, "flowSpeed", &flowSpeed, 1);
     flowSpeed = std::clamp(flowSpeed, 0.3f, 60.0f);
     const float fadeCeiling = 10.5f;
     const float alphaGap = (flowSpeed >= 28.0f) ? 1.0f : (1.0f - expf(-flowSpeed * dt));
     const float alphaPos = (flowSpeed >= 28.0f) ? 1.0f : (1.0f - expf(-(flowSpeed * 1.45f) * dt));
 
     auto updateSmoothZone = [&](int slotIdx, const RawZoneHit& raw, float outVec[4]) {
-        SmoothZoneState& zs = s_zoneSmooth[slotIdx];
+        CarSpatialTracker::SmoothZone& zs = tr.zones[slotIdx];
         if (raw.hit && raw.gap < fadeCeiling) {
             zs.missAge = 0.0f;
             UnityVector3 rel = { raw.point.x - pPos.x, raw.point.y - pPos.y, raw.point.z - pPos.z };
@@ -2841,7 +3106,6 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
         }
     };
 
-    // Aggregate Left, Right & Nearest raw hits
     RawZoneHit rawSideL, rawSideR, rawNearest;
     for (int z : { kZoneFrontL, kZoneDoorL, kZoneRearL }) {
         if (rawZones[z].hit && (!rawSideL.hit || rawZones[z].gap < rawSideL.gap)) rawSideL = rawZones[z];
@@ -2870,8 +3134,8 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
     sp.wallDirDist[2] = sp.wallLeftHit[3];
     sp.wallDirDist[3] = sp.wallRightHit[3];
 
-    if (s_zoneSmooth[kSmNearest].valid) {
-        UnityVector3 n = VecNormalize(s_zoneSmooth[kSmNearest].normal);
+    if (tr.zones[kSmNearest].valid) {
+        UnityVector3 n = VecNormalize(tr.zones[kSmNearest].normal);
         sp.wallNearestNormal[0] = n.x;
         sp.wallNearestNormal[1] = n.y;
         sp.wallNearestNormal[2] = n.z;
@@ -2883,7 +3147,7 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
     if (sp.wallRightHit[3] < fadeCeiling) activeMask |= 8;
     sp.wallNearestNormal[3] = static_cast<float>(activeMask);
 
-    // 2. Nearest other vehicle (network/AI cars + active 3D Ghost slots)
+    // 2. Nearest other vehicle (OBB surface gap against all candidates excluding self)
     const UnityVector3 pCenter = {
         pPos.x + pUp.x * halfH,
         pPos.y + pUp.y * halfH,
@@ -2893,64 +3157,29 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
     UnityVector3 bestOCenter{}, bestORight{ 1,0,0 }, bestOFwd{ 0,0,1 }, bestCClosest{};
     float bestOHw = 0.96f, bestOHh = 0.65f, bestOHl = 2.25f;
 
-    auto considerOtherCar = [&](const UnityVector3& oCenter,
-                                const UnityVector3& oRight,
-                                const UnityVector3& oUp,
-                                const UnityVector3& oFwd,
-                                float oHalfW, float oHalfH, float oHalfL) {
-        float dx = oCenter.x - pCenter.x;
-        float dy = oCenter.y - pCenter.y;
-        float dz = oCenter.z - pCenter.z;
-        if (dx * dx + dy * dy + dz * dz > 1600.0f) return; // > 40m ignore
+    for (const auto& cand : otherCars) {
+        if (cand.ownerTag == selfOwnerTag) continue;
+        float dx = cand.center.x - pCenter.x;
+        float dy = cand.center.y - pCenter.y;
+        float dz = cand.center.z - pCenter.z;
+        if (dx * dx + dy * dy + dz * dz > 1600.0f) continue;
 
-        UnityVector3 cOther = ClosestPointOnOBB(pCenter, oCenter, oRight, oUp, oFwd, oHalfW, oHalfH, oHalfL);
-        UnityVector3 cPlayer = ClosestPointOnOBB(cOther, pCenter, pRight, pUp, pFwd, halfW, halfH, halfL);
-        cOther = ClosestPointOnOBB(cPlayer, oCenter, oRight, oUp, oFwd, oHalfW, oHalfH, oHalfL);
+        UnityVector3 cOther = ClosestPointOnOBB(pCenter, cand.center, cand.right, cand.up, cand.fwd, cand.halfW, cand.halfH, cand.halfL);
+        UnityVector3 cSelf = ClosestPointOnOBB(cOther, pCenter, pRight, pUp, pFwd, halfW, halfH, halfL);
+        cOther = ClosestPointOnOBB(cSelf, cand.center, cand.right, cand.up, cand.fwd, cand.halfW, cand.halfH, cand.halfL);
 
-        float gx = cOther.x - cPlayer.x;
-        float gy = cOther.y - cPlayer.y;
-        float gz = cOther.z - cPlayer.z;
+        float gx = cOther.x - cSelf.x;
+        float gy = cOther.y - cSelf.y;
+        float gz = cOther.z - cSelf.z;
         float gap = sqrtf(gx * gx + gy * gy + gz * gz);
 
         if (gap < bestCarGap) {
             bestCarGap = gap;
-            bestOCenter = oCenter; bestORight = oRight; bestOFwd = oFwd; bestCClosest = cOther;
-            bestOHw = oHalfW; bestOHh = oHalfH; bestOHl = oHalfL;
-        }
-    };
-
-    for (const auto& c : liveSnapshot) {
-        if (c.isLocalPlayer) continue;
-        UnityVector3 oPos{ c.x, c.y, c.z };
-        UnityVector4 oRot{ c.qx, c.qy, c.qz, c.qw };
-        if (c.rootTf) {
-            GetTransformPosRotDirect(c.rootTf, oPos, oRot);
-        } else if (!c.hasPos && !c.hasRot) {
-            continue;
-        }
-        UnityVector3 oR, oU, oF;
-        QuatToAxes(oRot, oR, oU, oF);
-        UnityVector3 oCenter = { oPos.x + oU.x * 0.65f, oPos.y + oU.y * 0.65f, oPos.z + oU.z * 0.65f };
-        considerOtherCar(oCenter, oR, oU, oF, 0.96f, 0.65f, 2.25f);
-    }
-
-    {
-        std::lock_guard<std::recursive_mutex> lock(s_mutex);
-        for (const auto& slot : s_ghostSlots) {
-            if (!slot.gameObject || !slot.hasPose) continue;
-            UnityVector3 oR = VecNormalize({ slot.lastMatrix[0], slot.lastMatrix[1], slot.lastMatrix[2] });
-            UnityVector3 oU = VecNormalize({ slot.lastMatrix[4], slot.lastMatrix[5], slot.lastMatrix[6] });
-            UnityVector3 oF = VecNormalize({ slot.lastMatrix[8], slot.lastMatrix[9], slot.lastMatrix[10] });
-            UnityVector3 oCenter = {
-                slot.pos.x + oU.x * slot.halfHeight,
-                slot.pos.y + oU.y * slot.halfHeight,
-                slot.pos.z + oU.z * slot.halfHeight
-            };
-            considerOtherCar(oCenter, oR, oU, oF, slot.halfWidth, slot.halfHeight, slot.halfLength);
+            bestOCenter = cand.center; bestORight = cand.right; bestOFwd = cand.fwd; bestCClosest = cOther;
+            bestOHw = cand.halfW; bestOHh = cand.halfH; bestOHl = cand.halfL;
         }
     }
 
-    // Smooth near-car entry/exit gap & local-relative fade memory
     auto toLocalVec = [&](const UnityVector3& v, float out3[3]) {
         out3[0] = VecDot(v, pRight); out3[1] = VecDot(v, pUp); out3[2] = VecDot(v, pFwd);
     };
@@ -2965,21 +3194,21 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
     if (bestCarGap < fadeCeiling) {
         UnityVector3 dc = { bestOCenter.x - pPos.x, bestOCenter.y - pPos.y, bestOCenter.z - pPos.z };
         UnityVector3 dl = { bestCClosest.x - pPos.x, bestCClosest.y - pPos.y, bestCClosest.z - pPos.z };
-        toLocalVec(dc, s_nearLocalCenter);
-        toLocalVec(dl, s_nearLocalClosest);
-        toLocalVec(bestORight, s_nearLocalRight);
-        toLocalVec(bestOFwd,   s_nearLocalFwd);
-        s_nearExtents[0] = bestOHw; s_nearExtents[1] = bestOHh; s_nearExtents[2] = bestOHl;
+        toLocalVec(dc, tr.nearLocalCenter);
+        toLocalVec(dl, tr.nearLocalClosest);
+        toLocalVec(bestORight, tr.nearLocalRight);
+        toLocalVec(bestOFwd,   tr.nearLocalFwd);
+        tr.nearExtents[0] = bestOHw; tr.nearExtents[1] = bestOHh; tr.nearExtents[2] = bestOHl;
 
-        if (!s_nearCarValid || s_nearCarGap >= fadeCeiling - 0.1f) {
-            s_nearCarValid = true;
+        if (!tr.nearValid || tr.nearGap >= fadeCeiling - 0.1f) {
+            tr.nearValid = true;
             const float entryStart = (std::min)(fadeCeiling, (std::max)(bestCarGap + 2.8f, 3.8f));
-            s_nearCarGap = (alphaGap >= 0.999f) ? bestCarGap : (entryStart + (bestCarGap - entryStart) * alphaGap);
+            tr.nearGap = (alphaGap >= 0.999f) ? bestCarGap : (entryStart + (bestCarGap - entryStart) * alphaGap);
         } else {
-            s_nearCarGap += (bestCarGap - s_nearCarGap) * alphaGap;
+            tr.nearGap += (bestCarGap - tr.nearGap) * alphaGap;
         }
         sp.nearCarPos[0] = bestOCenter.x; sp.nearCarPos[1] = bestOCenter.y; sp.nearCarPos[2] = bestOCenter.z;
-        sp.nearCarPos[3] = s_nearCarGap;
+        sp.nearCarPos[3] = tr.nearGap;
         sp.nearCarRight[0] = bestORight.x; sp.nearCarRight[1] = bestORight.y; sp.nearCarRight[2] = bestORight.z;
         sp.nearCarRight[3] = bestOHw;
         sp.nearCarFwd[0] = bestOFwd.x; sp.nearCarFwd[1] = bestOFwd.y; sp.nearCarFwd[2] = bestOFwd.z;
@@ -2987,9 +3216,8 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
         sp.nearCarClosest[0] = bestCClosest.x; sp.nearCarClosest[1] = bestCClosest.y; sp.nearCarClosest[2] = bestCClosest.z;
         sp.nearCarClosest[3] = bestOHh;
     } else if (bestCarGap < 900.0f) {
-        // Car is within 10.5..40m: keep accurate OBB telemetry, reset fade
-        s_nearCarValid = false;
-        s_nearCarGap = bestCarGap;
+        tr.nearValid = false;
+        tr.nearGap = bestCarGap;
         sp.nearCarPos[0] = bestOCenter.x; sp.nearCarPos[1] = bestOCenter.y; sp.nearCarPos[2] = bestOCenter.z;
         sp.nearCarPos[3] = bestCarGap;
         sp.nearCarRight[0] = bestORight.x; sp.nearCarRight[1] = bestORight.y; sp.nearCarRight[2] = bestORight.z;
@@ -2998,58 +3226,50 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
         sp.nearCarFwd[3] = bestOHl;
         sp.nearCarClosest[0] = bestCClosest.x; sp.nearCarClosest[1] = bestCClosest.y; sp.nearCarClosest[2] = bestCClosest.z;
         sp.nearCarClosest[3] = bestOHh;
-    } else if (s_nearCarValid) {
-        s_nearCarGap += (fadeCeiling - s_nearCarGap) * alphaGap;
-        if (s_nearCarGap >= fadeCeiling - 0.05f || alphaGap >= 0.999f) {
-            s_nearCarValid = false;
-            s_nearCarGap = 999.0f;
+    } else if (tr.nearValid) {
+        tr.nearGap += (fadeCeiling - tr.nearGap) * alphaGap;
+        if (tr.nearGap >= fadeCeiling - 0.05f || alphaGap >= 0.999f) {
+            tr.nearValid = false;
+            tr.nearGap = 999.0f;
         } else {
-            UnityVector3 wC = toWorldVec(s_nearLocalCenter);
-            UnityVector3 wL = toWorldVec(s_nearLocalClosest);
-            UnityVector3 wR = VecNormalize(toWorldVec(s_nearLocalRight));
-            UnityVector3 wF = VecNormalize(toWorldVec(s_nearLocalFwd));
+            UnityVector3 wC = toWorldVec(tr.nearLocalCenter);
+            UnityVector3 wL = toWorldVec(tr.nearLocalClosest);
+            UnityVector3 wR = VecNormalize(toWorldVec(tr.nearLocalRight));
+            UnityVector3 wF = VecNormalize(toWorldVec(tr.nearLocalFwd));
             sp.nearCarPos[0] = pPos.x + wC.x; sp.nearCarPos[1] = pPos.y + wC.y; sp.nearCarPos[2] = pPos.z + wC.z;
-            sp.nearCarPos[3] = s_nearCarGap;
+            sp.nearCarPos[3] = tr.nearGap;
             sp.nearCarRight[0] = wR.x; sp.nearCarRight[1] = wR.y; sp.nearCarRight[2] = wR.z;
-            sp.nearCarRight[3] = s_nearExtents[0];
+            sp.nearCarRight[3] = tr.nearExtents[0];
             sp.nearCarFwd[0] = wF.x; sp.nearCarFwd[1] = wF.y; sp.nearCarFwd[2] = wF.z;
-            sp.nearCarFwd[3] = s_nearExtents[2];
+            sp.nearCarFwd[3] = tr.nearExtents[2];
             sp.nearCarClosest[0] = pPos.x + wL.x; sp.nearCarClosest[1] = pPos.y + wL.y; sp.nearCarClosest[2] = pPos.z + wL.z;
-            sp.nearCarClosest[3] = s_nearExtents[1];
+            sp.nearCarClosest[3] = tr.nearExtents[1];
         }
     }
 
     // 3. Real vehicle slip/drift angle in degrees (from world velocity vs car forward axis)
-    static float s_smoothDriftAbs = 0.0f;
-    static float s_smoothDriftSigned = 0.0f;
-    static bool  s_hasPrevDriftPos = false;
-    static UnityVector3 s_prevDriftPos{};
-
-    float vel[3] = { 0.0f, 0.0f, 0.0f };
-    bool hasVel = player.carPtr && NativeCarX::GetCarVelocity(player.carPtr, vel);
-    if (!hasVel) {
-        if (s_hasPrevDriftPos && dt > 1e-4f) {
-            vel[0] = (pPos.x - s_prevDriftPos.x) / dt;
-            vel[1] = (pPos.y - s_prevDriftPos.y) / dt;
-            vel[2] = (pPos.z - s_prevDriftPos.z) / dt;
-            hasVel = true;
-        }
+    float vel[3] = { rawVel[0], rawVel[1], rawVel[2] };
+    bool velOk = hasVel;
+    if (!velOk && tr.hasPrevPos && dt > 1e-4f) {
+        vel[0] = (pPos.x - tr.prevPos.x) / dt;
+        vel[1] = (pPos.y - tr.prevPos.y) / dt;
+        vel[2] = (pPos.z - tr.prevPos.z) / dt;
+        velOk = true;
     }
-    s_prevDriftPos = pPos;
-    s_hasPrevDriftPos = true;
+    tr.prevPos = pPos;
+    tr.hasPrevPos = true;
 
     float vFwd = vel[0] * pFwd.x + vel[1] * pFwd.y + vel[2] * pFwd.z;
     float vSide = vel[0] * pRight.x + vel[1] * pRight.y + vel[2] * pRight.z;
-    float vPlanar = hasVel ? sqrtf(vFwd * vFwd + vSide * vSide) : 0.0f;
+    float vPlanar = velOk ? sqrtf(vFwd * vFwd + vSide * vSide) : 0.0f;
 
-    // Gate out stationary suspension jitter (< ~5 km/h) and pure reversing (> ~120 deg)
     auto smoothStepF = [](float edge0, float edge1, float x) {
         float t = std::clamp((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
         return t * t * (3.0f - 2.0f * t);
     };
     float speedGate = smoothStepF(1.2f, 3.8f, vPlanar);
     float fwdCos = (vPlanar > 0.1f) ? (vFwd / vPlanar) : 1.0f;
-    float revGate = smoothStepF(-0.78f, -0.30f, fwdCos); // allows big ~105 deg backward entries while ignoring straight reverse
+    float revGate = smoothStepF(-0.78f, -0.30f, fwdCos);
 
     float rawSignedDeg = (vPlanar > 0.1f) ? (atan2f(vSide, vFwd) * 57.2957795f) : 0.0f;
     float targetSigned = rawSignedDeg * speedGate * revGate;
@@ -3057,15 +3277,189 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
 
     const float angleRate = (std::max)(flowSpeed * 1.6f, 6.0f);
     const float alphaAngle = (flowSpeed >= 28.0f) ? 1.0f : (1.0f - expf(-angleRate * dt));
-    s_smoothDriftSigned += (targetSigned - s_smoothDriftSigned) * alphaAngle;
-    s_smoothDriftAbs    += (targetAbs - s_smoothDriftAbs) * alphaAngle;
+    tr.smoothDriftSigned += (targetSigned - tr.smoothDriftSigned) * alphaAngle;
+    tr.smoothDriftAbs    += (targetAbs - tr.smoothDriftAbs) * alphaAngle;
 
-    sp.driftState[0] = s_smoothDriftAbs;
-    sp.driftState[1] = s_smoothDriftSigned;
-    sp.driftState[2] = std::clamp(s_smoothDriftAbs / 65.0f, 0.0f, 1.0f);
+    sp.driftState[0] = tr.smoothDriftAbs;
+    sp.driftState[1] = tr.smoothDriftSigned;
+    sp.driftState[2] = std::clamp(tr.smoothDriftAbs / 65.0f, 0.0f, 1.0f);
     sp.driftState[3] = vPlanar * 3.6f;
 
-    CarFX::SetSpatialProximity(sp);
+    CarFX::SetSpatialProximity(sp, carfxTarget);
+}
+
+void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<LiveCarInfo>& liveSnapshot) {
+    static CarSpatialTracker s_trackers[CarFX::kTargetCount]{};
+    static std::chrono::steady_clock::time_point s_prevSpatTime{};
+
+    auto nowTp = std::chrono::steady_clock::now();
+    float dt = 0.016f;
+    if (s_prevSpatTime.time_since_epoch().count() != 0) {
+        dt = std::chrono::duration<float>(nowTp - s_prevSpatTime).count();
+    }
+    s_prevSpatTime = nowTp;
+    if (dt > 0.40f) {
+        for (auto& tr : s_trackers) tr.ResetSmooth();
+    }
+    dt = std::clamp(dt, 0.0005f, 0.08f);
+
+    UnityVector3 camPos{};
+    bool hasCam = SafeGetMainCameraPosSEH(reinterpret_cast<void*>(pfn_GetMainCameraNative),
+                                          reinterpret_cast<void*>(pfn_Transform_get_position),
+                                          &camPos);
+
+    void* localRootTf = nullptr;
+    UnityVector3 pPos{};
+    UnityVector4 pRot{ 0.0f, 0.0f, 0.0f, 1.0f };
+    bool hasLocal = false;
+
+    for (const auto& c : liveSnapshot) {
+        if (c.isLocalPlayer) {
+            localRootTf = c.rootTf;
+            pPos = { c.x, c.y, c.z };
+            pRot = { c.qx, c.qy, c.qz, c.qw };
+            hasLocal = c.hasPos || c.hasRot;
+            break;
+        }
+    }
+    if (localRootTf && GetTransformPosRotDirect(localRootTf, pPos, pRot)) {
+        hasLocal = true;
+    }
+
+    UnityVector3 pRight{ 1, 0, 0 }, pUp{ 0, 1, 0 }, pFwd{ 0, 0, 1 };
+    float halfW = 0.96f, halfL = 2.20f, halfH = 0.65f;
+    float frontAxleZ = halfL * 0.62f;
+    float rearAxleZ  = -halfL * 0.62f;
+    CarTelemetry player{};
+    if (hasLocal) {
+        QuatToAxes(pRot, pRight, pUp, pFwd);
+        player = NativeCarX::GetPlayerCarTelemetry();
+        if (player.carPtr) {
+            float wheelMats[4][16];
+            for (int w = 0; w < 4; ++w) {
+                memcpy(wheelMats[w], player.wheels[w].matrix.data(), sizeof(float) * 16);
+            }
+            EstimateCarExtents(player.transformMatrix.data(), wheelMats, halfW, halfL);
+            halfW = std::clamp(halfW, 0.75f, 1.35f);
+            halfL = std::clamp(halfL, 1.65f, 2.75f);
+
+            float wMag = fabsf(wheelMats[0][12]) + fabsf(wheelMats[1][12]) + fabsf(wheelMats[2][12]) + fabsf(wheelMats[3][12]);
+            if (wMag > 0.01f) {
+                float wz[4] = {};
+                for (int w = 0; w < 4; ++w) {
+                    UnityVector3 dw = { wheelMats[w][12] - pPos.x, wheelMats[w][13] - pPos.y, wheelMats[w][14] - pPos.z };
+                    wz[w] = VecDot(dw, pFwd);
+                }
+                std::sort(wz, wz + 4);
+                float rZ = 0.5f * (wz[0] + wz[1]);
+                float fZ = 0.5f * (wz[2] + wz[3]);
+                if (fZ - rZ > 1.35f && fZ - rZ < 4.40f) {
+                    frontAxleZ = fZ;
+                    rearAxleZ  = rZ;
+                }
+            }
+        }
+    }
+
+    // Build shared OBB candidate table: player (-1) + remote cars (0..) + active ghosts (1000+slot)
+    std::vector<VehicleOBBCandidate> allCars;
+    allCars.reserve(liveSnapshot.size() + 8);
+    if (hasLocal) {
+        VehicleOBBCandidate selfCand;
+        selfCand.ownerTag = -1;
+        selfCand.center = { pPos.x + pUp.x * halfH, pPos.y + pUp.y * halfH, pPos.z + pUp.z * halfH };
+        selfCand.right = pRight; selfCand.up = pUp; selfCand.fwd = pFwd;
+        selfCand.halfW = halfW; selfCand.halfH = halfH; selfCand.halfL = halfL;
+        allCars.push_back(selfCand);
+    }
+    int remoteIdx = 0;
+    for (const auto& c : liveSnapshot) {
+        if (c.isLocalPlayer) continue;
+        UnityVector3 oPos{ c.x, c.y, c.z };
+        UnityVector4 oRot{ c.qx, c.qy, c.qz, c.qw };
+        if (c.rootTf) {
+            GetTransformPosRotDirect(c.rootTf, oPos, oRot);
+        } else if (!c.hasPos && !c.hasRot) {
+            continue;
+        }
+        UnityVector3 oR, oU, oF;
+        QuatToAxes(oRot, oR, oU, oF);
+        VehicleOBBCandidate cand;
+        cand.ownerTag = remoteIdx++;
+        cand.center = { oPos.x + oU.x * 0.65f, oPos.y + oU.y * 0.65f, oPos.z + oU.z * 0.65f };
+        cand.right = oR; cand.up = oU; cand.fwd = oF;
+        cand.halfW = 0.96f; cand.halfH = 0.65f; cand.halfL = 2.25f;
+        allCars.push_back(cand);
+    }
+
+    struct GhostSensorQuery {
+        int slotIdx = 0;
+        int carfxTarget = CarFX::kTargetNone;
+        UnityVector3 pos{}, right{}, up{}, fwd{};
+        float halfW = 0.96f, halfH = 0.65f, halfL = 2.25f;
+        bool hasVel = false;
+        float vel[3] = { 0, 0, 0 };
+    };
+    std::vector<GhostSensorQuery> activeGhostQueries;
+    {
+        std::lock_guard<std::recursive_mutex> lock(s_mutex);
+        for (size_t idx = 0; idx < s_ghostSlots.size(); ++idx) {
+            const GhostSlot& slot = s_ghostSlots[idx];
+            if (!slot.gameObject || !slot.hasPose) continue;
+
+            UnityVector3 gR = VecNormalize({ slot.lastMatrix[0], slot.lastMatrix[1], slot.lastMatrix[2] });
+            UnityVector3 gU = VecNormalize({ slot.lastMatrix[4], slot.lastMatrix[5], slot.lastMatrix[6] });
+            UnityVector3 gF = VecNormalize({ slot.lastMatrix[8], slot.lastMatrix[9], slot.lastMatrix[10] });
+
+            VehicleOBBCandidate gCand;
+            gCand.ownerTag = 1000 + static_cast<int>(idx);
+            gCand.center = { slot.pos.x + gU.x * slot.halfHeight, slot.pos.y + gU.y * slot.halfHeight, slot.pos.z + gU.z * slot.halfHeight };
+            gCand.right = gR; gCand.up = gU; gCand.fwd = gF;
+            gCand.halfW = slot.halfWidth; gCand.halfH = slot.halfHeight; gCand.halfL = slot.halfLength;
+            allCars.push_back(gCand);
+
+            const int gTarget = CarFX::GhostTargetFromSlot(static_cast<int>(idx));
+            if (gTarget != CarFX::kTargetNone && CarFX::IsTargetActive(gTarget)) {
+                GhostSensorQuery q;
+                q.slotIdx = static_cast<int>(idx);
+                q.carfxTarget = gTarget;
+                q.pos = slot.pos; q.right = gR; q.up = gU; q.fwd = gF;
+                q.halfW = slot.halfWidth; q.halfH = slot.halfHeight; q.halfL = slot.halfLength;
+                if (slot.replayTeleValid) {
+                    q.vel[0] = slot.replayWorldVel.x;
+                    q.vel[1] = slot.replayWorldVel.y;
+                    q.vel[2] = slot.replayWorldVel.z;
+                    q.hasVel = true;
+                } else {
+                    q.vel[0] = slot.vel.x; q.vel[1] = slot.vel.y; q.vel[2] = slot.vel.z;
+                    q.hasVel = true;
+                }
+                activeGhostQueries.push_back(q);
+            }
+        }
+    }
+
+    if (hasLocal) {
+        float pVel[3] = { 0.0f, 0.0f, 0.0f };
+        bool hasPVel = player.carPtr && NativeCarX::GetCarVelocity(player.carPtr, pVel);
+        EvaluateCarSpatialTarget(
+            CarFX::kTargetBody, -1,
+            pPos, pRight, pUp, pFwd, halfW, halfH, halfL, frontAxleZ, rearAxleZ,
+            hasPVel, pVel, hasCam, camPos, reinterpret_cast<void*>(pfn_InternalRaycast),
+            dt, allCars, s_trackers[CarFX::kTargetBody]);
+    } else {
+        CarFX::SetSpatialProximity(CarFX::SpatialProximityInput{}, CarFX::kTargetBody);
+    }
+
+    for (const auto& gq : activeGhostQueries) {
+        const float gFrontAxleZ = gq.halfL * 0.62f;
+        const float gRearAxleZ  = -gq.halfL * 0.62f;
+        EvaluateCarSpatialTarget(
+            gq.carfxTarget, 1000 + gq.slotIdx,
+            gq.pos, gq.right, gq.up, gq.fwd, gq.halfW, gq.halfH, gq.halfL, gFrontAxleZ, gRearAxleZ,
+            gq.hasVel, gq.vel, hasCam, camPos, reinterpret_cast<void*>(pfn_InternalRaycast),
+            dt, allCars, s_trackers[gq.carfxTarget]);
+    }
 }
 
 void UnityBridge::ResolveGhostCollisions() {
@@ -3548,6 +3942,14 @@ void UnityBridge::SetGhostCollisionEnabled(bool enabled) {
 
 bool UnityBridge::IsGhostCollisionEnabled() {
     return s_ghostCollisionEnabled.load(std::memory_order_relaxed);
+}
+
+void UnityBridge::SetGhostMirrorPlayerShader(bool enabled) {
+    s_ghostMirrorPlayerShader.store(enabled, std::memory_order_relaxed);
+}
+
+bool UnityBridge::IsGhostMirrorPlayerShader() {
+    return s_ghostMirrorPlayerShader.load(std::memory_order_relaxed);
 }
 
 void* UnityBridge::SpawnGhostVisual() {

@@ -126,6 +126,10 @@ public:
     static void SetGhostCollisionEnabled(bool enabled);
     static bool IsGhostCollisionEnabled();
 
+    // When a replay has no recorded CarFX shader, optionally mirror player's active shader onto the ghost
+    static void SetGhostMirrorPlayerShader(bool enabled);
+    static bool IsGhostMirrorPlayerShader();
+
 private:
     struct ChildLayerInfo {
         void* go = nullptr;
@@ -146,7 +150,7 @@ private:
         std::vector<ChildLayerInfo> childGos;
         std::string sourceCarName;
 
-        // Pose & velocity tracking for OBB collision
+        // Pose & velocity tracking for OBB collision + CarFX sensors
         bool hasPose = false;
         float lastMatrix[16] = { 0 };
         UnityVector3 pos{};
@@ -154,6 +158,23 @@ private:
         float halfWidth = 0.96f;
         float halfHeight = 0.65f;
         float halfLength = 2.25f;
+
+        // CarFX body isolation & replay shader/telemetry binding
+        int32_t isolatedBodyMatId = 0;
+        int32_t savedBodyOrigQueue = 2200;
+        void* clonedPackTex = nullptr;
+        bool carFxIsolated = false;
+        bool replayShaderApplied = false;
+        std::string replayShaderSourceKey;
+        bool replayTeleValid = false;
+        float replaySpeedKmh = 0.0f;
+        float replayRpm = 0.0f;
+        int32_t replayGear = 0;
+        float replaySteerDeg = 0.0f;
+        float replayAccel = 0.0f;
+        float replayBrake = 0.0f;
+        float replayHandbrake = 0.0f;
+        UnityVector3 replayWorldVel{};
     };
 
     struct SceneCarModelCache {
@@ -177,9 +198,12 @@ private:
     static void* FindModelForCarName(const std::string& preferredCarName, void** outRootTf = nullptr);
 
     static void* SpawnGhostSlotInternal(size_t slotIdx, const std::string& preferredCarName = "");
+    static void DestroyDetachedGhostSlot(size_t slotIdx, GhostSlot& detached);
     static void DestroyGhostSlotInternal(size_t slotIdx);
     static void DestroyAllGhostSlotsInternal();
     static void ConfigureGhostSlot(GhostSlot& slot, void* clonedGo, float initialSteerAngle);
+    static void IsolateGhostSlotCarFXTextures(size_t slotIdx, GhostSlot& slot);
+    static void SyncGhostSlotCarFXMaterialsAndShader(size_t slotIdx, GhostSlot& slot, bool allowReplayShader);
     static void ApplySlotCollisionVisuals(GhostSlot& slot, bool enabled);
     static void ApplyGhostPoseToSlot(size_t slotIdx, const float* bodyMatrix, const float wheelMatrices[4][16], const float caliperMatrices[4][16], float steerAngle, const UnityVector3& worldOffset, float dt);
     static void ApplyAllReplayTracksAtTimeInternal(float targetTime, float offsetRight, float dt);
@@ -240,6 +264,7 @@ private:
     static float s_pendingMultiReplayTime;
     static float s_pendingMultiReplayOffset;
     static std::atomic<bool> s_ghostCollisionEnabled;
+    static std::atomic<bool> s_ghostMirrorPlayerShader;
     static std::atomic<bool> s_pendingCollisionSync;
     static std::atomic<bool> s_pendingTeleport;
     static TeleportPose s_pendingTeleportPose;

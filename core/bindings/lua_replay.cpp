@@ -308,9 +308,26 @@ int LuaReplay::ListSaved(lua_State* L) {
         lua_setfield(L, -2, "tracks");
         lua_pushstring(L, list[i].recordedDate.c_str());
         lua_setfield(L, -2, "date");
+        lua_pushstring(L, list[i].carFxShader.c_str());
+        lua_setfield(L, -2, "carfx_shader");
 
         lua_rawseti(L, -2, static_cast<int>(i + 1));
     }
+    return 1;
+}
+
+int LuaReplay::GetCarFxShader(lua_State* L) {
+    lua_pushstring(L, ReplayEngine::GetLoadedCarFxShaderName().c_str());
+    return 1;
+}
+
+int LuaReplay::SetGhostMirrorCarFx(lua_State* L) {
+    UnityBridge::SetGhostMirrorPlayerShader(lua_toboolean(L, 1) != 0);
+    return 0;
+}
+
+int LuaReplay::GetGhostMirrorCarFx(lua_State* L) {
+    lua_pushboolean(L, UnityBridge::IsGhostMirrorPlayerShader());
     return 1;
 }
 
@@ -336,6 +353,9 @@ static const luaL_Reg replay_funcs[] = {
     { "apply_to_ghost", LuaReplay::ApplyToGhost },
     { "apply_all_to_ghosts", LuaReplay::ApplyAllToGhosts },
     { "list_saved", LuaReplay::ListSaved },
+    { "get_carfx_shader", LuaReplay::GetCarFxShader },
+    { "set_ghost_mirror_carfx", LuaReplay::SetGhostMirrorCarFx },
+    { "get_ghost_mirror_carfx", LuaReplay::GetGhostMirrorCarFx },
     { nullptr, nullptr }
 };
 

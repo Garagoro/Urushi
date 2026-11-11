@@ -12,12 +12,31 @@ namespace CarFX {
 constexpr UINT kCbSlot = 13;        // register(b13)
 constexpr UINT kSceneSlot = 32;     // t32..t38 (scene, tex0..3, depth, livery)
 constexpr UINT kViewCount = 7;      // 32:scene, 33..36:tex0..3, 37:depth, 38:livery
+constexpr int kMaxGhostTargets = 8;
 
 enum Target : int {
-    kTargetNone  = -1,
-    kTargetBody  = 0,
-    kTargetGlass = 1,
-    kTargetCount = 2
+    kTargetNone      = -1,
+    kTargetBody      = 0,
+    kTargetGlass     = 1,
+    kTargetGhostBase = 2,
+    kTargetCount     = kTargetGhostBase + kMaxGhostTargets
+};
+
+inline bool IsGhostTarget(int target) {
+    return target >= kTargetGhostBase && target < kTargetCount;
+}
+
+inline int GhostTargetFromSlot(int slotIdx) {
+    return (slotIdx >= 0 && slotIdx < kMaxGhostTargets) ? (kTargetGhostBase + slotIdx) : kTargetNone;
+}
+
+struct ReplayShaderConfig {
+    bool enabled = false;
+    int overrideMode = 0;     // OverrideMode
+    int overrideStealth = 0;  // OverrideStealth
+    std::string shaderPath;
+    float params[8][4] = {};
+    std::string texPaths[4];
 };
 
 enum OverrideMode : int {
@@ -121,20 +140,28 @@ void Shutdown();
 void OnNewFrame(ID3D11DeviceContext* context);
 void SetHookedDrawFlag(bool hooked);
 
-// Update player car texture SRVs from Unity Main Thread
+// Update player / ghost car texture SRVs from Unity Main Thread
 void SetPlayerTargetTextures(int target, const TargetTexturesInput& input);
+void ClearTargetTextures(int target);
 
 // Shader management (thread-safe)
 bool LoadShader(int target, const std::string& pathUtf8, std::string* outError = nullptr);
 void UnloadShader(int target);
 bool ReloadShader(int target, std::string* outError = nullptr);
 void PollHotReload();
+ReplayShaderConfig CaptureActiveConfig(int target = kTargetBody);
+bool ApplyConfigToTarget(int target, const ReplayShaderConfig& cfg, std::string* outError = nullptr);
+void SyncTargetFromSource(int dstTarget, int srcTarget);
+void ResetGhostTargets();
 
 // Runtime controls
 void SetEnabled(bool enabled);
 bool IsEnabled();
-bool ShouldBypassDepthPrePass();
-bool ShouldHideCarInternals();
+void SetTargetEnabled(int target, bool enabled);
+bool IsTargetCompiled(int target);
+bool IsTargetActive(int target);
+bool ShouldBypassDepthPrePass(int target = kTargetBody);
+bool ShouldHideCarInternals(int target = kTargetBody);
 void SetOverrideMode(int target, int overrideMode);
 int GetOverrideMode(int target);
 void SetOverrideStealth(int target, int overrideStealth);
@@ -147,10 +174,10 @@ bool SetParamSlot(int target, int slot, const float* values, int count);
 bool GetParamSlot(int target, int slot, float out[4]);
 bool SetUserTexture(int target, int texSlot, const std::string& imagePathUtf8, std::string* outError = nullptr);
 void ClearUserTexture(int target, int texSlot);
-void SetGameInput(int index, float value);
-float GetGameInput(int index);
-void SetSpatialProximity(const SpatialProximityInput& input);
-SpatialProximityInput GetSpatialProximity();
+void SetGameInput(int index, float value, int target = kTargetBody);
+float GetGameInput(int index, int target = kTargetBody);
+void SetSpatialProximity(const SpatialProximityInput& input, int target = kTargetBody);
+SpatialProximityInput GetSpatialProximity(int target = kTargetBody);
 
 // Draw interception entry point (called from D3D11 DrawIndexed / DrawIndexedInstanced hooks)
 // Returns true if CarFX handled & issued the draw(s); false if caller should invoke original as normal.

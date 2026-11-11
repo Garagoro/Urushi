@@ -174,7 +174,8 @@ int LuaCarFX::SetGameInput(lua_State* L) {
 
 int LuaCarFX::GetGameInput(lua_State* L) {
     int idx = static_cast<int>(luaL_checkinteger(L, 1));
-    lua_pushnumber(L, CarFX::GetGameInput(idx));
+    int target = static_cast<int>(luaL_optinteger(L, 2, CarFX::kTargetBody));
+    lua_pushnumber(L, CarFX::GetGameInput(idx, target));
     return 1;
 }
 
@@ -288,7 +289,8 @@ int LuaCarFX::GetStatus(lua_State* L) {
 }
 
 int LuaCarFX::GetSpatial(lua_State* L) {
-    CarFX::SpatialProximityInput sp = CarFX::GetSpatialProximity();
+    int target = static_cast<int>(luaL_optinteger(L, 1, CarFX::kTargetBody));
+    CarFX::SpatialProximityInput sp = CarFX::GetSpatialProximity(target);
     auto pushVec4 = [&](const char* k, const float v[4], const char* wKey) {
         lua_newtable(L);
         lua_pushnumber(L, v[0]); lua_setfield(L, -2, "x");
