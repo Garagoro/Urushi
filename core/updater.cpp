@@ -16,15 +16,6 @@
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "bcrypt.lib")
 
-#if defined(__has_include)
-#  if __has_include("urushi_gh_token.h")
-#    include "urushi_gh_token.h"
-#  endif
-#endif
-#ifndef URUSHI_GH_TOKEN
-#define URUSHI_GH_TOKEN L""
-#endif
-
 namespace Updater {
 namespace {
 
@@ -118,49 +109,6 @@ uint32_t ReadPeTimestampFromMemory(const void* moduleBase) {
     }
 }
 
-std::wstring TrimTokenW(std::wstring s) {
-    while (!s.empty() && (s.back() == L'\r' || s.back() == L'\n' || s.back() == L' ' || s.back() == L'\t')) {
-        s.pop_back();
-    }
-    size_t start = 0;
-    while (start < s.size() && (s[start] == L' ' || s[start] == L'\t' || s[start] == L'\r' || s[start] == L'\n')) {
-        ++start;
-    }
-    return s.substr(start);
-}
-
-std::wstring LoadGitHubToken() {
-    // 1. Optional runtime file <gameDir>\urushi_token.txt (never tracked in git)
-    if (!s_exeDir.empty()) {
-        std::wstring tokPath = s_exeDir + L"\\urushi_token.txt";
-        HANDLE h = CreateFileW(tokPath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (h != INVALID_HANDLE_VALUE) {
-            char buf[512] = {};
-            DWORD read = 0;
-            BOOL ok = ReadFile(h, buf, sizeof(buf) - 1, &read, nullptr);
-            CloseHandle(h);
-            if (ok && read > 0) {
-                std::wstring w = TrimTokenW(Utf8ToWide(std::string(buf, read)));
-                if (!w.empty()) return w;
-            }
-        }
-    }
-
-    // 2. Environment variable URUSHI_GH_TOKEN
-    wchar_t envBuf[512] = {};
-    DWORD envLen = GetEnvironmentVariableW(L"URUSHI_GH_TOKEN", envBuf, _countof(envBuf));
-    if (envLen > 0 && envLen < _countof(envBuf)) {
-        std::wstring w = TrimTokenW(std::wstring(envBuf, envLen));
-        if (!w.empty()) return w;
-    }
-
-    // 3. Optional compile-time token header (gitignored)
-    if (URUSHI_GH_TOKEN[0] != L'\0') {
-        return TrimTokenW(URUSHI_GH_TOKEN);
-    }
-    return {};
-}
-
 bool HttpGet(const wchar_t* host, const std::wstring& path, const std::wstring& extraHeaders,
              uint64_t maxBytes, std::vector<uint8_t>& out, DWORD& status) {
     out.clear();
@@ -214,16 +162,11 @@ bool HttpGet(const wchar_t* host, const std::wstring& path, const std::wstring& 
     return true;
 }
 
-bool GitHubApiGet(const std::wstring& path, const wchar_t* accept, const std::wstring& token,
+bool GitHubApiGet(const std::wstring& path, const wchar_t* accept,
                   uint64_t maxBytes, std::vector<uint8_t>& out, DWORD& status) {
     std::wstring headers = L"Accept: ";
     headers += accept;
     headers += L"\r\nX-GitHub-Api-Version: 2022-11-28\r\nUser-Agent: URUSHI-Updater\r\n";
-    if (!token.empty()) {
-        headers += L"Authorization: Bearer ";
-        headers += token;
-        headers += L"\r\n";
-    }
     return HttpGet(L"api.github.com", path, headers, maxBytes, out, status);
 }
 
@@ -486,14 +429,14 @@ bool WriteReplaceFile(const std::wstring& path, const std::vector<uint8_t>& data
     return false;
 }
 
-bool FetchGitBlob(const TreeEntry& e, const std::wstring& token, std::vector<uint8_t>& out, DWORD& status) {
+bool FetchGitBlob(const TreeEntry& e, std::vector<uint8_t>& out, DWORD& status) {
     if (e.size > kMaxFileBytes) {
         out.clear();
         status = 0;
         return false;
     }
     const std::wstring apiPath = std::wstring(L"/repos/") + kRepoOwner + L"/" + kRepoName + L"/git/blobs/" + Utf8ToWide(e.sha);
-    if (!GitHubApiGet(apiPath, L"application/vnd.github.raw+json", token, e.size, out, status)) {
+    if (!GitHubApiGet(apiPath, L"application/vnd.github.raw+json", e.size, out, status)) {
         return false;
     }
     if (out.size() != e.size || ComputeGitBlobSha(out.data(), out.size()) != e.sha) {
@@ -545,20 +488,17 @@ void CheckWorker(bool userInitiated) {
         if (userInitiated) s_bannerDismissed = false;
     }
 
-    const std::wstring token = LoadGitHubToken();
     std::vector<uint8_t> treeBody;
     DWORD status = 0;
     const std::wstring treePath = std::wstring(L"/repos/") + kRepoOwner + L"/" + kRepoName +
                                   L"/git/trees/" + kRepoBranch + L"?recursive=1";
 
-    if (!GitHubApiGet(treePath, L"application/vnd.github+json", token, kMaxTreeBytes, treeBody, status)) {
+    if (!GitHubApiGet(treePath, L"application/vnd.github+json", kMaxTreeBytes, treeBody, status)) {
         std::lock_guard<std::mutex> lk(s_mtx);
         s_state = State::Error;
         if (status == 0) s_statusText = "Нет подключения к api.github.com";
         else if (status == 401 || status == 404) {
-            s_statusText = token.empty()
-                ? "Приватный репо: нужен токен (urushi_token.txt)"
-                : "Нет доступа к репо (HTTP " + std::to_string(status) + "): проверьте токен";
+            s_statusText = "Репозиторий недоступен (HTTP " + std::to_string(status) + ")";
         } else if (status == 403 || status == 429) {
             s_statusText = "GitHub rate limit (HTTP " + std::to_string(status) + ")";
         } else {
@@ -587,7 +527,7 @@ void CheckWorker(bool userInitiated) {
         if (e.path == "dist/version.txt" && e.size <= 32768) {
             std::vector<uint8_t> mfBytes;
             DWORD mfStatus = 0;
-            if (FetchGitBlob(e, token, mfBytes, mfStatus)) {
+            if (FetchGitBlob(e, mfBytes, mfStatus)) {
                 ParseVersionManifest(mfBytes, remoteVer, remoteTs, releaseNotes);
             }
             break;
@@ -673,7 +613,6 @@ void InstallWorker() {
         s_statusText = "Подготовка к загрузке...";
     }
 
-    const std::wstring token = LoadGitHubToken();
     uint64_t writtenBytes = 0;
     uint32_t writtenFiles = 0;
     bool touchedProxy = false;
@@ -694,7 +633,7 @@ void InstallWorker() {
 
         std::vector<uint8_t> blob;
         DWORD status = 0;
-        if (!FetchGitBlob(files[i].entry, token, blob, status)) {
+        if (!FetchGitBlob(files[i].entry, blob, status)) {
             failed = true;
             failMsg = "Не удалось скачать " + files[i].entry.path + " (HTTP " + std::to_string(status) + ")";
             break;

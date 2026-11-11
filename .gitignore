@@ -18,10 +18,6 @@ Debug/
 !dist/
 !dist/*.dll
 
-# Secrets / GitHub tokens (never commit!)
-urushi_token.txt
-core/urushi_gh_token.h
-
 # Local temporary scratch, logs & replay captures
 scratch/
 *.log
