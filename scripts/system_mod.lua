@@ -1,10 +1,8 @@
 -- scripts/system_mod.lua
--- URUSHI System Settings, Theme Accent Switcher, Updater, FPS/Net Panel & Hotkey Reference
+local T = i18n.t
 
-local ACCENT_KEYS = { "amber", "vermilion", "platinum", "indigo" }
-local ACCENT_LABELS = { "Янтарь", "Киноварь", "Платина", "Индиго" }
+local ACCENT_KEYS = { "amber", "vermilion", "platinum", "indigo", "custom" }
 local SCALE_VALUES = { 0.0, 0.85, 1.00, 1.25, 1.50, 1.75 }
-local SCALE_LABELS = { "Авто", "85%", "100%", "125%", "150%", "175%" }
 
 local function find_accent_idx(name)
     for i = 1, #ACCENT_KEYS do
@@ -29,7 +27,7 @@ end
 
 local function hotkey_row(key_str, desc_str)
     ui.keycap(key_str)
-    ui.same_line(116)
+    ui.same_line(110)
     ui.text(desc_str, "muted")
 end
 
@@ -38,87 +36,107 @@ local function render_fps_net_window()
     local fps = env.fps or 0
     local ms = (fps > 0.1) and (1000.0 / fps) or (env.frame_ms or 0)
 
-    local net_txt = "Меню"
+    local net_txt = T("Меню", "Menu")
     local net_tone = "muted"
     if env.in_session then
         local net_cars = env.total_net_cars or 0
         if net_cars > 0 then
-            net_txt = string.format("Онлайн (%d)", net_cars + 1)
+            net_txt = string.format(T("Онлайн (%d)", "Online (%d)"), net_cars + 1)
             net_tone = "green"
         else
-            net_txt = "Соло"
+            net_txt = T("Соло", "Solo")
             net_tone = "green"
         end
     end
 
-    ui.card("Производительность", "Рендер и сессия", function()
-        ui.stat_row({
-            { label = "FPS", value = string.format("%.0f", fps), tone = fps >= 55 and "green" or "yellow" },
-            { label = "КАДР", value = string.format("%.1f мс", ms), tone = "muted" },
-            { label = "СЕТЬ", value = net_txt, tone = net_tone },
-        })
-    end)
+    ui.stat_row({
+        { label = "FPS", value = string.format("%.0f", fps), tone = fps >= 55 and "green" or "yellow" },
+        { label = T("КАДР", "FRAME"), value = string.format(T("%.1f мс", "%.1f ms"), ms), tone = "muted" },
+        { label = T("СЕТЬ", "NET"), value = net_txt, tone = net_tone },
+    })
 end
 
 local function render_system_window()
-    ui.card("Оформление и окна", "URUSHI Lacquered UI", function()
-        ui.text_dim("Цветовой акцент лака")
-        local cur_name = urushi.get_accent and urushi.get_accent() or "amber"
-        local cur_idx = find_accent_idx(cur_name)
-        local a_ch, new_idx = ui.segmented("sys_accent_seg", cur_idx, ACCENT_LABELS)
-        if a_ch and ACCENT_KEYS[new_idx] then
-            urushi.set_accent(ACCENT_KEYS[new_idx])
+    local cur_lang = (urushi.get_language and urushi.get_language()) or "ru"
+    local lang_idx = (cur_lang == "en") and 2 or 1
+
+    ui.card(T("Интерфейс и тема", "Interface & Theme"), nil, function()
+        ui.text_dim(T("Язык / Language", "Language / Язык"))
+        local l_ch, new_lang_idx = ui.segmented("sys_lang_seg", lang_idx, { "Русский", "English" })
+        if l_ch and urushi.set_language then
+            urushi.set_language(new_lang_idx == 2 and "en" or "ru")
+            if i18n and i18n.sync_titles then
+                i18n.sync_titles()
+            end
         end
 
-        ui.spacing(6)
-        ui.text_dim("Масштаб интерфейса (DPI)")
+        ui.spacing(4)
+        ui.text_dim(T("Цветовой акцент", "Accent Color"))
+        local cur_name = urushi.get_accent and urushi.get_accent() or "amber"
+        local cur_idx = find_accent_idx(cur_name)
+        local accent_labels = T(
+            { "Янтарь", "Алый", "Серебро", "Индиго", "Свой" },
+            { "Amber", "Crimson", "Silver", "Indigo", "Custom" }
+        )
+        local a_ch, new_idx = ui.segmented("sys_accent_seg", cur_idx, accent_labels)
+        if a_ch and ACCENT_KEYS[new_idx] then
+            urushi.set_accent(ACCENT_KEYS[new_idx])
+            cur_name = ACCENT_KEYS[new_idx]
+        end
+
+        if cur_name == "custom" and ui.color_edit3 and urushi.get_custom_accent and urushi.set_custom_accent then
+            local cr, cg, cb = urushi.get_custom_accent()
+            local cch, nr, ng, nb = ui.color_edit3(T("Свой цвет##sys_custom_acc", "Custom Color##sys_custom_acc"), cr, cg, cb)
+            if cch then
+                urushi.set_custom_accent(nr, ng, nb)
+            end
+        end
+
+        ui.spacing(4)
+        ui.text_dim(T("Масштаб интерфейса", "UI Scale"))
         local user_sc = urushi.get_user_scale and urushi.get_user_scale() or 0.0
         local cur_sc_idx = find_scale_idx(user_sc)
-        local s_ch, new_sc_idx = ui.segmented("sys_scale_seg", cur_sc_idx, SCALE_LABELS)
+        local scale_labels = { T("Авто", "Auto"), "85%", "100%", "125%", "150%", "175%" }
+        local s_ch, new_sc_idx = ui.segmented("sys_scale_seg", cur_sc_idx, scale_labels)
         if s_ch and SCALE_VALUES[new_sc_idx] ~= nil and urushi.set_ui_scale then
             urushi.set_ui_scale(SCALE_VALUES[new_sc_idx])
         end
-        local eff_pct = math.floor((urushi.get_ui_scale and urushi.get_ui_scale() or 1.0) * 100 + 0.5)
-        local auto_pct = math.floor((urushi.get_auto_scale and urushi.get_auto_scale() or 1.0) * 100 + 0.5)
-        local sc_info = (user_sc <= 0.01)
-            and string.format("Активно: %d%% (авто по экрану и DPI)", eff_pct)
-            or string.format("Активно: %d%% (ручной; авто: %d%%)", eff_pct, auto_pct)
-        ui.text_dim(sc_info)
 
-        ui.spacing(6)
-        local bw = ui.avail_width()
-        if ui.button("Свернуть все незакреплённые окна##sys_close_all", bw, 28, "ghost") then
+        local eff_pct = math.floor((urushi.get_ui_scale and urushi.get_ui_scale() or 1.0) * 100 + 0.5)
+        ui.text_dim(string.format(T("Активно: %d%%", "Active: %d%%"), eff_pct))
+
+        ui.spacing(4)
+        if ui.button(T("Свернуть незакреплённые окна##sys_close_all", "Collapse Unpinned Windows##sys_close_all"), ui.avail_width(), 28, "ghost") then
             urushi.close_all()
         end
     end)
 
     if updater and updater.get_status then
         local ust = updater.get_status()
-        local ver = ust.local_version or "0.1.0"
+        local ver = ust.local_version or "0.2.0"
         local state_tone = "muted"
-        if ust.state == "update_available" or ust.state == "restart_required" then
-            state_tone = "yellow"
+        local state_short = T("Актуально", "Up to date")
+
+        if ust.state == "update_available" then
+            state_tone = "yellow"; state_short = T("Доступно", "Available")
+        elseif ust.state == "restart_required" then
+            state_tone = "yellow"; state_short = T("Рестарт", "Restart")
         elseif ust.state == "reinjecting" then
-            state_tone = "green"
-        elseif ust.state == "downloading" or ust.state == "checking" then
-            state_tone = "accent"
+            state_tone = "green"; state_short = T("Релоад", "Reloading")
+        elseif ust.state == "downloading" then
+            state_tone = "accent"; state_short = T("Загрузка", "Downloading")
+        elseif ust.state == "checking" then
+            state_tone = "accent"; state_short = T("Проверка", "Checking")
+        elseif ust.state == "error" then
+            state_tone = "red"; state_short = T("Ошибка", "Error")
         end
 
-        local state_short = "Актуально"
-        if ust.state == "update_available" then state_short = "Доступно"
-        elseif ust.state == "restart_required" then state_short = "Рестарт"
-        elseif ust.state == "reinjecting" then state_short = "Реинжект"
-        elseif ust.state == "downloading" then state_short = "Загрузка"
-        elseif ust.state == "checking" then state_short = "Проверка"
-        elseif ust.status_text and ust.status_text ~= "" then state_short = "Ожидание"
-        end
-
-        ui.card("Обновление и ядро", "v" .. ver, function()
+        ui.card(T("Обновление", "Updater"), "GitHub // Garagoro/Urushi", function()
             ui.stat_row({
-                { label = "Версия", value = "v" .. ver, tone = "accent" },
-                { label = "Статус", value = state_short, tone = state_tone },
+                { label = T("Версия", "Version"), value = "v" .. ver, tone = "accent" },
+                { label = T("Статус", "Status"), value = state_short, tone = state_tone },
             })
-            if ust.status_text and ust.status_text ~= "" then
+            if ust.state == "error" and ust.status_text and ust.status_text ~= "" then
                 ui.spacing(2)
                 ui.text_wrapped(ust.status_text, "muted")
             end
@@ -126,45 +144,43 @@ local function render_system_window()
             ui.spacing(4)
             local bw = ui.avail_width()
             if ust.state == "update_available" then
-                if ui.button("Установить обновление##sys_upd_inst", bw, 30, "primary") then
+                if ui.button(T("Установить обновление##sys_upd_inst", "Install Update##sys_upd_inst"), bw, 30, "primary") then
                     updater.install()
                 end
             elseif ust.state == "restart_required" then
-                if ui.button("Перезапустить игру##sys_upd_rest", bw, 30, "danger") then
+                if ui.button(T("Перезапустить игру##sys_upd_rest", "Restart Game##sys_upd_rest"), bw, 30, "danger") then
                     updater.restart_game()
                 end
             elseif ust.state ~= "checking" and ust.state ~= "downloading" and ust.state ~= "reinjecting" then
-                if ui.button("Проверить обновления##sys_upd_chk", bw, 28) then
+                if ui.button(T("Проверить обновления##sys_upd_chk", "Check for Updates##sys_upd_chk"), bw, 28) then
                     updater.check()
                 end
             end
         end)
     end
 
-    ui.card("Справка", "Горячие клавиши", function()
-        if ui.collapsing("Показать сочетания клавиш", false) then
-            hotkey_row("F4 / Ins", "Открыть / скрыть панель URUSHI")
-            hotkey_row("F5", "Окно оптимизатора FPS")
-            hotkey_row("F6", "Старт / стоп записи реплея")
-            hotkey_row("F7", "Старт / стоп 3D-призрака реплея")
-            hotkey_row("F8", "Окно 3D-болванки и сцены Unity")
-            hotkey_row("F9", "Окно CarFX шейдеров")
-            hotkey_row("J", "Вкл / выкл Анти-встречку")
-            hotkey_row("K", "Коллизия 3D-призраков и болванки")
-            hotkey_row("G / H", "Создать / удалить 3D-болванку")
-            hotkey_row("M", "Живое зеркало (+3.8 м)")
-            hotkey_row("[ / ]", "Запомнить точку / Телепорт")
-            hotkey_row("Ctrl+F11", "Перезагрузить C++ ядро")
-        end
-        ui.spacing(4)
-        ui.text_wrapped("Скрипты в scripts/ поддерживают мгновенный Hot-Reload при сохранении.", "muted")
-    end)
+    if ui.collapsing(T("Горячие клавиши##sys_hk", "Hotkeys##sys_hk"), false) then
+        ui.card(nil, nil, function()
+            hotkey_row("F4 / Ins", T("Открыть / скрыть меню URUSHI", "Toggle URUSHI overlay"))
+            hotkey_row("F5",       T("Оптимизатор FPS", "FPS Optimizer"))
+            hotkey_row("F6",       T("Старт / стоп записи реплея", "Start / stop recording"))
+            hotkey_row("F7",       T("Старт / стоп 3D-призрака", "Start / stop 3D ghost"))
+            hotkey_row("F8",       T("3D-болванка", "3D Dummy"))
+            hotkey_row("F9",       T("CarFX шейдеры", "CarFX Shaders"))
+            hotkey_row("J",        T("Анти-встречка", "Anti-Wrong-Way"))
+            hotkey_row("K",        T("Коллизия призрака", "Dummy / Ghost collision"))
+            hotkey_row("G / H",    T("Создать / удалить болванку", "Spawn / delete dummy"))
+            hotkey_row("M",        T("Живое зеркало (+3.8 м)", "Live mirror (+3.8 m)"))
+            hotkey_row("[ / ]",    T("Запомнить / телепорт", "Save point / Teleport"))
+            hotkey_row("Ctrl+F11", T("Перезагрузить C++ ядро", "Reload C++ core"))
+        end)
+    end
 end
 
 if urushi and urushi.register_window then
     urushi.register_window({
         id = "fps_net",
-        title = "FPS и Сеть",
+        title = T("FPS и Сеть", "FPS & Network"),
         icon = "hud",
         order = 65,
         default_open = false,
@@ -172,23 +188,23 @@ if urushi and urushi.register_window then
         hud_no_inputs = false,
         anchor_right = true,
         x = 20,
-        y = 320,
+        y = 300,
         width = 276,
         render = render_fps_net_window,
     })
 
     urushi.register_window({
         id = "system",
-        title = "Система",
+        title = T("Система", "System"),
         icon = "settings",
         order = 70,
         default_open = false,
         default_pinned = false,
-        x = 264,
-        y = 24,
-        width = 420,
+        x = 290,
+        y = 32,
+        width = 412,
         render = render_system_window,
     })
 end
 
-log.info("URUSHI System settings module (scripts/system_mod.lua) loaded.")
+log.info("URUSHI System settings module loaded.")

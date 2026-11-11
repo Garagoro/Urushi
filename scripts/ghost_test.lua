@@ -1,107 +1,64 @@
--- CarX2ScriptHook: 3D-болванка Unity и Инспектор сцены [F8]
--- Open Source under MIT License
+-- scripts/ghost_test.lua
+local T = i18n.t
 
 local ghost_state = {
-    ghost_visual = nil,
-    spawn_pos = { x = 0.0, y = 0.0, z = 0.0 },
-    mirror_offset = 3.8,
-    status_text = "Ожидание команды. Выйдите на трассу и нажмите [G], [M] или кнопку ниже.",
+    status_text = "",
+    status_tone = "muted",
     scanned_objects = {},
-    matched_car_go = nil,
+    ghost_visual = nil,
     pending_clone_ptr = nil,
     pending_destroy_ptr = nil,
+    mirror_offset = 3.8,
 }
 
 local function is_typing()
-    if imgui and imgui.is_any_item_active then
-        return imgui.is_any_item_active()
-    end
-    return false
+    return imgui and imgui.is_any_item_active and imgui.is_any_item_active()
 end
 
--- Поиск модели машины игрока через нативный мост UnityBridge
 local function find_player_car_game_object()
-    local player = carx.get_player_car()
-    if not player or not player.ptr then return nil end
-
-    if unity and unity.find_player_car_model then
-        local model_go, root_tf = unity.find_player_car_model()
-        if model_go then
-            local name = unity.get_name and unity.get_name(model_go) or "Model"
-            local parent_name = ""
-            if root_tf and memory and memory.read_ptr then
-                local root_go = memory.read_ptr(tonumber(tostring(root_tf):match(":%s*(%x+)"), 16) + 0x20)
-                if root_go and unity.get_name then
-                    parent_name = unity.get_name(root_go) or ""
-                end
-            end
-            return {
-                ptr = model_go,
-                name = (parent_name ~= "" and (parent_name .. "/" .. name) or name),
-                transform = unity.get_transform and unity.get_transform(model_go) or nil,
-            }, 0.0
+    if not unity or not unity.get_all_objects then return nil end
+    local objs = unity.get_all_objects()
+    for _, obj in ipairs(objs) do
+        if obj.name == "Model" or obj.name == "CARXCar" or obj.name == "RecordableDotsRaceCar" then
+            return obj
         end
     end
-
-    if not unity or not unity.get_all_objects then
-        return nil
-    end
-
-    local px, py, pz = player.x or 0, player.y or 0, player.z or 0
-    local objects = unity.get_all_objects()
-    ghost_state.scanned_objects = objects
-
-    local best_obj = nil
-    local best_dist = 999999.0
-    for i = 1, #objects do
-        local obj = objects[i]
-        if obj.name == "Model" and obj.x then
-            local dx = obj.x - px
-            local dy = obj.y - py
-            local dz = obj.z - pz
-            local dist = math.sqrt(dx * dx + dy * dy + dz * dz)
-            if dist < 3.0 and dist < best_dist then
-                best_dist = dist
-                best_obj = obj
-            end
+    for _, obj in ipairs(objs) do
+        if obj.name and (obj.name:find("Kyoto") or obj.name:find("Nishimo") or obj.name:find("BNM")) then
+            return obj
         end
     end
-
-    return best_obj, best_dist
+    return nil
 end
 
 local function spawn_ghost_action()
     local player = carx.get_player_car()
-    if not player or not player.ptr then
-        ghost_state.status_text = "Ошибка: Машина игрока не найдена. Зайдите на трассу!"
+    if not (player and player.ptr) then
+        ghost_state.status_text = T("Выйдите на трассу на автомобиле.", "Enter a track first.")
+        ghost_state.status_tone = "yellow"
         return
     end
-
-    if ghost_state.pending_clone_ptr or (ghost_state.ghost_visual and not carx.has_ghost()) then
-        if unity and unity.destroy and ghost_state.ghost_visual then
-            ghost_state.pending_destroy_ptr = ghost_state.ghost_visual
-        end
-        ghost_state.ghost_visual = nil
-    end
-
-    ghost_state.spawn_pos = { x = player.x or 0, y = player.y or 0, z = player.z or 0 }
-
     if carx.spawn_ghost then
-        local res = carx.spawn_ghost()
-        if res then
-            if type(res) == "userdata" then
-                ghost_state.ghost_visual = res
-                ghost_state.status_text = string.format("3D-болванка создана в точке (%.1f, %.1f, %.1f).", player.x, player.y, player.z)
-            else
-                ghost_state.status_text = "Запрос спавна отправлен в Main Thread Unity..."
+        local g = carx.spawn_ghost()
+        if g then
+            ghost_state.ghost_visual = g
+            if carx.is_ghost_mirror and carx.is_ghost_mirror() and carx.set_ghost_mirror then
+                carx.set_ghost_mirror(true, ghost_state.mirror_offset)
             end
-            log.info(ghost_state.status_text)
+            ghost_state.status_text = ""
         else
-            ghost_state.status_text = "Не удалось найти объект 'Model' машины игрока на трассе."
-            log.warn(ghost_state.status_text)
+            ghost_state.status_text = T("Не удалось создать болванку.", "Failed to spawn dummy.")
+            ghost_state.status_tone = "red"
         end
     else
-        ghost_state.status_text = "Функция carx.spawn_ghost недоступна."
+        local obj = find_player_car_game_object()
+        if obj then
+            ghost_state.pending_clone_ptr = obj.ptr
+            ghost_state.status_text = ""
+        else
+            ghost_state.status_text = T("Модель машины не найдена.", "Car model not found.")
+            ghost_state.status_tone = "yellow"
+        end
     end
 end
 
@@ -109,71 +66,45 @@ local function destroy_ghost_action()
     if carx.destroy_ghost then
         carx.destroy_ghost()
     end
-    if ghost_state.ghost_visual and not carx.has_ghost() then
+    if ghost_state.ghost_visual and unity and unity.destroy then
         ghost_state.pending_destroy_ptr = ghost_state.ghost_visual
     end
-
     ghost_state.ghost_visual = nil
-    ghost_state.status_text = "Болванка удалена с трассы."
-    log.info(ghost_state.status_text)
+    ghost_state.status_text = ""
 end
 
 local function toggle_mirror_action()
-    if not carx.set_ghost_mirror then
-        ghost_state.status_text = "Функция carx.set_ghost_mirror недоступна (нужен новый DLL)."
-        return
+    if carx.set_ghost_mirror and carx.is_ghost_mirror then
+        local next_state = not carx.is_ghost_mirror()
+        if next_state and (not carx.has_ghost or not carx.has_ghost()) and carx.spawn_ghost then
+            ghost_state.ghost_visual = carx.spawn_ghost()
+        end
+        carx.set_ghost_mirror(next_state, ghost_state.mirror_offset)
     end
-    local current = carx.is_ghost_mirror and carx.is_ghost_mirror() or false
-    local next_state = not current
-    carx.set_ghost_mirror(next_state, ghost_state.mirror_offset)
-    if next_state then
-        ghost_state.status_text = string.format("Живое зеркало ВКЛ (смещение %+.1f м): колеса, суппорты и руль активны.", ghost_state.mirror_offset)
-    else
-        ghost_state.status_text = "Живое зеркало ВЫКЛ."
-    end
-    log.info(ghost_state.status_text)
 end
 
 local function toggle_collision_action()
-    if not carx.set_ghost_collision then
-        ghost_state.status_text = "Функция carx.set_ghost_collision недоступна (нужен новый DLL)."
-        return
+    if carx.set_ghost_collision and carx.is_ghost_collision then
+        carx.set_ghost_collision(not carx.is_ghost_collision())
     end
-    local current = carx.is_ghost_collision and carx.is_ghost_collision() or false
-    local next_state = not current
-    carx.set_ghost_collision(next_state)
-    if next_state then
-        ghost_state.status_text = "Коллизия болванки ВКЛ: кузов твёрдый."
-    else
-        ghost_state.status_text = "Коллизия болванки ВЫКЛ: призрак прозрачный."
-    end
-    log.info(ghost_state.status_text)
 end
 
--- Хоткеи: F8 - окно, G - болванка, H - удалить, M - живое зеркало, K - коллизия
 events.on_key(function(key, is_down)
-    if not is_down then return end
+    if not is_down or is_typing() then return end
 
-    if key == 0x77 and not is_typing() then -- F8
-        if urushi and urushi.toggle_window then
-            urushi.toggle_window("ghost")
-        end
-    end
-    if key == 0x47 and not is_typing() then -- G
+    if key == 0x77 then -- F8
+        if urushi and urushi.toggle_window then urushi.toggle_window("ghost") end
+    elseif key == 0x47 then -- G
         spawn_ghost_action()
-    end
-    if key == 0x48 and not is_typing() then -- H
+    elseif key == 0x48 then -- H
         destroy_ghost_action()
-    end
-    if key == 0x4D and not is_typing() then -- M
+    elseif key == 0x4D then -- M
         toggle_mirror_action()
-    end
-    if key == 0x4B and not is_typing() then -- K
+    elseif key == 0x4B then -- K
         toggle_collision_action()
     end
 end)
 
--- Операции инспектора на Unity Main Thread
 if events.on_main_update then
     events.on_main_update(function(dt)
         if ghost_state.pending_destroy_ptr then
@@ -196,9 +127,6 @@ if events.on_main_update then
                     end
                     if unity.set_layer then unity.set_layer(cl, 2) end
                     ghost_state.ghost_visual = cl
-                    ghost_state.status_text = string.format("Клонирован вручную -> %s", tostring(cl))
-                else
-                    ghost_state.status_text = "unity.clone вернул nil!"
                 end
             end
         end
@@ -221,57 +149,50 @@ local function render_ghost_window()
     local mirror_active = carx.is_ghost_mirror and carx.is_ghost_mirror() or false
     local col_on = carx.is_ghost_collision and carx.is_ghost_collision() or false
 
-    ui.card("Состояние модели", player and "На трассе" or "Вне трассы", function()
+    ui.card(T("Состояние", "Status"), nil, function()
         ui.stat_row({
             {
-                label = "Игрок",
-                value = (player and player.ptr) and string.format("%.0f км/ч", player.speed_kmh or 0.0) or "Не найден",
+                label = T("Игрок", "Speed"),
+                value = (player and player.ptr) and string.format(T("%.0f км/ч", "%.0f km/h"), player.speed_kmh or 0.0) or T("Вне трассы", "Off Track"),
                 tone = (player and player.ptr) and "green" or "yellow",
             },
             {
-                label = "Болванок",
+                label = T("Болванки", "Dummies"),
                 value = tostring(ghost_count),
                 tone = active and "accent" or "muted",
             },
             {
-                label = "Зеркало",
-                value = mirror_active and "ВКЛ" or "ВЫКЛ",
+                label = T("Зеркало", "Mirror"),
+                value = mirror_active and T("ВКЛ", "ON") or T("ВЫКЛ", "OFF"),
                 tone = mirror_active and "green" or "muted",
             },
         })
-
-        if player and player.ptr then
-            ui.text_dim(string.format("XYZ: %.2f, %.2f, %.2f", player.x or 0, player.y or 0, player.z or 0))
-        end
-        if active and ghost_state.ghost_visual then
-            ui.text_dim("Unity GameObject: " .. tostring(ghost_state.ghost_visual))
-        end
     end)
 
-    ui.card("Управление болванкой", "Mirror & Collision", function()
+    ui.card(T("Управление", "Controls"), nil, function()
         local full_w = ui.avail_width()
         if not active then
-            if ui.button("Создать 3D-болванку на месте [G]##gh_spawn", full_w, 32, "primary") then
+            if ui.button(T("Создать 3D-болванку [G]##gh_spawn", "Spawn 3D Dummy [G]##gh_spawn"), full_w, 32, "primary") then
                 spawn_ghost_action()
             end
         else
-            if ui.button("Удалить болванку с трассы [H]##gh_del", full_w, 32, "danger") then
+            if ui.button(T("Удалить болванку [H]##gh_del", "Remove Dummy [H]##gh_del"), full_w, 32, "danger") then
                 destroy_ghost_action()
             end
         end
 
         ui.spacing(4)
         local bw = (full_w - 8) * 0.5
-        if ui.button(mirror_active and "Зеркало: ВКЛ [M]##gh_mir" or "Живое зеркало [M]##gh_mir", bw, 28, mirror_active and "primary" or "default") then
+        if ui.button(mirror_active and T("Зеркало: ВКЛ [M]##gh_mir", "Mirror: ON [M]##gh_mir") or T("Живое зеркало [M]##gh_mir", "Live Mirror [M]##gh_mir"), bw, 28, mirror_active and "primary" or "default") then
             toggle_mirror_action()
         end
         ui.same_line(0, 8)
-        if ui.button(col_on and "Коллизия: ТВЁРДЫЙ [K]##gh_col" or "Коллизия: ПРИЗРАК [K]##gh_col", bw, 28, col_on and "primary" or "default") then
+        if ui.button(col_on and T("Коллизия: ТВЁРД [K]##gh_col", "Collision: SOLID [K]##gh_col") or T("Коллизия: ПРИЗР [K]##gh_col", "Collision: GHOST [K]##gh_col"), bw, 28, col_on and "primary" or "default") then
             toggle_collision_action()
         end
 
         ui.spacing(4)
-        local off_changed, new_off = ui.slider_float("Смещение зеркала (м)##gh_off", ghost_state.mirror_offset, -10.0, 10.0, "%+.1f м")
+        local off_changed, new_off = ui.slider_float(T("Смещение зеркала##gh_off", "Mirror Offset##gh_off"), ghost_state.mirror_offset, -10.0, 10.0, T("%+.1f м", "%+.1f m"))
         if off_changed then
             ghost_state.mirror_offset = new_off
             if mirror_active and carx.set_ghost_mirror then
@@ -279,68 +200,63 @@ local function render_ghost_window()
             end
         end
 
-        ui.spacing(2)
-        ui.text_wrapped(ghost_state.status_text, "muted")
+        if ghost_state.status_text ~= "" then
+            ui.spacing(2)
+            ui.text_wrapped(ghost_state.status_text, ghost_state.status_tone)
+        end
     end)
 
-    ui.card("Инспектор сцены Unity", string.format("Объектов: %d", #ghost_state.scanned_objects), function()
-        local bw = (ui.avail_width() - 8) * 0.5
-        if ui.button("Сканировать сцену##gh_scan", bw, 28) then
-            if unity and unity.get_all_objects then
-                ghost_state.scanned_objects = unity.get_all_objects()
-                ghost_state.status_text = string.format("Найдено объектов сцены: %d", #ghost_state.scanned_objects)
-            else
-                ghost_state.status_text = "Модуль unity.get_all_objects не найден."
+    if ui.collapsing(T("Инспектор сцены (Debug)##gh_insp", "Scene Inspector (Debug)##gh_insp"), false) then
+        ui.card(nil, nil, function()
+            local bw = (ui.avail_width() - 8) * 0.5
+            if ui.button(T("Сканировать##gh_scan", "Scan Scene##gh_scan"), bw, 26) then
+                if unity and unity.get_all_objects then
+                    ghost_state.scanned_objects = unity.get_all_objects()
+                end
             end
-        end
-        ui.same_line(0, 8)
-        if ui.button("Найти модель авто##gh_find", bw, 28, "ghost") then
-            local obj = find_player_car_game_object()
-            if obj then
-                ghost_state.status_text = string.format("Найдена модель: '%s' (ptr=%s)", obj.name, tostring(obj.ptr))
-                log.info(ghost_state.status_text)
-            else
-                ghost_state.status_text = "Объект 'Model' машины игрока не найден."
+            ui.same_line(0, 8)
+            if ui.button(T("Найти авто##gh_find", "Find Car##gh_find"), bw, 26, "ghost") then
+                local obj = find_player_car_game_object()
+                ghost_state.status_text = obj and string.format("%s (%s)", obj.name, tostring(obj.ptr)) or T("Не найдено", "Not found")
+                ghost_state.status_tone = obj and "accent" or "yellow"
             end
-        end
 
-        if #ghost_state.scanned_objects > 0 and ui.collapsing("Найденные корневые объекты", true) then
-            local shown = 0
-            for i = 1, #ghost_state.scanned_objects do
-                local obj = ghost_state.scanned_objects[i]
-                local name = obj.name or ""
-                if name == "Model" or name:find("_0") or name:find("_1") or name:find("Kyoto") or name:find("Nishimo") or name:find("BNM") or name:find("Car") then
-                    shown = shown + 1
-                    if shown <= 18 then
-                        if ui.button("Клон##gh_clone_" .. tostring(i), 64, 22, "ghost") then
-                            ghost_state.pending_clone_ptr = obj.ptr
-                            ghost_state.status_text = string.format("Запрошено клонирование '%s'...", name)
+            if #ghost_state.scanned_objects > 0 then
+                ui.spacing(4)
+                local shown = 0
+                for i = 1, #ghost_state.scanned_objects do
+                    local obj = ghost_state.scanned_objects[i]
+                    local name = obj.name or ""
+                    if name == "Model" or name:find("_0") or name:find("_1") or name:find("Kyoto") or name:find("Nishimo") or name:find("BNM") or name:find("Car") then
+                        shown = shown + 1
+                        if shown <= 16 then
+                            if ui.button(T("Клон##gh_cl_", "Clone##gh_cl_") .. tostring(i), 62, 22, "ghost") then
+                                ghost_state.pending_clone_ptr = obj.ptr
+                            end
+                            ui.same_line(0, 8)
+                            if #name > 26 then name = name:sub(1, 24) .. ".." end
+                            ui.text(string.format("[%d] %s", i, name))
                         end
-                        ui.same_line(0, 8)
-                        if #name > 26 then name = name:sub(1, 24) .. ".." end
-                        ui.text(string.format("[%d] %s", i, name))
                     end
                 end
             end
-        end
-    end)
-
-    ui.text_wrapped("Хоткеи: [F8] Окно | [G] Болванка | [H] Удалить | [M] Зеркало | [K] Коллизия", "muted")
+        end)
+    end
 end
 
 if urushi and urushi.register_window then
     urushi.register_window({
         id = "ghost",
-        title = "Болванка 3D",
+        title = T("Болванка 3D", "3D Dummy"),
         icon = "ghost",
         order = 50,
         default_open = false,
         default_pinned = false,
-        x = 420,
-        y = 85,
-        width = 416,
+        x = 294,
+        y = 54,
+        width = 396,
         render = render_ghost_window,
     })
 end
 
-log.info("Модуль ghost_test.lua (v2 Main Thread Model Cloner) успешно загружен")
+log.info("Ghost 3D dummy module loaded.")

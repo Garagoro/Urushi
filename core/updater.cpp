@@ -469,6 +469,10 @@ void ParseVersionManifest(const std::vector<uint8_t>& bytes, std::string& outVer
     }
 }
 
+inline const char* L(const char* ru, const char* en) {
+    return UrushiUI::IsEnglish() ? en : ru;
+}
+
 void CheckWorker(bool userInitiated) {
     s_workerBusy.store(true, std::memory_order_release);
 
@@ -479,7 +483,7 @@ void CheckWorker(bool userInitiated) {
         exeDir = s_exeDir;
         localTs = s_localLinkTime;
         s_state = State::Checking;
-        s_statusText = "Проверка обновлений на GitHub...";
+        s_statusText = L("Проверка обновлений на GitHub...", "Checking GitHub for updates...");
         s_planned.clear();
         s_localBuildNewer = false;
         s_remoteVersion.clear();
@@ -496,13 +500,13 @@ void CheckWorker(bool userInitiated) {
     if (!GitHubApiGet(treePath, L"application/vnd.github+json", kMaxTreeBytes, treeBody, status)) {
         std::lock_guard<std::mutex> lk(s_mtx);
         s_state = State::Error;
-        if (status == 0) s_statusText = "Нет подключения к api.github.com";
+        if (status == 0) s_statusText = L("Нет подключения к api.github.com", "Cannot connect to api.github.com");
         else if (status == 401 || status == 404) {
-            s_statusText = "Репозиторий недоступен (HTTP " + std::to_string(status) + ")";
+            s_statusText = std::string(L("Репозиторий недоступен (HTTP ", "Repository unavailable (HTTP ")) + std::to_string(status) + ")";
         } else if (status == 403 || status == 429) {
             s_statusText = "GitHub rate limit (HTTP " + std::to_string(status) + ")";
         } else {
-            s_statusText = "Ошибка GitHub API: HTTP " + std::to_string(status);
+            s_statusText = std::string(L("Ошибка GitHub API: HTTP ", "GitHub API error: HTTP ")) + std::to_string(status);
         }
         Logger::Warn("Updater check failed: " + s_statusText);
         s_workerBusy.store(false, std::memory_order_release);
@@ -514,7 +518,9 @@ void CheckWorker(bool userInitiated) {
     if (!ParseGitTreeJson(treeBody, tree, truncated) || truncated) {
         std::lock_guard<std::mutex> lk(s_mtx);
         s_state = State::Error;
-        s_statusText = truncated ? "Список файлов GitHub усечён" : "Ошибка разбора ответа GitHub";
+        s_statusText = truncated
+            ? L("Список файлов GitHub усечён", "GitHub file tree truncated")
+            : L("Ошибка разбора ответа GitHub", "Failed to parse GitHub response");
         s_workerBusy.store(false, std::memory_order_release);
         return;
     }
@@ -585,13 +591,13 @@ void CheckWorker(bool userInitiated) {
     if (s_planned.empty()) {
         s_state = State::UpToDate;
         s_statusText = localNewerThanRepo
-            ? "Локальная сборка новее репо (dev)"
-            : "Установлена актуальная версия URUSHI";
+            ? L("Локальная сборка новее репо (dev)", "Local build is newer than repo (dev)")
+            : L("Установлена актуальная версия URUSHI", "URUSHI is up to date");
         Logger::Info("Updater check: up to date (" + s_statusText + ")");
     } else {
         s_state = State::UpdateAvailable;
         s_bannerDismissed = false;
-        s_statusText = "Доступно обновление (" + std::to_string(s_planned.size()) + " ф.)";
+        s_statusText = std::string(L("Доступно обновление (", "Update available (")) + std::to_string(s_planned.size()) + L(" ф.)", " files)");
         Logger::Info("Updater check: found " + std::to_string(s_planned.size()) +
                      " changed file(s), remoteVer=" + (remoteVer.empty() ? "n/a" : remoteVer));
     }
@@ -610,7 +616,7 @@ void InstallWorker() {
         s_filesDone = 0;
         s_bytesDone = 0;
         s_proxyNeedsRestart = false;
-        s_statusText = "Подготовка к загрузке...";
+        s_statusText = L("Подготовка к загрузке...", "Preparing download...");
     }
 
     uint64_t writtenBytes = 0;
@@ -622,25 +628,27 @@ void InstallWorker() {
     for (size_t i = 0; i < files.size(); ++i) {
         if (s_stop.load(std::memory_order_acquire) || writtenBytes + files[i].entry.size > kMaxTotalBytes) {
             failed = true;
-            failMsg = s_stop.load(std::memory_order_acquire) ? "Отменено" : "Превышен лимит объёма";
+            failMsg = s_stop.load(std::memory_order_acquire)
+                ? L("Отменено", "Cancelled")
+                : L("Превышен лимит объёма", "Download size limit exceeded");
             break;
         }
         {
             std::lock_guard<std::mutex> lk(s_mtx);
             s_currentFile = files[i].entry.path;
-            s_statusText = "Скачивание " + std::to_string(i + 1) + "/" + std::to_string(files.size()) + ": " + files[i].entry.path;
+            s_statusText = std::string(L("Скачивание ", "Downloading ")) + std::to_string(i + 1) + "/" + std::to_string(files.size()) + ": " + files[i].entry.path;
         }
 
         std::vector<uint8_t> blob;
         DWORD status = 0;
         if (!FetchGitBlob(files[i].entry, blob, status)) {
             failed = true;
-            failMsg = "Не удалось скачать " + files[i].entry.path + " (HTTP " + std::to_string(status) + ")";
+            failMsg = std::string(L("Не удалось скачать ", "Failed to download ")) + files[i].entry.path + " (HTTP " + std::to_string(status) + ")";
             break;
         }
         if (!WriteReplaceFile(files[i].destPath, blob, files[i].isProxy)) {
             failed = true;
-            failMsg = "Ошибка записи " + files[i].entry.path + " (err " + std::to_string(GetLastError()) + ")";
+            failMsg = std::string(L("Ошибка записи ", "Failed to write ")) + files[i].entry.path + " (err " + std::to_string(GetLastError()) + ")";
             break;
         }
 
@@ -673,7 +681,7 @@ void InstallWorker() {
         {
             std::lock_guard<std::mutex> lk(s_mtx);
             s_state = State::Reinjecting;
-            s_statusText = "Перезагрузка модулей URUSHI...";
+            s_statusText = L("Перезагрузка модулей URUSHI...", "Reloading URUSHI modules...");
         }
         s_workerBusy.store(false, std::memory_order_release);
         SetEvent(hReload);
@@ -690,8 +698,8 @@ void InstallWorker() {
     s_proxyNeedsRestart = touchedProxy;
     s_state = State::RestartRequired;
     s_statusText = touchedProxy
-        ? "Файлы обновлены! Для новой version.dll нужен перезапуск игры."
-        : "Обновление скачано! Нужен перезапуск игры (прокси не обнаружен).";
+        ? L("Файлы обновлены! Для новой version.dll нужен перезапуск игры.", "Files updated! Restart the game to load the new version.dll.")
+        : L("Обновление скачано! Нужен перезапуск игры (прокси не обнаружен).", "Update downloaded! Game restart required.");
     s_workerBusy.store(false, std::memory_order_release);
 }
 
@@ -805,10 +813,10 @@ void RenderUI(bool menuOpen) {
         if (ImGui::Begin("##urushi_update_toast", nullptr,
                          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
                          ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
-            UrushiUI::Badge("ОБНОВЛЕНИЕ", UrushiUI::Tone::Accent);
+            UrushiUI::Badge(L("ОБНОВЛЕНИЕ", "UPDATE"), UrushiUI::Tone::Accent);
             ImGui::SameLine(0.0f, 8.0f * S);
             ImGui::TextColored(ImVec4(0.92f, 0.92f, 0.95f, 1.0f),
-                               "%u ф. — нажмите F4", st.filesTotal);
+                               L("%u ф. — нажмите F4", "%u file(s) — press F4"), st.filesTotal);
         }
         ImGui::End();
         ImGui::PopStyleVar(3);
@@ -823,7 +831,7 @@ void RenderUI(bool menuOpen) {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f * S);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f * S, 12.0f * S));
-    const bool opened = ImGui::Begin("URUSHI // Обновление##urushi_updater_banner", nullptr,
+    const bool opened = ImGui::Begin("URUSHI // Update##urushi_updater_banner", nullptr,
                                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
                                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings);
     if (!opened) {
@@ -833,24 +841,24 @@ void RenderUI(bool menuOpen) {
         return;
     }
 
-    UrushiUI::Badge("ОБНОВЛЕНИЕ", UrushiUI::Tone::Accent);
+    UrushiUI::Badge(L("ОБНОВЛЕНИЕ", "UPDATE"), UrushiUI::Tone::Accent);
     ImGui::SameLine(0.0f, 8.0f * S);
-    UrushiUI::Text("Обновление URUSHI");
+    UrushiUI::Text(L("Обновление URUSHI", "URUSHI Update"));
     UrushiUI::Spacing(6.0f * S);
 
     if (st.state == State::UpdateAvailable) {
         const std::string verStr = st.remoteVersion.empty()
-            ? ("обновлений: " + std::to_string(st.filesTotal))
+            ? (std::string(L("файлов: ", "files: ")) + std::to_string(st.filesTotal))
             : ("v" + st.localVersion + " -> v" + st.remoteVersion);
 
         const double kb = static_cast<double>(st.bytesTotal) / 1024.0;
         char sizeBuf[48];
-        snprintf(sizeBuf, sizeof(sizeBuf), "%u (%.1f КБ)", st.filesTotal, kb);
+        snprintf(sizeBuf, sizeof(sizeBuf), L("%u (%.1f КБ)", "%u (%.1f KB)"), st.filesTotal, kb);
 
-        UrushiUI::BeginCard("Доступна новая версия", verStr);
+        UrushiUI::BeginCard(L("Доступна новая версия", "New version available"), verStr);
         UrushiUI::StatRow({
-            { "Файлов", sizeBuf, UrushiUI::Tone::Accent },
-            { "Статус", "Готово к установке", UrushiUI::Tone::Green }
+            { L("Файлов", "Files"), sizeBuf, UrushiUI::Tone::Accent },
+            { L("Статус", "Status"), L("Готово", "Ready"), UrushiUI::Tone::Green }
         });
 
         if (!st.releaseNotes.empty()) {
@@ -858,10 +866,10 @@ void RenderUI(bool menuOpen) {
             UrushiUI::TextWrapped(st.releaseNotes, UrushiUI::Tone::Muted);
         }
 
-        if (!st.files.empty() && UrushiUI::CollapsingSection("Изменённые файлы", false)) {
+        if (!st.files.empty() && UrushiUI::CollapsingSection(L("Изменённые файлы", "Changed files"), false)) {
             for (const auto& f : st.files) {
                 char lineBuf[320];
-                snprintf(lineBuf, sizeof(lineBuf), "- %s (%.1f КБ)", f.repoPath.c_str(), static_cast<double>(f.size) / 1024.0);
+                snprintf(lineBuf, sizeof(lineBuf), "- %s (%.1f KB)", f.repoPath.c_str(), static_cast<double>(f.size) / 1024.0);
                 UrushiUI::Text(lineBuf, UrushiUI::Tone::Muted);
             }
         }
@@ -871,38 +879,38 @@ void RenderUI(bool menuOpen) {
         const float cw = UrushiUI::CurrentContentWidth();
         const float bw1 = (cw - gap) * 0.62f;
         const float bw2 = (cw - gap) * 0.38f;
-        if (UrushiUI::Button("Обновить", bw1, 30.0f * S, UrushiUI::ButtonStyle::Primary)) {
+        if (UrushiUI::Button(L("Обновить", "Update"), bw1, 30.0f * S, UrushiUI::ButtonStyle::Primary)) {
             StartInstallAsync();
         }
         ImGui::SameLine(0.0f, gap);
-        if (UrushiUI::Button("Позже", bw2, 30.0f * S, UrushiUI::ButtonStyle::Ghost)) {
+        if (UrushiUI::Button(L("Позже", "Later"), bw2, 30.0f * S, UrushiUI::ButtonStyle::Ghost)) {
             SetDismissed(true);
         }
         UrushiUI::EndCard();
     } else if (st.state == State::Downloading) {
-        UrushiUI::BeginCard("Загрузка файлов", st.statusText);
+        UrushiUI::BeginCard(L("Загрузка файлов", "Downloading files"), st.statusText);
         float frac = (st.filesTotal > 0) ? (static_cast<float>(st.filesDone) / static_cast<float>(st.filesTotal)) : 0.0f;
         char progBuf[48];
         snprintf(progBuf, sizeof(progBuf), "%u / %u", st.filesDone, st.filesTotal);
         UrushiUI::ProgressBar(frac, -1.0f, 14.0f * S, progBuf);
         UrushiUI::EndCard();
     } else if (st.state == State::Reinjecting) {
-        UrushiUI::BeginCard("Установка", "Файлы скачаны");
-        UrushiUI::TextWrapped("Выполняется реинжект URUSHI...", UrushiUI::Tone::Green);
+        UrushiUI::BeginCard(L("Установка", "Installing"), L("Файлы скачаны", "Download complete"));
+        UrushiUI::TextWrapped(L("Выполняется реинжект URUSHI...", "Reloading URUSHI..."), UrushiUI::Tone::Green);
         UrushiUI::EndCard();
     } else if (st.state == State::RestartRequired) {
-        UrushiUI::BeginCard("Требуется перезапуск", "Обновление ядра");
+        UrushiUI::BeginCard(L("Требуется перезапуск", "Restart required"), L("Обновление ядра", "Core update"));
         UrushiUI::TextWrapped(st.statusText, UrushiUI::Tone::Yellow);
         UrushiUI::Spacing(6.0f * S);
         const float gap = 8.0f * S;
         const float cw = UrushiUI::CurrentContentWidth();
         const float bw1 = (cw - gap) * 0.62f;
         const float bw2 = (cw - gap) * 0.38f;
-        if (UrushiUI::Button("Перезапустить игру", bw1, 30.0f * S, UrushiUI::ButtonStyle::Primary)) {
+        if (UrushiUI::Button(L("Перезапустить игру", "Restart game"), bw1, 30.0f * S, UrushiUI::ButtonStyle::Primary)) {
             RestartGame();
         }
         ImGui::SameLine(0.0f, gap);
-        if (UrushiUI::Button("Закрыть", bw2, 30.0f * S, UrushiUI::ButtonStyle::Ghost)) {
+        if (UrushiUI::Button(L("Закрыть", "Close"), bw2, 30.0f * S, UrushiUI::ButtonStyle::Ghost)) {
             SetDismissed(true);
         }
         UrushiUI::EndCard();

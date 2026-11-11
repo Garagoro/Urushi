@@ -16,7 +16,13 @@ public:
         Amber = 0,     // Default URUSHI warm amber (#E59A38)
         Vermilion = 1, // Japanese lacquer red (#E04832)
         Platinum = 2,  // Monochrome silver (#E4E4EC)
-        Indigo = 3     // Restrained dark indigo (#8B7CF6)
+        Indigo = 3,    // Restrained dark indigo (#8B7CF6)
+        Custom = 4     // User-selected custom RGB accent
+    };
+
+    enum class Language : int {
+        Russian = 0,
+        English = 1
     };
 
     enum class ButtonStyle : int {
@@ -115,16 +121,25 @@ public:
     static void SetWindowPinned(const std::string& id, bool pinned);
     static void SetWindowShaded(const std::string& id, bool shaded);
     static void SetWindowPos(const std::string& id, float x, float y);
+    static void SetWindowTitle(const std::string& id, const std::string& title);
     static void CloseAllUnpinned();
     static DebugSnapshot GetDebugSnapshot();
 
     static void SetSingleTabMode(bool enabled);
     static bool GetSingleTabMode();
 
+    static void SetLanguage(Language lang);
+    static bool SetLanguageByName(const std::string& name);
+    static Language GetLanguage();
+    static std::string GetLanguageName();
+    static bool IsEnglish();
+
     static void SetAccent(Accent accent);
     static bool SetAccentByName(const std::string& name);
     static Accent GetAccent();
     static std::string GetAccentName();
+    static void SetCustomAccent(float r, float g, float b);
+    static void GetCustomAccent(float& r, float& g, float& b);
 
     // Shared theme palette accessors (used by Updater, UiSchema, widgets)
     static ImU32 GetAccentU32(float alphaMul = 1.0f);
@@ -150,6 +165,8 @@ public:
 
     static bool Combo(const std::string& label, int* currentIdx, const std::vector<std::string>& items);
     static bool InputText(const std::string& label, std::string& text, size_t maxLen = 256);
+    static bool ColorEdit3(const std::string& label, float rgb[3]);
+    static bool ColorEdit4(const std::string& label, float rgba[4]);
     static void ProgressBar(float fraction, float width = -1.0f, float height = 10.0f, const char* overlay = nullptr);
 
     static void Badge(const std::string& text, Tone tone = Tone::Accent);

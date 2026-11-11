@@ -141,6 +141,41 @@ int Lua_UrushiGetAccent(lua_State* L) {
     return 1;
 }
 
+int Lua_UrushiSetCustomAccent(lua_State* L) {
+    float r = static_cast<float>(luaL_checknumber(L, 1));
+    float g = static_cast<float>(luaL_checknumber(L, 2));
+    float b = static_cast<float>(luaL_checknumber(L, 3));
+    UrushiUI::SetCustomAccent(r, g, b);
+    return 0;
+}
+
+int Lua_UrushiGetCustomAccent(lua_State* L) {
+    float r = 0.3f, g = 0.78f, b = 0.96f;
+    UrushiUI::GetCustomAccent(r, g, b);
+    lua_pushnumber(L, r);
+    lua_pushnumber(L, g);
+    lua_pushnumber(L, b);
+    return 3;
+}
+
+int Lua_UrushiSetLanguage(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+    lua_pushboolean(L, UrushiUI::SetLanguageByName(name) ? 1 : 0);
+    return 1;
+}
+
+int Lua_UrushiGetLanguage(lua_State* L) {
+    lua_pushstring(L, UrushiUI::GetLanguageName().c_str());
+    return 1;
+}
+
+int Lua_UrushiSetWindowTitle(lua_State* L) {
+    const char* id = luaL_checkstring(L, 1);
+    const char* title = luaL_checkstring(L, 2);
+    UrushiUI::SetWindowTitle(id, title);
+    return 0;
+}
+
 int Lua_UrushiSetSingleMode(lua_State* L) {
     UrushiUI::SetSingleTabMode(lua_toboolean(L, 1) != 0);
     return 0;
@@ -389,6 +424,38 @@ int Lua_UiInputText(lua_State* L) {
     return 2;
 }
 
+int Lua_UiColorEdit3(lua_State* L) {
+    const char* label = luaL_checkstring(L, 1);
+    float rgb[3] = {
+        static_cast<float>(luaL_optnumber(L, 2, 1.0)),
+        static_cast<float>(luaL_optnumber(L, 3, 1.0)),
+        static_cast<float>(luaL_optnumber(L, 4, 1.0))
+    };
+    bool ch = UrushiUI::ColorEdit3(label, rgb);
+    lua_pushboolean(L, ch ? 1 : 0);
+    lua_pushnumber(L, rgb[0]);
+    lua_pushnumber(L, rgb[1]);
+    lua_pushnumber(L, rgb[2]);
+    return 4;
+}
+
+int Lua_UiColorEdit4(lua_State* L) {
+    const char* label = luaL_checkstring(L, 1);
+    float rgba[4] = {
+        static_cast<float>(luaL_optnumber(L, 2, 1.0)),
+        static_cast<float>(luaL_optnumber(L, 3, 1.0)),
+        static_cast<float>(luaL_optnumber(L, 4, 1.0)),
+        static_cast<float>(luaL_optnumber(L, 5, 1.0))
+    };
+    bool ch = UrushiUI::ColorEdit4(label, rgba);
+    lua_pushboolean(L, ch ? 1 : 0);
+    lua_pushnumber(L, rgba[0]);
+    lua_pushnumber(L, rgba[1]);
+    lua_pushnumber(L, rgba[2]);
+    lua_pushnumber(L, rgba[3]);
+    return 5;
+}
+
 int Lua_UiProgressBar(lua_State* L) {
     const float sc = UrushiUI::GetUiScale();
     float frac = static_cast<float>(luaL_checknumber(L, 1));
@@ -476,8 +543,13 @@ const luaL_Reg kUrushiFuncs[] = {
     { "toggle_window",   Lua_UrushiToggleWindow },
     { "is_window_open",  Lua_UrushiIsWindowOpen },
     { "close_all",       Lua_UrushiCloseAll },
-    { "set_accent",      Lua_UrushiSetAccent },
-    { "get_accent",      Lua_UrushiGetAccent },
+    { "set_accent",        Lua_UrushiSetAccent },
+    { "get_accent",        Lua_UrushiGetAccent },
+    { "set_custom_accent", Lua_UrushiSetCustomAccent },
+    { "get_custom_accent", Lua_UrushiGetCustomAccent },
+    { "set_language",      Lua_UrushiSetLanguage },
+    { "get_language",      Lua_UrushiGetLanguage },
+    { "set_window_title",  Lua_UrushiSetWindowTitle },
     { "set_single_mode", Lua_UrushiSetSingleMode },
     { "get_single_mode", Lua_UrushiGetSingleMode },
     { "is_menu_open",    Lua_UrushiIsMenuOpen },
@@ -503,6 +575,8 @@ const luaL_Reg kUiFuncs[] = {
     { "collapsing",   Lua_UiCollapsing },
     { "combo",        Lua_UiCombo },
     { "input_text",   Lua_UiInputText },
+    { "color_edit3",  Lua_UiColorEdit3 },
+    { "color_edit4",  Lua_UiColorEdit4 },
     { "progress_bar", Lua_UiProgressBar },
     { "badge",        Lua_UiBadge },
     { "keycap",       Lua_UiKeycap },

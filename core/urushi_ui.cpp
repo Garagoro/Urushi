@@ -97,6 +97,19 @@ struct CardFrame {
 
 std::recursive_mutex s_mutex;
 UrushiUI::Accent s_accent = UrushiUI::Accent::Amber;
+float s_customRgb[3] = { 0.30f, 0.78f, 0.96f };
+AccentDef s_customAccentDef = {
+    "custom",
+    IM_COL32(76, 199, 245, 255),
+    IM_COL32(102, 212, 250, 255),
+    IM_COL32(14, 16, 18, 255),
+    IM_COL32(76, 199, 245, 40),
+    IM_COL32(76, 199, 245, 102)
+};
+UrushiUI::Language s_language = []() {
+    LANGID lang = GetUserDefaultUILanguage();
+    return (PRIMARYLANGID(lang) == LANG_RUSSIAN) ? UrushiUI::Language::Russian : UrushiUI::Language::English;
+}();
 bool s_singleTabMode = false;
 float s_dockAlpha = 0.0f;
 float s_lastDockX = 0.0f, s_lastDockY = 0.0f, s_lastDockW = 0.0f, s_lastDockH = 0.0f;
@@ -160,7 +173,30 @@ static float AnimateTowards(ImGuiID key, float target, float speed = 18.0f) {
     return it->second;
 }
 
+static void RebuildCustomAccentDef() {
+    const float r = std::clamp(s_customRgb[0], 0.0f, 1.0f);
+    const float g = std::clamp(s_customRgb[1], 0.0f, 1.0f);
+    const float b = std::clamp(s_customRgb[2], 0.0f, 1.0f);
+    const int ri = static_cast<int>(std::round(r * 255.0f));
+    const int gi = static_cast<int>(std::round(g * 255.0f));
+    const int bi = static_cast<int>(std::round(b * 255.0f));
+    const int rh = std::min(255, static_cast<int>(std::round((r + (1.0f - r) * 0.16f) * 255.0f)));
+    const int gh = std::min(255, static_cast<int>(std::round((g + (1.0f - g) * 0.16f) * 255.0f)));
+    const int bh = std::min(255, static_cast<int>(std::round((b + (1.0f - b) * 0.16f) * 255.0f)));
+    const float lum = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+
+    s_customAccentDef.name  = "custom";
+    s_customAccentDef.main  = IM_COL32(ri, gi, bi, 255);
+    s_customAccentDef.hover = IM_COL32(rh, gh, bh, 255);
+    s_customAccentDef.fg    = (lum > 0.52f) ? IM_COL32(14, 14, 18, 255) : IM_COL32(255, 255, 255, 255);
+    s_customAccentDef.soft  = IM_COL32(ri, gi, bi, 40);
+    s_customAccentDef.line  = IM_COL32(ri, gi, bi, 102);
+}
+
 static const AccentDef& CurrentAccentDef() {
+    if (s_accent == UrushiUI::Accent::Custom) {
+        return s_customAccentDef;
+    }
     int idx = static_cast<int>(s_accent);
     if (idx < 0 || idx >= 4) idx = 0;
     return kAccents[idx];
@@ -994,6 +1030,13 @@ void UrushiUI::SetWindowPos(const std::string& id, float x, float y) {
     }
 }
 
+void UrushiUI::SetWindowTitle(const std::string& id, const std::string& title) {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    if (WindowState* w = FindWindowLocked(id)) {
+        w->title = title;
+    }
+}
+
 UrushiUI::DebugSnapshot UrushiUI::GetDebugSnapshot() {
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
     DebugSnapshot snap;
@@ -1039,6 +1082,38 @@ bool UrushiUI::GetSingleTabMode() {
     return s_singleTabMode;
 }
 
+void UrushiUI::SetLanguage(Language lang) {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    s_language = lang;
+}
+
+bool UrushiUI::SetLanguageByName(const std::string& name) {
+    if (_stricmp(name.c_str(), "ru") == 0 || _stricmp(name.c_str(), "russian") == 0) {
+        SetLanguage(Language::Russian);
+        return true;
+    }
+    if (_stricmp(name.c_str(), "en") == 0 || _stricmp(name.c_str(), "english") == 0) {
+        SetLanguage(Language::English);
+        return true;
+    }
+    return false;
+}
+
+UrushiUI::Language UrushiUI::GetLanguage() {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    return s_language;
+}
+
+std::string UrushiUI::GetLanguageName() {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    return (s_language == Language::English) ? "en" : "ru";
+}
+
+bool UrushiUI::IsEnglish() {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    return s_language == Language::English;
+}
+
 void UrushiUI::SetAccent(Accent accent) {
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
     s_accent = accent;
@@ -1048,6 +1123,10 @@ void UrushiUI::SetAccent(Accent accent) {
 }
 
 bool UrushiUI::SetAccentByName(const std::string& name) {
+    if (_stricmp(name.c_str(), "custom") == 0) {
+        SetAccent(Accent::Custom);
+        return true;
+    }
     for (int i = 0; i < 4; ++i) {
         if (_stricmp(name.c_str(), kAccents[i].name) == 0) {
             SetAccent(static_cast<Accent>(i));
@@ -1055,6 +1134,25 @@ bool UrushiUI::SetAccentByName(const std::string& name) {
         }
     }
     return false;
+}
+
+void UrushiUI::SetCustomAccent(float r, float g, float b) {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    s_customRgb[0] = std::clamp(r, 0.0f, 1.0f);
+    s_customRgb[1] = std::clamp(g, 0.0f, 1.0f);
+    s_customRgb[2] = std::clamp(b, 0.0f, 1.0f);
+    RebuildCustomAccentDef();
+    s_accent = Accent::Custom;
+    if (ImGui::GetCurrentContext()) {
+        ApplyBaseTheme();
+    }
+}
+
+void UrushiUI::GetCustomAccent(float& r, float& g, float& b) {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    r = s_customRgb[0];
+    g = s_customRgb[1];
+    b = s_customRgb[2];
 }
 
 UrushiUI::Accent UrushiUI::GetAccent() {
@@ -1565,6 +1663,119 @@ bool UrushiUI::InputText(const std::string& label, std::string& text, size_t max
     if (ch) text = buf.data();
     ImGui::PopItemWidth();
     return ch;
+}
+
+static bool ColorEditInternal(const std::string& label, float col[4], bool hasAlpha) {
+    const float S = UrushiUI::GetUiScale();
+    const float w = UrushiUI::CurrentContentWidth();
+    const float rowH = 26.0f * S;
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    const char* hashPos = strstr(label.c_str(), "##");
+    std::string vis = hashPos ? label.substr(0, hashPos - label.c_str()) : label;
+
+    const float cr = std::clamp(col[0], 0.0f, 1.0f);
+    const float cg = std::clamp(col[1], 0.0f, 1.0f);
+    const float cb = std::clamp(col[2], 0.0f, 1.0f);
+    const float ca = hasAlpha ? std::clamp(col[3], 0.0f, 1.0f) : 1.0f;
+
+    const int ri = static_cast<int>(std::round(cr * 255.0f));
+    const int gi = static_cast<int>(std::round(cg * 255.0f));
+    const int bi = static_cast<int>(std::round(cb * 255.0f));
+    const int ai = static_cast<int>(std::round(ca * 255.0f));
+
+    char hexBuf[16];
+    if (hasAlpha) snprintf(hexBuf, sizeof(hexBuf), "#%02X%02X%02X%02X", ri, gi, bi, ai);
+    else snprintf(hexBuf, sizeof(hexBuf), "#%02X%02X%02X", ri, gi, bi);
+
+    if (AppFonts::Mono) ImGui::PushFont(AppFonts::Mono);
+    ImVec2 hexSz = ImGui::CalcTextSize(hexBuf);
+    if (AppFonts::Mono) ImGui::PopFont();
+
+    const float swW = 44.0f * S;
+    const float swH = 20.0f * S;
+    const float swGap = 8.0f * S;
+    ImVec2 swMin(pos.x + w - swW, pos.y + (rowH - swH) * 0.5f);
+    ImVec2 swMax(swMin.x + swW, swMin.y + swH);
+    const float hexX = swMin.x - swGap - hexSz.x;
+
+    ImGui::PushID(label.c_str());
+    bool clicked = ImGui::InvisibleButton("##clr_btn", ImVec2(w, rowH));
+    bool hovered = ImGui::IsItemHovered();
+    if (clicked) {
+        ImGui::OpenPopup("##clr_pop");
+    }
+
+    dl->PushClipRect(pos, ImVec2(std::max(pos.x + 8.0f * S, hexX - 8.0f * S), pos.y + rowH), true);
+    ImVec2 lblSz = ImGui::CalcTextSize(vis.c_str());
+    dl->AddText(ImVec2(pos.x, pos.y + (rowH - lblSz.y) * 0.5f),
+                hovered ? IM_COL32(255, 255, 255, 255) : kColTextPrimary, vis.c_str());
+    dl->PopClipRect();
+
+    if (AppFonts::Mono) ImGui::PushFont(AppFonts::Mono);
+    dl->AddText(ImVec2(hexX, pos.y + (rowH - hexSz.y) * 0.5f), kColTextSecondary, hexBuf);
+    if (AppFonts::Mono) ImGui::PopFont();
+
+    const float swR = 5.0f * S;
+    if (hasAlpha && ai < 255) {
+        dl->AddRectFilled(swMin, swMax, IM_COL32(42, 42, 50, 255), swR);
+        dl->AddRectFilled(swMin, ImVec2(swMin.x + swW * 0.5f, swMax.y), IM_COL32(ri, gi, bi, 255), swR, ImDrawFlags_RoundCornersLeft);
+        dl->AddRectFilled(ImVec2(swMin.x + swW * 0.5f, swMin.y), swMax, IM_COL32(ri, gi, bi, ai), swR, ImDrawFlags_RoundCornersRight);
+    } else {
+        dl->AddRectFilled(swMin, swMax, IM_COL32(ri, gi, bi, 255), swR);
+    }
+    dl->AddRect(swMin, swMax, hovered ? UrushiUI::GetAccentU32() : kColHairlineStrong, swR, 0, 1.0f);
+
+    bool changed = false;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f * S, 12.0f * S));
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, U32ToVec4(kColBgDock));
+    ImGui::PushStyleColor(ImGuiCol_Border, U32ToVec4(kColHairlineStrong));
+    if (ImGui::BeginPopup("##clr_pop")) {
+        ImGui::PushItemWidth(210.0f * S);
+        ImGuiColorEditFlags flags =
+            ImGuiColorEditFlags_PickerHueBar |
+            ImGuiColorEditFlags_NoSidePreview |
+            ImGuiColorEditFlags_NoLabel |
+            ImGuiColorEditFlags_NoOptions |
+            ImGuiColorEditFlags_DisplayRGB |
+            ImGuiColorEditFlags_DisplayHex;
+        if (hasAlpha) {
+            flags |= ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf;
+        } else {
+            flags |= ImGuiColorEditFlags_NoAlpha;
+        }
+        if (col[0] > 1.0f || col[1] > 1.0f || col[2] > 1.0f) {
+            flags |= ImGuiColorEditFlags_HDR;
+        }
+        if (ImGui::ColorPicker4("##pick", col, flags)) {
+            changed = true;
+        }
+        ImGui::PopItemWidth();
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar(1);
+    ImGui::PopID();
+
+    return changed;
+}
+
+bool UrushiUI::ColorEdit3(const std::string& label, float rgb[3]) {
+    if (!rgb) return false;
+    float tmp[4] = { rgb[0], rgb[1], rgb[2], 1.0f };
+    if (ColorEditInternal(label, tmp, false)) {
+        rgb[0] = tmp[0];
+        rgb[1] = tmp[1];
+        rgb[2] = tmp[2];
+        return true;
+    }
+    return false;
+}
+
+bool UrushiUI::ColorEdit4(const std::string& label, float rgba[4]) {
+    if (!rgba) return false;
+    return ColorEditInternal(label, rgba, true);
 }
 
 void UrushiUI::ProgressBar(float fraction, float width, float height, const char* overlay) {
