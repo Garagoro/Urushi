@@ -1,5 +1,5 @@
 -- scripts/teleport_mod.lua
--- Urushi Teleport System: Per-track persistence, custom naming, unlimited checkpoints list
+-- Urushi Teleport System: Per-track persistence, custom naming, unlimited checkpoints
 local T = i18n.t
 local VK_SAVE = 0xDB -- '['
 local VK_TP   = 0xDD -- ']'
@@ -425,8 +425,8 @@ local function render_teleport_window()
     end
     local active_pt = points[state.active_idx]
 
-    -- Card 1: Track Header & Info
-    ui.card(T("Текущая трасса", "Current Track"), nil, function()
+    -- Card 1: Track & Quick Save
+    ui.card(T("Трасса", "Track"), nil, function()
         ui.badge(state.current_track, "accent")
         ui.same_line(0, 8)
         ui.badge(string.format(T("%d чекпоинтов", "%d checkpoints"), #points), #points > 0 and "green" or "muted")
@@ -441,20 +441,134 @@ local function render_teleport_window()
         end
 
         ui.spacing(4)
-        if p then
-            local active_dist = active_pt and string.format("%.1f м", distance_3d(p, active_pt)) or "--"
-            ui.stat_row({
-                { label = T("Скорость", "Speed"), value = string.format(T("%.0f км/ч", "%.0f km/h"), p.speed_kmh or 0.0), tone = "default" },
-                { label = T("До активной", "To Active"), value = active_dist, tone = active_pt and "accent" or "muted" },
-            })
-            ui.spacing(4)
-            ui.text_dim(string.format("XYZ: %.1f · %.1f · %.1f", p.x or 0.0, p.y or 0.0, p.z or 0.0))
+        local cur_spd = p and string.format(T("%.0f км/ч", "%.0f km/h"), p.speed_kmh or 0.0) or "--"
+        local act_name = active_pt and active_pt.name or T("Не выбрана", "None")
+        ui.stat_row({
+            { label = T("Скорость", "Speed"), value = cur_spd, tone = "default" },
+            { label = T("Активная", "Active"), value = act_name, tone = active_pt and "accent" or "muted" },
+        })
+
+        ui.spacing(6)
+        local ch, new_val = ui.input_text(T("Название новой точки##tp_new_name", "Checkpoint Name##tp_new_name"), state.new_point_name, 48)
+        if ch then state.new_point_name = new_val end
+
+        ui.spacing(3)
+        if ui.button(T("+ Запомнить точку [##tp_add_btn", "+ Save Point [##tp_add_btn"), ui.avail_width(), 30, "primary") then
+            save_checkpoint(state.new_point_name)
+        end
+    end)
+
+    -- Card 2: Checkpoints List
+    ui.card(T("Чекпоинты", "Checkpoints"), tostring(#points), function()
+        if #points == 0 then
+            ui.text_dim(T("Точки не сохранены. Нажмите '[' на трассе.", "No checkpoints saved. Press '[' on track to save."))
         else
-            ui.text_dim(T("Выйдите на трассу на автомобиле.", "Enter a track first."))
+            -- Hero button: Teleport to active checkpoint
+            local hero_title = string.format(T("Телепорт на «%s» ]##tp_hero", "Teleport to «%s» ]##tp_hero"), active_pt and active_pt.name or "?")
+            if ui.button(hero_title, ui.avail_width(), 32, "accent") then
+                teleport_to_point(state.active_idx)
+            end
+
+            ui.spacing(6)
+            ui.separator()
+            ui.spacing(6)
+
+            -- Checkpoint entries
+            for i, pt in ipairs(points) do
+                local is_active = (state.active_idx == i)
+                local is_editing = (state.editing_idx == i)
+
+                -- Line 1: Badge + Name
+                if is_active then
+                    ui.badge(T("АКТИВ", "ACTIVE"), "accent")
+                else
+                    ui.badge(string.format("#%d", i), "muted")
+                end
+                ui.same_line(0, 8)
+
+                if is_editing then
+                    local ch_edit, edit_val = ui.input_text("##tp_edit_txt_" .. i, state.edit_name_buf, 48)
+                    if ch_edit then state.edit_name_buf = edit_val end
+
+                    ui.same_line(0, 4)
+                    if ui.button(T("OK##tp_rn_ok_" .. i, "OK##tp_rn_ok_" .. i), 36, 24, "primary") then
+                        if state.edit_name_buf and state.edit_name_buf ~= "" then
+                            pt.name = state.edit_name_buf
+                            save_to_disk()
+                        end
+                        state.editing_idx = nil
+                    end
+                    ui.same_line(0, 4)
+                    if ui.button(T("Отмена##tp_rn_cnc_" .. i, "Cancel##tp_rn_cnc_" .. i), 56, 24, "ghost") then
+                        state.editing_idx = nil
+                    end
+                else
+                    ui.text(pt.name or string.format("Point %d", i))
+                end
+
+                -- Line 2: Telemetry + Action Toolbar
+                if not is_editing then
+                    local dist_str = p and string.format("%.1f м", distance_3d(p, pt)) or "--"
+                    local spd_str = string.format("%.0f %s", pt.speed_kmh or 0, T("км/ч", "km/h"))
+                    local time_str = pt.saved_at or "--:--:--"
+                    ui.text_dim(string.format("%s · %s · %s", dist_str, spd_str, time_str))
+
+                    ui.spacing(2)
+                    local btn_tp_tone = is_active and "primary" or "default"
+                    if ui.button(T("ТП##tp_go_" .. i, "TP##tp_go_" .. i), 44, 24, btn_tp_tone) then
+                        teleport_to_point(i)
+                    end
+
+                    ui.same_line(0, 4)
+                    if is_active then
+                        ui.badge(T("Выбрана", "Active"), "green")
+                    else
+                        if ui.button(T("Выбрать##tp_sel_" .. i, "Select##tp_sel_" .. i), 66, 24, "ghost") then
+                            state.active_idx = i
+                        end
+                    end
+
+                    ui.same_line(0, 4)
+                    if ui.button(T("Имя##tp_rn_" .. i, "Name##tp_rn_" .. i), 46, 24, "ghost") then
+                        state.editing_idx = i
+                        state.edit_name_buf = pt.name or ""
+                    end
+
+                    ui.same_line(0, 4)
+                    if ui.button("X##tp_del_" .. i, 26, 24, "danger") then
+                        delete_point(i)
+                        break
+                    end
+                end
+
+                if i < #points then
+                    ui.spacing(3)
+                    ui.separator()
+                    ui.spacing(3)
+                end
+            end
+        end
+    end)
+
+    -- Card 3: Options (Quiet & Compact)
+    ui.card(T("Параметры", "Options"), nil, function()
+        ui.text_dim(T("Скорость при телепорте", "Velocity on Teleport"))
+        local vel_labels = T({ "Стоп (0)", "Как в точке", "Текущая" }, { "Stop (0)", "Saved", "Keep" })
+        local ch_vel, new_vel = ui.segmented("tp_vel_seg", state.vel_mode, vel_labels)
+        if ch_vel then
+            state.vel_mode = new_vel
+            save_to_disk()
         end
 
         ui.spacing(4)
-        ui.collapsing(T("Выбрать другую трассу вручную", "Select track manually"), false, function()
+        local hk_ch, hk_val = ui.toggle(T("Горячие клавиши [ / ]##tp_hk", "Hotkeys [ / ]##tp_hk"), state.hotkeys_enabled)
+        if hk_ch then
+            state.hotkeys_enabled = hk_val
+            save_to_disk()
+        end
+
+        ui.spacing(4)
+        ui.collapsing(T("Управление трассами##tp_adv", "Track Management##tp_adv"), false, function()
             local list = {}
             for k, _ in pairs(state.tracks) do
                 table.insert(list, k)
@@ -480,147 +594,23 @@ local function render_teleport_window()
                 state.active_idx = 1
                 state.editing_idx = nil
             end
+
+            if #points > 0 then
+                ui.spacing(4)
+                if ui.button(T("Удалить все точки этой трассы##tp_clear_all", "Clear All Points on Track##tp_clear_all"), ui.avail_width(), 24, "ghost") then
+                    state.tracks[state.current_track] = {}
+                    state.active_idx = 1
+                    state.editing_idx = nil
+                    save_to_disk()
+                    set_status(T("Все точки очищены.", "All checkpoints cleared."), "muted")
+                end
+            end
         end)
     end)
 
-    -- Card 2: Add New Checkpoint
-    ui.card(T("Новая точка", "Add Checkpoint"), nil, function()
-        local ch, new_val = ui.input_text(T("Название точки##tp_new_name", "Point Name##tp_new_name"), state.new_point_name, 64)
-        if ch then state.new_point_name = new_val end
-
-        ui.spacing(4)
-        if ui.button(T("Запомнить позицию [##tp_add_btn", "Save Pose [##tp_add_btn"), ui.avail_width(), 32, "primary") then
-            save_checkpoint(state.new_point_name)
-        end
-    end)
-
-    -- Card 3: Checkpoints List (Player-list style)
-    ui.card(T("Точки телепорта", "Checkpoints"), tostring(#points), function()
-        if #points == 0 then
-            ui.text_dim(T("На этой трассе пока нет сохранённых точек.", "No checkpoints saved for this track."))
-            ui.spacing(2)
-            ui.text_dim(T("Нажмите кнопку выше или '[' на трассе.", "Press button above or '[' to save current pose."))
-        else
-            -- Quick button: Teleport to active
-            local act_name = active_pt and active_pt.name or "?"
-            local tp_lbl = string.format(T("Телепорт на «%s» ]##tp_quick", "Teleport to «%s» ]##tp_quick"), act_name)
-            if ui.button(tp_lbl, ui.avail_width(), 32, "primary") then
-                teleport_to_point(state.active_idx)
-            end
-
-            ui.spacing(6)
-            ui.separator()
-            ui.spacing(6)
-
-            -- Render list of checkpoints
-            for i, pt in ipairs(points) do
-                local is_active = (state.active_idx == i)
-                local is_editing = (state.editing_idx == i)
-
-                -- Line 1: Badge + Name / Rename Input
-                if is_active then
-                    ui.badge(T("АКТИВ", "ACTIVE"), "accent")
-                else
-                    ui.badge(string.format("#%d", i), "muted")
-                end
-                ui.same_line(0, 8)
-
-                if is_editing then
-                    local ch_edit, edit_val = ui.input_text("##tp_edit_txt_" .. i, state.edit_name_buf, 64)
-                    if ch_edit then state.edit_name_buf = edit_val end
-
-                    ui.same_line(0, 4)
-                    if ui.button(T("OK##tp_rn_ok_" .. i, "OK##tp_rn_ok_" .. i), 36, 24, "primary") then
-                        if state.edit_name_buf and state.edit_name_buf ~= "" then
-                            pt.name = state.edit_name_buf
-                            save_to_disk()
-                        end
-                        state.editing_idx = nil
-                    end
-                    ui.same_line(0, 4)
-                    if ui.button(T("Отмена##tp_rn_cnc_" .. i, "Cancel##tp_rn_cnc_" .. i), 56, 24, "ghost") then
-                        state.editing_idx = nil
-                    end
-                else
-                    ui.text(pt.name or string.format("Point %d", i))
-                end
-
-                -- Line 2: Telemetry + Action buttons
-                if not is_editing then
-                    local dist_str = p and string.format("%.1f м", distance_3d(p, pt)) or "--"
-                    local spd_str = string.format("%.0f %s", pt.speed_kmh or 0, T("км/ч", "km/h"))
-                    local time_str = pt.saved_at or "--:--:--"
-                    ui.text_dim(string.format("%s · %s · %s", dist_str, spd_str, time_str))
-
-                    ui.spacing(2)
-                    local btn_tp_tone = is_active and "primary" or "default"
-                    if ui.button(T("ТП##tp_go_" .. i, "TP##tp_go_" .. i), 50, 24, btn_tp_tone) then
-                        teleport_to_point(i)
-                    end
-
-                    ui.same_line(0, 4)
-                    if is_active then
-                        ui.button(T("Активна##tp_act_" .. i, "Active##tp_act_" .. i), 68, 24, "ghost")
-                    else
-                        if ui.button(T("Выбрать##tp_sel_" .. i, "Select##tp_sel_" .. i), 68, 24, "default") then
-                            state.active_idx = i
-                        end
-                    end
-
-                    ui.same_line(0, 4)
-                    if ui.button(T("Имя##tp_rn_" .. i, "Rename##tp_rn_" .. i), 48, 24, "ghost") then
-                        state.editing_idx = i
-                        state.edit_name_buf = pt.name or ""
-                    end
-
-                    ui.same_line(0, 4)
-                    if ui.button("X##tp_del_" .. i, 28, 24, "danger") then
-                        delete_point(i)
-                        break
-                    end
-                end
-
-                ui.spacing(4)
-                if i < #points then
-                    ui.separator()
-                    ui.spacing(4)
-                end
-            end
-        end
-    end)
-
-    -- Card 4: Options
-    ui.card(T("Параметры", "Options"), nil, function()
-        ui.text_dim(T("Скорость при телепорте", "Velocity on Teleport"))
-        local vel_labels = T({ "Стоп (0)", "Как в точке", "Текущая" }, { "Stop (0)", "Saved", "Keep" })
-        local ch_vel, new_vel = ui.segmented("tp_vel_seg", state.vel_mode, vel_labels)
-        if ch_vel then
-            state.vel_mode = new_vel
-            save_to_disk()
-        end
-
-        ui.spacing(4)
-        local hk_ch, hk_val = ui.toggle(T("Горячие клавиши [ / ]##tp_hk", "Hotkeys [ / ]##tp_hk"), state.hotkeys_enabled)
-        if hk_ch then
-            state.hotkeys_enabled = hk_val
-            save_to_disk()
-        end
-
-        if #points > 0 then
-            ui.spacing(4)
-            if ui.button(T("Удалить все точки этой трассы##tp_clear_all", "Clear All Points on This Track##tp_clear_all"), ui.avail_width(), 26, "ghost") then
-                state.tracks[state.current_track] = {}
-                state.active_idx = 1
-                state.editing_idx = nil
-                save_to_disk()
-                set_status(T("Все точки очищены.", "All checkpoints cleared."), "muted")
-            end
-        end
-    end)
-
-    -- Card 5: Status Notification
+    -- Status Notification Toast
     if state.status_msg ~= "" then
-        if os.clock() - state.status_time > 5.0 then
+        if os.clock() - state.status_time > 4.0 then
             state.status_msg = ""
         else
             ui.text_wrapped(state.status_msg, state.status_tone or "muted")
@@ -657,4 +647,4 @@ if urushi and urushi.register_window then
     })
 end
 
-log.info("URUSHI Teleport module loaded (unlimited, per-track persistence).")
+log.info("URUSHI Teleport module loaded (clean layout).")

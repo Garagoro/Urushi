@@ -579,11 +579,7 @@ int LuaCarX::TeleportRigidBody(lua_State* L) {
     bool hasX = ReadLuaFloatField(L, 1, "x", pose.pos[0]);
     bool hasY = ReadLuaFloatField(L, 1, "y", pose.pos[1]);
     bool hasZ = ReadLuaFloatField(L, 1, "z", pose.pos[2]);
-    if (hasX || hasY || hasZ) {
-        pose.rb[20] = pose.pos[0];
-        pose.rb[21] = pose.pos[1];
-        pose.rb[22] = pose.pos[2];
-    } else if (!pose.hasRb) {
+    if (!hasX && !hasY && !hasZ && !pose.hasRb) {
         lua_pushboolean(L, false);
         return 1;
     }
