@@ -62,6 +62,9 @@ NativeCarX::t_CX_WheelGetBallisticGripFactor NativeCarX::pfn_WheelGetBallisticGr
 NativeCarX::t_CX_WheelSetBallisticGripFactor NativeCarX::pfn_WheelSetBallisticGripFactor = nullptr;
 
 TyreConfig NativeCarX::s_tyreConfig;
+float NativeCarX::s_baselineFrontPressure = 145.0f;
+float NativeCarX::s_baselineRearPressure = 95.0f;
+void* NativeCarX::s_lastBaselineCar = nullptr;
 bool NativeCarX::s_noDamage = false;
 bool NativeCarX::s_noTireWear = false;
 
@@ -432,6 +435,29 @@ void NativeCarX::UpdateCarTelemetry(CarTelemetry& tele) {
     if (s_noTireWear && pfn_CarSetTyreWearMode) {
         pfn_CarSetTyreWearMode(car, 0);
     }
+
+    // Capture baseline setup tyre pressures from player car
+    if (car && car != s_lastBaselineCar && (car == s_knownPlayerCarPtr || car == s_playerCarPtr)) {
+        s_lastBaselineCar = car;
+        if (pfn_GetWheel && pfn_WheelGetTyrePressure) {
+            void* w0 = pfn_GetWheel(car, 0);
+            void* w2 = pfn_GetWheel(car, 2);
+            if (w0) {
+                float p0 = pfn_WheelGetTyrePressure(w0) * 0.001f;
+                if (p0 >= 30.0f && p0 <= 400.0f) {
+                    s_baselineFrontPressure = p0;
+                    if (!s_tyreConfig.overridePressure) s_tyreConfig.frontPressure = p0;
+                }
+            }
+            if (w2) {
+                float p2 = pfn_WheelGetTyrePressure(w2) * 0.001f;
+                if (p2 >= 30.0f && p2 <= 400.0f) {
+                    s_baselineRearPressure = p2;
+                    if (!s_tyreConfig.overridePressure) s_tyreConfig.rearPressure = p2;
+                }
+            }
+        }
+    }
 }
 
 CarTelemetry NativeCarX::GetPlayerCarTelemetry() {
@@ -693,6 +719,8 @@ float NativeCarX::GetWheelWear(void* car, int wheelIndex) {
 
 TyreConfig NativeCarX::GetTyreConfig() {
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    s_tyreConfig.baselineFrontPressure = s_baselineFrontPressure;
+    s_tyreConfig.baselineRearPressure = s_baselineRearPressure;
     return s_tyreConfig;
 }
 
@@ -755,6 +783,7 @@ void NativeCarX::SetTyreConfig(const TyreConfig& cfg) {
 }
 
 void NativeCarX::ResetTyreDefaults() {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
     TyreConfig def;
     def.infiniteWear = false;
     def.wearMultiplier = 1.0f;
@@ -766,10 +795,11 @@ void NativeCarX::ResetTyreDefaults() {
     def.lockTemperature = false;
     def.targetTemperature = 80.0f;
     def.overridePressure = false;
-    def.frontPressure = 145.0f;
-    def.rearPressure = 95.0f;
+    def.frontPressure = s_baselineFrontPressure;
+    def.rearPressure = s_baselineRearPressure;
+    def.baselineFrontPressure = s_baselineFrontPressure;
+    def.baselineRearPressure = s_baselineRearPressure;
 
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
     s_tyreConfig = def;
     s_noTireWear = false;
 
@@ -784,7 +814,8 @@ void NativeCarX::ResetTyreDefaults() {
                 if (pfn_WheelTyreWearReset) pfn_WheelTyreWearReset(wheel, 1.0f);
                 if (pfn_WheelSetFrictionMultiplier) pfn_WheelSetFrictionMultiplier(wheel, (i < 2) ? 1.15f : 0.95f);
                 if (pfn_WheelSetBallisticGripFactor) pfn_WheelSetBallisticGripFactor(wheel, 0.10f);
-                if (pfn_WheelSetTyrePressure) pfn_WheelSetTyrePressure(wheel, ((i < 2) ? 145.0f : 95.0f) * 1000.0f);
+                float pressKpa = (i < 2) ? s_baselineFrontPressure : s_baselineRearPressure;
+                if (pfn_WheelSetTyrePressure) pfn_WheelSetTyrePressure(wheel, pressKpa * 1000.0f);
                 int zones = pfn_WheelGetTyreWearZones ? pfn_WheelGetTyreWearZones(wheel) : 4;
                 if (zones < 1 || zones > 16) zones = 4;
                 for (int z = 0; z < zones; ++z) {

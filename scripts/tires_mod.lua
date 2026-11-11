@@ -1,13 +1,12 @@
 -- scripts/tires_mod.lua
--- URUSHI Tires & Grip Control Module
+-- URUSHI Body & Tires Module
 local T = i18n.t
 
-local active_tab = "tuning" -- "tuning", "thermal", "telemetry"
-local link_grip = false
+local active_tab = "body_wear" -- "body_wear", "thermal", "telemetry"
 
 local function render_tires_window()
     if not carx or not carx.get_tyre_config then
-        ui.card(T("Шины и Зацеп", "Tires & Grip"), nil, function()
+        ui.card(T("Кузов и шины", "Body & Tires"), nil, function()
             ui.text_wrapped(T("Модуль carx.tyre не загружен.", "carx.tyre module not loaded."), "red")
         end)
         return
@@ -19,8 +18,8 @@ local function render_tires_window()
 
     -- Top Tab Switcher
     local tab_w = (ui.avail_width() - 8) / 3.0
-    if ui.button(T("Зацеп и Износ##t_tab_1", "Grip & Wear##t_tab_1"), tab_w, 28, active_tab == "tuning" and "primary" or "ghost") then
-        active_tab = "tuning"
+    if ui.button(T("Кузов и Износ##t_tab_1", "Body & Wear##t_tab_1"), tab_w, 28, active_tab == "body_wear" and "primary" or "ghost") then
+        active_tab = "body_wear"
     end
     ui.same_line(0, 4)
     if ui.button(T("Термо и Давление##t_tab_2", "Thermal & Press##t_tab_2"), tab_w, 28, active_tab == "thermal" and "primary" or "ghost") then
@@ -33,8 +32,27 @@ local function render_tires_window()
 
     ui.spacing(4)
 
-    -- TAB 1: GRIP & WEAR
-    if active_tab == "tuning" then
+    -- TAB 1: BODY PROTECTION & TIRE WEAR
+    if active_tab == "body_wear" then
+        ui.card(T("Защита кузова (Деформация)", "Body Protection (Deformation)"), nil, function()
+            local no_dam = (carx and carx.get_no_damage and carx.get_no_damage() == true)
+            local ch_dam, val_dam = ui.toggle(T("Без повреждений (кузов, бампера, подвеска)##t_no_dam", "No Damage (Body, Bumpers & Suspension)##t_no_dam"), no_dam)
+            if ch_dam then
+                if carx and carx.set_no_damage then carx.set_no_damage(val_dam) end
+            end
+
+            local opt_st = (optimizer and optimizer.get_stats) and optimizer.get_stats() or {}
+            local dam_blocks = opt_st.damage_blocks or 0
+            local joint_blocks = opt_st.joint_break_blocks or 0
+
+            ui.spacing(2)
+            ui.stat_row({
+                { label = T("Кузов", "Body"), value = no_dam and string.format(T("Блок: %d", "Block: %d"), dam_blocks) or T("Уязвим", "Vulnerable"), tone = no_dam and "green" or "yellow" },
+                { label = T("Детали", "Parts"), value = no_dam and string.format(T("Блок: %d", "Block: %d"), joint_blocks) or T("Отрыв", "Detaching"), tone = no_dam and "green" or "yellow" },
+                { label = T("Геометрия", "Geometry"), value = no_dam and T("Идеал", "Locked") or T("Сток", "Stock"), tone = no_dam and "green" or "muted" },
+            })
+        end)
+
         ui.card(T("Режим износа шин", "Tire Wear Mode"), nil, function()
             local ch_inf, val_inf = ui.toggle(T("Бесконечные шины (заморозка износа)##tire_inf", "Infinite Tires (Freeze Wear)##tire_inf"), cfg.infinite_wear == true)
             if ch_inf then
@@ -59,7 +77,7 @@ local function render_tires_window()
 
             ui.spacing(4)
             local bw = (ui.avail_width() - 6) * 0.5
-            if ui.button(T("100% Свежая резина##tire_b_fresh", "100% Fresh Tires##tire_b_fresh"), bw, 28, "ghost") then
+            if ui.button(T("100% Свежая резина (80°C)##tire_b_fresh", "100% Fresh Tires (80°C)##tire_b_fresh"), bw, 28, "primary") then
                 cfg.desired_life = 1.0
                 cfg.lock_temp = true
                 cfg.target_temp = 80.0
@@ -71,99 +89,9 @@ local function render_tires_window()
                 cfg.desired_life = 0.0
                 dirty = true
             end
-        end)
-
-        ui.card(T("Зацеп и Трение", "Grip & Friction"), nil, function()
-            local ch_ov, val_ov = ui.toggle(T("Управление зацепом шин##tire_ov_grip", "Override Tire Grip##tire_ov_grip"), cfg.override_grip == true)
-            if ch_ov then
-                cfg.override_grip = val_ov
-                dirty = true
-            end
-
-            local ch_link, val_link = ui.toggle(T("Связать перед и зад##tire_link_g", "Link Front & Rear##tire_link_g"), link_grip)
-            if ch_link then
-                link_grip = val_link
-            end
-
-            local ch_fg, val_fg = ui.slider_float(T("Передний зацеп##tire_fg", "Front Grip (Stock: 1.15)##tire_fg"), cfg.front_grip or 1.15, 0.50, 2.50, "%.2fx")
-            if ch_fg then
-                if link_grip and (cfg.front_grip or 1.15) > 0.01 then
-                    local ratio = val_fg / (cfg.front_grip or 1.15)
-                    cfg.rear_grip = math.max(0.50, math.min(2.50, (cfg.rear_grip or 0.95) * ratio))
-                end
-                cfg.front_grip = val_fg
-                cfg.override_grip = true
-                dirty = true
-            end
-
-            local ch_rg, val_rg = ui.slider_float(T("Задний зацеп##tire_rg", "Rear Grip (Stock: 0.95)##tire_rg"), cfg.rear_grip or 0.95, 0.50, 2.50, "%.2fx")
-            if ch_rg then
-                if link_grip and (cfg.rear_grip or 0.95) > 0.01 then
-                    local ratio = val_rg / (cfg.rear_grip or 0.95)
-                    cfg.front_grip = math.max(0.50, math.min(2.50, (cfg.front_grip or 1.15) * ratio))
-                end
-                cfg.rear_grip = val_rg
-                cfg.override_grip = true
-                dirty = true
-            end
-
-            local ch_bg, val_bg = ui.slider_float(T("Баллистический зацеп##tire_bg", "Ballistic Grip (Stock: 0.10)##tire_bg"), cfg.ballistic_grip or 0.10, 0.00, 0.50, "%.2f")
-            if ch_bg then
-                cfg.ballistic_grip = val_bg
-                cfg.override_grip = true
-                dirty = true
-            end
-        end)
-
-        ui.card(T("Пресеты зацепа", "Grip Presets"), nil, function()
-            local bw = (ui.avail_width() - 8) / 3.0
-
-            if ui.button(T("Сток CarX##tire_pre_stock", "Stock CarX##tire_pre_stock"), bw, 28, "default") then
-                cfg.infinite_wear = false
-                cfg.desired_life = 1.0
-                cfg.wear_multiplier = 1.0
-                cfg.override_grip = false
-                cfg.front_grip = 1.15
-                cfg.rear_grip = 0.95
-                cfg.ballistic_grip = 0.10
-                cfg.lock_temp = false
-                cfg.target_temp = 80.0
-                cfg.override_pressure = false
-                cfg.front_pressure = 145.0
-                cfg.rear_pressure = 95.0
-                if carx.reset_tyre_defaults then carx.reset_tyre_defaults() end
-                dirty = false
-            end
-            ui.same_line(0, 4)
-            if ui.button(T("Дрифт-Оптимум##tire_pre_opt", "Drift Optimum##tire_pre_opt"), bw, 28, "primary") then
-                cfg.infinite_wear = true
-                cfg.desired_life = 1.0
-                cfg.override_grip = true
-                cfg.front_grip = 1.20
-                cfg.rear_grip = 1.00
-                cfg.ballistic_grip = 0.10
-                cfg.lock_temp = true
-                cfg.target_temp = 80.0
-                cfg.override_pressure = true
-                cfg.front_pressure = 150.0
-                cfg.rear_pressure = 100.0
-                dirty = true
-            end
-            ui.same_line(0, 4)
-            if ui.button(T("Макс. Зацеп##tire_pre_race", "Max Grip##tire_pre_race"), bw, 28, "default") then
-                cfg.infinite_wear = true
-                cfg.desired_life = 1.0
-                cfg.override_grip = true
-                cfg.front_grip = 1.50
-                cfg.rear_grip = 1.40
-                cfg.ballistic_grip = 0.15
-                cfg.lock_temp = true
-                cfg.target_temp = 80.0
-                dirty = true
-            end
 
             ui.spacing(4)
-            if ui.button(T("Сбросить все шины в стандарт игры##tire_btn_reset_all", "Reset All Tires to Game Stock##tire_btn_reset_all"), ui.avail_width(), 28, "danger") then
+            if ui.button(T("Сбросить все настройки в стандарт машины (гараж)##tire_btn_reset_all", "Reset All to Car Setup (Garage)##tire_btn_reset_all"), ui.avail_width(), 28, "danger") then
                 if carx.reset_tyre_defaults then carx.reset_tyre_defaults() end
                 dirty = false
             end
@@ -187,7 +115,7 @@ local function render_tires_window()
 
             ui.spacing(4)
             local bw = (ui.avail_width() - 6) * 0.5
-            if ui.button(T("Прогрев 80°C (Дрифт)##tire_warm", "Warm Up 80°C (Drift)##tire_warm"), bw, 26, "ghost") then
+            if ui.button(T("Прогрев 80°C (Дрифт)##tire_warm", "Warm Up 80°C (Drift)##tire_warm"), bw, 26, "primary") then
                 cfg.target_temp = 80.0
                 cfg.lock_temp = true
                 dirty = true
@@ -205,20 +133,31 @@ local function render_tires_window()
         end)
 
         ui.card(T("Давление в шинах", "Tire Pressure"), nil, function()
-            local ch_op, val_op = ui.toggle(T("Управление давлением##tire_op", "Override Tire Pressure##tire_op"), cfg.override_pressure == true)
+            local base_fp = cfg.baseline_front_pressure or 145.0
+            local base_rp = cfg.baseline_rear_pressure or 95.0
+
+            ui.text_dim(string.format(T("Тюнинг из гаража: перед %.0f kPa (%.2f bar) · зад %.0f kPa (%.2f bar)",
+                                        "Garage setup: front %.0f kPa (%.2f bar) · rear %.0f kPa (%.2f bar)"),
+                                      base_fp, base_fp * 0.01, base_rp, base_rp * 0.01))
+
+            local ch_op, val_op = ui.toggle(T("Кастомное давление##tire_op", "Override Tire Pressure##tire_op"), cfg.override_pressure == true)
             if ch_op then
                 cfg.override_pressure = val_op
+                if not val_op then
+                    cfg.front_pressure = base_fp
+                    cfg.rear_pressure = base_rp
+                end
                 dirty = true
             end
 
-            local ch_fp, val_fp = ui.slider_float(T("Переднее давление##tire_fp", "Front Pressure (Stock: 145 kPa)##tire_fp"), cfg.front_pressure or 145.0, 50.0, 250.0, "%.0f kPa")
+            local ch_fp, val_fp = ui.slider_float(T("Переднее давление##tire_fp", "Front Pressure##tire_fp"), cfg.front_pressure or base_fp, 50.0, 250.0, "%.0f kPa")
             if ch_fp then
                 cfg.front_pressure = val_fp
                 cfg.override_pressure = true
                 dirty = true
             end
 
-            local ch_rp, val_rp = ui.slider_float(T("Заднее давление##tire_rp", "Rear Pressure (Stock: 95 kPa)##tire_rp"), cfg.rear_pressure or 95.0, 50.0, 250.0, "%.0f kPa")
+            local ch_rp, val_rp = ui.slider_float(T("Заднее давление##tire_rp", "Rear Pressure##tire_rp"), cfg.rear_pressure or base_rp, 50.0, 250.0, "%.0f kPa")
             if ch_rp then
                 cfg.rear_pressure = val_rp
                 cfg.override_pressure = true
@@ -227,10 +166,10 @@ local function render_tires_window()
 
             ui.spacing(4)
             local bw = (ui.avail_width() - 6) * 0.5
-            if ui.button(T("Сток давление (145/95)##tire_p_stk", "Stock Press (145/95)##tire_p_stk"), bw, 26, "ghost") then
-                cfg.front_pressure = 145.0
-                cfg.rear_pressure = 95.0
-                cfg.override_pressure = true
+            if ui.button(T("Вернуть тюнинг авто##tire_p_stk", "Restore Car Setup##tire_p_stk"), bw, 26, "ghost") then
+                cfg.front_pressure = base_fp
+                cfg.rear_pressure = base_rp
+                cfg.override_pressure = false
                 dirty = true
             end
             ui.same_line(0, 6)
@@ -257,12 +196,16 @@ local function render_tires_window()
                     local w = live.wheels[i]
                     local t_col = "green"
                     local temp = w.temp or 80.0
+                    local status_txt = T("Оптимум", "Optimum")
                     if temp < 55.0 then
                         t_col = "blue"
+                        status_txt = T("Холодная", "Cold")
                     elseif temp > 105.0 then
                         t_col = "red"
+                        status_txt = T("Перегрев", "Overheated")
                     elseif temp > 92.0 then
                         t_col = "yellow"
+                        status_txt = T("Горячая", "Hot")
                     end
 
                     local life_pct = math.floor((w.life or 1.0) * 100.0 + 0.5)
@@ -273,7 +216,7 @@ local function render_tires_window()
                         { label = T("Протектор", "Tread"), value = string.format("%d%%", life_pct), tone = l_col },
                         { label = T("Темп.", "Temp"), value = string.format("%.1f°C", temp), tone = t_col },
                         { label = T("Давление", "Press"), value = string.format("%.0f kPa", w.pressure_kpa or 0), tone = "muted" },
-                        { label = T("Зацеп", "Grip"), value = string.format("%.2fx", w.friction or 1.0), tone = "accent" },
+                        { label = T("Статус", "Status"), value = status_txt, tone = t_col },
                     })
                     if i < 4 then ui.spacing(2) end
                 end
@@ -293,7 +236,7 @@ end
 if urushi and urushi.register_window then
     urushi.register_window({
         id = "tires",
-        title = T("Шины и Зацеп", "Tires & Grip"),
+        title = T("Кузов и шины", "Body & Tires"),
         icon = "wheel",
         order = 38,
         default_open = false,
@@ -310,4 +253,4 @@ _G.tires_mod = {
     get_tab = function() return active_tab end
 }
 
-log.info("URUSHI Tires & Grip module loaded.")
+log.info("URUSHI Body & Tires module loaded.")

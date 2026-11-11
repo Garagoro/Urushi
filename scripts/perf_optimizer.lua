@@ -115,25 +115,6 @@ local function render_optimizer_window()
         })
     end)
 
-    ui.card(T("Защита кузова (Деформация)", "Body Protection (Deformation)"), nil, function()
-        local no_dam = (cfg.disable_damage == true) or (carx and carx.get_no_damage and carx.get_no_damage() == true)
-
-        local ch_dam, val_dam = ui.toggle(T("Без деформации (кузов и подвеска)##opt_no_dam", "No Deformation (Body & Suspension)##opt_no_dam"), no_dam)
-        if ch_dam then
-            cfg.disable_damage = val_dam
-            if carx and carx.set_no_damage then carx.set_no_damage(val_dam) end
-            dirty = true
-        end
-
-        local dam_blocks = st.damage_blocks or 0
-        local joint_blocks = st.joint_break_blocks or 0
-        ui.spacing(2)
-        ui.stat_row({
-            { label = T("Кузов", "Body"), value = no_dam and string.format(T("Блок: %d", "Block: %d"), dam_blocks) or T("Уязвим", "Vulnerable"), tone = no_dam and "green" or "yellow" },
-            { label = T("Детали", "Parts"), value = no_dam and string.format(T("Блок: %d", "Block: %d"), joint_blocks) or T("Отрыв", "Detaching"), tone = no_dam and "green" or "yellow" },
-        })
-    end)
-
     ui.card(T("Бюджет симуляции", "Simulation Budget"), nil, function()
         local ch_max, val_max = ui.slider_int(
             T("Локальная физика (авто)##opt_n", "Full-Sim Cars##opt_n"),

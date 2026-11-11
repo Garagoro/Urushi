@@ -30,6 +30,8 @@ struct TyreConfig {
     bool overridePressure = false;
     float frontPressure = 145.0f; // in kPa
     float rearPressure = 95.0f;   // in kPa
+    float baselineFrontPressure = 145.0f; // in kPa (captured from car setup)
+    float baselineRearPressure = 95.0f;   // in kPa (captured from car setup)
 };
 
 struct TyreWheelLive {
@@ -225,6 +227,9 @@ private:
     static t_CX_WheelSetBallisticGripFactor pfn_WheelSetBallisticGripFactor;
 
     static TyreConfig s_tyreConfig;
+    static float s_baselineFrontPressure;
+    static float s_baselineRearPressure;
+    static void* s_lastBaselineCar;
     static bool s_noDamage;
     static bool s_noTireWear;
 };

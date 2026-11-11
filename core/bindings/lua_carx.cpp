@@ -1203,6 +1203,12 @@ int LuaCarX::GetTyreConfig(lua_State* L) {
     lua_pushnumber(L, cfg.rearPressure);
     lua_setfield(L, -2, "rear_pressure");
 
+    lua_pushnumber(L, cfg.baselineFrontPressure);
+    lua_setfield(L, -2, "baseline_front_pressure");
+
+    lua_pushnumber(L, cfg.baselineRearPressure);
+    lua_setfield(L, -2, "baseline_rear_pressure");
+
     return 1;
 }
 
