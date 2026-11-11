@@ -202,6 +202,8 @@ private:
     static void DestroyGhostSlotInternal(size_t slotIdx);
     static void DestroyAllGhostSlotsInternal();
     static void ConfigureGhostSlot(GhostSlot& slot, void* clonedGo, float initialSteerAngle);
+    static void* CreateIsolatedPackedTexture(void* origPack, bool packIsDef, void* natWhite, void* natBlack, void** outPackSrv, bool* outCopyOk);
+    static void UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCarInfo>& liveSnapshot);
     static void IsolateGhostSlotCarFXTextures(size_t slotIdx, GhostSlot& slot);
     static void SyncGhostSlotCarFXMaterialsAndShader(size_t slotIdx, GhostSlot& slot, bool allowReplayShader);
     static void ApplySlotCollisionVisuals(GhostSlot& slot, bool enabled);
