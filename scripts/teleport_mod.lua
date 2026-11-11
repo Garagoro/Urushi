@@ -41,6 +41,7 @@ local state = {
     editing_idx = nil,
     edit_name_buf = "",
     vel_mode = 1, -- 1=Stop, 2=Saved, 3=Keep
+    repair_on_tp = true,
     hotkeys_enabled = true,
     last_track_check = 0,
     status_msg = "",
@@ -379,6 +380,9 @@ local function teleport_to_point(idx)
 
     local ok = carx.teleport_rigid_body(pt, (state.vel_mode or 1) - 1)
     if ok then
+        if state.repair_on_tp and carx.repair_car then
+            carx.repair_car()
+        end
         state.active_idx = idx
         set_status(string.format(T("Телепорт в «%s»", "Teleported to «%s»"), pt.name), "green")
     else
@@ -565,6 +569,18 @@ local function render_teleport_window()
         if hk_ch then
             state.hotkeys_enabled = hk_val
             save_to_disk()
+        end
+
+        local rep_ch, rep_val = ui.toggle(T("Восстанавливать авто и шины при ТП##tp_rep", "Repair car & tires on teleport##tp_rep"), state.repair_on_tp == true)
+        if rep_ch then
+            state.repair_on_tp = rep_val
+            save_to_disk()
+        end
+
+        ui.spacing(4)
+        if ui.button(T("Починить машину и сбросить шины##tp_quick_rep", "Repair Car & Reset Tires##tp_quick_rep"), ui.avail_width(), 26, "ghost") then
+            if carx and carx.repair_car then carx.repair_car() end
+            set_status(T("Машина и шины полностью восстановлены.", "Car and tires fully restored."), "green")
         end
 
         ui.spacing(4)

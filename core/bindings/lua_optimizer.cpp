@@ -69,6 +69,8 @@ int LuaOptimizer::GetConfig(lua_State* L) {
     CarSimOptimizer::Config c = CarSimOptimizer::GetConfig();
     lua_newtable(L);
     PushBoolField(L,  "enabled",                  c.enabled);
+    PushBoolField(L,  "disable_damage",           c.disableDamage);
+    PushBoolField(L,  "disable_tire_wear",        c.disableTireWear);
     PushIntField(L,   "max_full_sim_cars",        c.maxFullSimCars);
     PushFloatField(L, "max_full_sim_dist",        c.maxFullSimDistMeters);
     PushFloatField(L, "hysteresis_meters",        c.hysteresisMeters);
@@ -101,6 +103,8 @@ int LuaOptimizer::SetConfig(lua_State* L) {
 
     CarSimOptimizer::Config c = CarSimOptimizer::GetConfig();
     ReadBoolField(L,  1, "enabled",                  c.enabled);
+    ReadBoolField(L,  1, "disable_damage",           c.disableDamage);
+    ReadBoolField(L,  1, "disable_tire_wear",        c.disableTireWear);
     ReadIntField(L,   1, "max_full_sim_cars",        c.maxFullSimCars);
     ReadFloatField(L, 1, "max_full_sim_dist",        c.maxFullSimDistMeters);
     ReadFloatField(L, 1, "hysteresis_meters",        c.hysteresisMeters);
@@ -139,6 +143,10 @@ int LuaOptimizer::GetStats(lua_State* L) {
     lua_newtable(L);
     PushBoolField(L,  "initialized",               s.initialized);
     PushBoolField(L,  "hooks_installed",           s.hooksInstalled);
+    PushBoolField(L,  "no_damage_active",          s.noDamageActive);
+    PushBoolField(L,  "no_tire_wear_active",       s.noTireWearActive);
+    PushIntField(L,   "damage_blocks",             static_cast<lua_Integer>(s.damageBlocks));
+    PushIntField(L,   "joint_break_blocks",        static_cast<lua_Integer>(s.jointBreakBlocks));
     PushBoolField(L,  "native_exports_ready",      s.nativeExportsReady);
     PushBoolField(L,  "deform_sleep_resolved",     s.deformSleepResolved);
     PushBoolField(L,  "root_sleep_resolved",       s.rootSleepResolved);

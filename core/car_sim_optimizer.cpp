@@ -22,6 +22,10 @@ constexpr uintptr_t kRvaTransformGetPosInjected       = 0x5F72710;
 constexpr uintptr_t kRvaIl2CppVirtualInvokeData       = 0x9238B0;
 constexpr uintptr_t kRvaCarBehaviourSetEffectsEnabled = 0x1E02570;
 
+// CarX.DeformationPhysics.Systems
+constexpr uintptr_t kRvaApplyForceToDeformUpdate       = 0xEBF340;
+constexpr uintptr_t kRvaBreakPhysicsJointUpdate        = 0xEC2440;
+
 constexpr uintptr_t kRvaINetworkCarContainerTypeInfo  = 0x843A128;
 constexpr uintptr_t kRvaDeformSleepTypeInfoGlobal     = 0x83E7018;
 constexpr uintptr_t kRvaTypeInfoDefinitionTable       = 0x87EAEA0;
@@ -46,6 +50,7 @@ using t_NetCarGetPosition      = UnityVector3*(__fastcall*)(UnityVector3* outPos
 using t_NetCarGetInt32         = int32_t(__fastcall*)(void* netCar, void* method);
 using t_NetCarGetBool          = uint8_t(__fastcall*)(void* netCar, void* method);
 using t_SetCarEffectsEnabled   = void(__fastcall*)(void* carBehaviour, uint8_t enabled, void* method);
+using t_SystemOnUpdate         = void(__fastcall*)(void* self, void* method);
 
 using t_CX_CarSetSimMode       = void(*)(void* car, int enable);
 using t_CX_CarGetSimMode       = int(*)(void* car);
@@ -109,6 +114,9 @@ std::vector<CarSimOptimizer::CarEntry> s_netCarsSnapshot;
 uintptr_t s_gaBase = 0;
 t_SwitchingUpdate s_origSwitchingUpdate = nullptr;
 t_IsFarCar s_origIsFarCar = nullptr;
+t_SystemOnUpdate s_origApplyForceOnUpdate = nullptr;
+t_SystemOnUpdate s_origBreakPhysicsJointOnUpdate = nullptr;
+bool s_noDamageOverride = false;
 t_ProviderGetTransform pfn_ProviderGetTransform = nullptr;
 t_TransformGetPos pfn_TransformGetPos = nullptr;
 t_LookupVirtualInvoke pfn_LookupVirtualInvoke = nullptr;
@@ -495,9 +503,14 @@ static void ResolveStaticsIfNeeded() {
 }
 
 static void SyncStaticSubsystems(const CarSimOptimizer::Config& cfg, bool forceRestore) {
+    const bool noDamage = !forceRestore && (cfg.disableDamage || s_noDamageOverride);
     if (s_sfDeformSleep && s_deformBase.captured) {
         uintptr_t p = reinterpret_cast<uintptr_t>(s_sfDeformSleep);
-        if (!forceRestore && cfg.enabled && cfg.tuneDeformationSleep) {
+        if (noDamage) {
+            SafeWrite<uint8_t>(p + 0x00, 1);
+            SafeWrite<int32_t>(p + 0x04, 1);
+            SafeWrite<float>(p + 0x08, 0.0f); // Instant sleep at 0m!
+        } else if (!forceRestore && cfg.enabled && cfg.tuneDeformationSleep) {
             SafeWrite<uint8_t>(p + 0x00, 1);
             SafeWrite<int32_t>(p + 0x04, std::clamp(cfg.deformIdleSteps, 1, 120));
             SafeWrite<float>(p + 0x08, std::clamp(cfg.deformSleepDistMeters, 1.0f, 200.0f));
@@ -509,7 +522,10 @@ static void SyncStaticSubsystems(const CarSimOptimizer::Config& cfg, bool forceR
     }
     if (s_sfRootSleep && s_rootBase.captured) {
         uintptr_t p = reinterpret_cast<uintptr_t>(s_sfRootSleep);
-        if (!forceRestore && cfg.enabled && cfg.tunePhysicsRootSleep) {
+        if (noDamage) {
+            SafeWrite<uint8_t>(p + 0x00, 1);
+            SafeWrite<int32_t>(p + 0x04, 1); // Instant root sleep!
+        } else if (!forceRestore && cfg.enabled && cfg.tunePhysicsRootSleep) {
             SafeWrite<uint8_t>(p + 0x00, 1);
             SafeWrite<int32_t>(p + 0x04, std::clamp(cfg.physicsRootIdleSteps, 1, 120));
         } else {
@@ -729,6 +745,42 @@ static void UpdateNativeCarPhysicsOnMainThread(const CarSimOptimizer::Config& cf
 }
 
 // ==================== Hook Detours ====================
+
+static void __fastcall Hooked_ApplyForceOnUpdate(void* self, void* method) {
+    HookManager::ScopedHookGuard guard;
+    if (HookManager::IsUnloading() || !s_origApplyForceOnUpdate) {
+        if (s_origApplyForceOnUpdate) s_origApplyForceOnUpdate(self, method);
+        return;
+    }
+    bool block = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(s_mutex);
+        block = s_cfg.disableDamage || s_noDamageOverride;
+    }
+    if (block) {
+        s_stats.damageBlocks++;
+        return; // Body mesh deformation blocked!
+    }
+    s_origApplyForceOnUpdate(self, method);
+}
+
+static void __fastcall Hooked_BreakPhysicsJointOnUpdate(void* self, void* method) {
+    HookManager::ScopedHookGuard guard;
+    if (HookManager::IsUnloading() || !s_origBreakPhysicsJointOnUpdate) {
+        if (s_origBreakPhysicsJointOnUpdate) s_origBreakPhysicsJointOnUpdate(self, method);
+        return;
+    }
+    bool block = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(s_mutex);
+        block = s_cfg.disableDamage || s_noDamageOverride;
+    }
+    if (block) {
+        s_stats.jointBreakBlocks++;
+        return; // Part detaching blocked!
+    }
+    s_origBreakPhysicsJointOnUpdate(self, method);
+}
 
 static uint8_t __fastcall Hooked_IsFarCar(void* self, void* netCar, void* method) {
     HookManager::ScopedHookGuard guard;
@@ -992,6 +1044,8 @@ bool CarSimOptimizer::Init() {
 
     void* targetSwitching = reinterpret_cast<void*>(s_gaBase + kRvaSwitchingUpdate);
     void* targetIsFar = reinterpret_cast<void*>(s_gaBase + kRvaIsFarCar);
+    void* targetApplyForce = reinterpret_cast<void*>(s_gaBase + kRvaApplyForceToDeformUpdate);
+    void* targetBreakJoint = reinterpret_cast<void*>(s_gaBase + kRvaBreakPhysicsJointUpdate);
 
     bool okSwitch = HookManager::CreateHook(
         targetSwitching,
@@ -1005,10 +1059,22 @@ bool CarSimOptimizer::Init() {
         reinterpret_cast<void**>(&s_origIsFarCar),
         "DistanceBasedPhysicsSwitchingSubController::IsFarCar");
 
+    bool okApply = HookManager::CreateHook(
+        targetApplyForce,
+        reinterpret_cast<void*>(Hooked_ApplyForceOnUpdate),
+        reinterpret_cast<void**>(&s_origApplyForceOnUpdate),
+        "ApplyForceToDeformationSkeletonSystem::OnUpdate");
+
+    bool okBreak = HookManager::CreateHook(
+        targetBreakJoint,
+        reinterpret_cast<void*>(Hooked_BreakPhysicsJointOnUpdate),
+        reinterpret_cast<void**>(&s_origBreakPhysicsJointOnUpdate),
+        "BreakPhysicsJointSystem::OnUpdate");
+
     ResolveNativeExportsIfNeeded();
     ResolveStaticsIfNeeded();
 
-    s_stats.hooksInstalled = okSwitch && okFar;
+    s_stats.hooksInstalled = okSwitch && okFar && okApply && okBreak;
     s_stats.initialized = true;
 
     Logger::Info(std::string("CarSimOptimizer initialized (hooks=") +
@@ -1108,6 +1174,8 @@ void CarSimOptimizer::UpdateOnMainThread(float /*dt*/, const std::vector<LiveCar
     s_stats.optimizeGeomResolved = (s_sfOptimizeGeom != nullptr);
     s_stats.effectsDisabledCars = static_cast<int32_t>(s_effectsDisabledSet.size());
     s_stats.offlineReducedCars = static_cast<int32_t>(s_savedNativeCars.size());
+    s_stats.noDamageActive = s_cfg.disableDamage || s_noDamageOverride;
+    s_stats.noTireWearActive = s_cfg.disableTireWear || NativeCarX::IsNoTireWear();
 
     if (s_deformBase.captured) {
         s_stats.vanillaDeformDist = s_deformBase.farDistance;
@@ -1152,6 +1220,8 @@ void CarSimOptimizer::SetConfig(const Config& cfg) {
         s_slotEnteredAt.clear();
     }
     s_cfg = clamped;
+    NativeCarX::SetNoDamage(clamped.disableDamage);
+    NativeCarX::SetNoTireWear(clamped.disableTireWear);
 }
 
 void CarSimOptimizer::ResetDefaults() {
@@ -1160,6 +1230,9 @@ void CarSimOptimizer::ResetDefaults() {
     s_slotEnteredAt.clear();
     s_stats.antiFlickerHolding = false;
     s_cfg = Config{};
+    s_noDamageOverride = false;
+    NativeCarX::SetNoDamage(false);
+    NativeCarX::SetNoTireWear(false);
 }
 
 CarSimOptimizer::Stats CarSimOptimizer::GetStats() {
@@ -1170,4 +1243,22 @@ CarSimOptimizer::Stats CarSimOptimizer::GetStats() {
 std::vector<CarSimOptimizer::CarEntry> CarSimOptimizer::GetNetCarsSnapshot() {
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
     return s_netCarsSnapshot;
+}
+
+void CarSimOptimizer::SetNoDamageOverride(bool enable) {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    s_noDamageOverride = enable;
+    s_cfg.disableDamage = enable;
+    NativeCarX::SetNoDamage(enable);
+}
+
+bool CarSimOptimizer::GetNoDamageOverride() {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    return s_noDamageOverride || s_cfg.disableDamage;
+}
+
+void CarSimOptimizer::SetNoTireWearOverride(bool enable) {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    s_cfg.disableTireWear = enable;
+    NativeCarX::SetNoTireWear(enable);
 }

@@ -1,5 +1,6 @@
 #include "lua_carx.h"
 #include "../native_carx.h"
+#include "../car_sim_optimizer.h"
 #include "../unity_bridge.h"
 #include "../ecs_collision.h"
 #include "../carfx.h"
@@ -98,6 +99,12 @@ static void PushCarTelemetry(lua_State* L, const CarTelemetry& car) {
         lua_setfield(L, -2, "camber");
         lua_pushnumber(L, car.wheels[w].toeIn);
         lua_setfield(L, -2, "toe_in");
+        lua_pushnumber(L, car.wheels[w].wearFactor);
+        lua_setfield(L, -2, "wear");
+        lua_pushnumber(L, (1.0f - car.wheels[w].wearFactor) * 100.0f);
+        lua_setfield(L, -2, "life_percent");
+        lua_pushnumber(L, car.wheels[w].deformAngle);
+        lua_setfield(L, -2, "deform_angle");
 
         lua_rawseti(L, -2, w + 1);
     }
@@ -1106,6 +1113,51 @@ int LuaCarX::GetDeltaTime(lua_State* L) {
     return 1;
 }
 
+int LuaCarX::SetNoDamage(lua_State* L) {
+    bool enable = lua_toboolean(L, 1) != 0;
+    NativeCarX::SetNoDamage(enable);
+    CarSimOptimizer::SetNoDamageOverride(enable);
+    return 0;
+}
+
+int LuaCarX::GetNoDamage(lua_State* L) {
+    lua_pushboolean(L, NativeCarX::IsNoDamage());
+    return 1;
+}
+
+int LuaCarX::SetNoTireWear(lua_State* L) {
+    bool enable = lua_toboolean(L, 1) != 0;
+    NativeCarX::SetNoTireWear(enable);
+    CarSimOptimizer::SetNoTireWearOverride(enable);
+    return 0;
+}
+
+int LuaCarX::GetNoTireWear(lua_State* L) {
+    lua_pushboolean(L, NativeCarX::IsNoTireWear());
+    return 1;
+}
+
+int LuaCarX::RepairCar(lua_State* L) {
+    void* car = nullptr;
+    if (lua_islightuserdata(L, 1)) {
+        car = lua_touserdata(L, 1);
+    }
+    NativeCarX::ResetCarDamage(car);
+    NativeCarX::ResetTireWear(car);
+    lua_pushboolean(L, true);
+    return 1;
+}
+
+int LuaCarX::ResetTireWear(lua_State* L) {
+    void* car = nullptr;
+    if (lua_islightuserdata(L, 1)) {
+        car = lua_touserdata(L, 1);
+    }
+    NativeCarX::ResetTireWear(car);
+    lua_pushboolean(L, true);
+    return 1;
+}
+
 static const luaL_Reg carx_funcs[] = {
     { "get_player_car", LuaCarX::GetPlayerCar },
     { "get_all_cars", LuaCarX::GetAllCars },
@@ -1147,6 +1199,12 @@ static const luaL_Reg carx_funcs[] = {
     { "get_proximity", LuaCarX::GetProximity },
     { "get_time", LuaCarX::GetTime },
     { "get_delta_time", LuaCarX::GetDeltaTime },
+    { "set_no_damage", LuaCarX::SetNoDamage },
+    { "get_no_damage", LuaCarX::GetNoDamage },
+    { "set_no_tire_wear", LuaCarX::SetNoTireWear },
+    { "get_no_tire_wear", LuaCarX::GetNoTireWear },
+    { "repair_car", LuaCarX::RepairCar },
+    { "reset_tire_wear", LuaCarX::ResetTireWear },
     { nullptr, nullptr }
 };
 

@@ -14,6 +14,10 @@ public:
     struct Config {
         bool enabled = false;
 
+        // Damage & Tire Wear Control
+        bool disableDamage = false;          // Complete immunity to body mesh deformation, detached parts & bent suspension
+        bool disableTireWear = false;        // Infinite tire life, 0% degradation, constant maximum grip
+
         // Multiplayer server-snapshot distance switcher (DistanceBasedPhysicsSwitchingSubController)
         int maxFullSimCars = 3;             // Local player + (N - 1) nearest remote cars
         float maxFullSimDistMeters = 100.0f; // Vanilla cap is 100.0m
@@ -87,6 +91,11 @@ public:
         int32_t effectsDisabledCars = 0;
         int32_t offlineReducedCars = 0;
 
+        bool noDamageActive = false;
+        bool noTireWearActive = false;
+        uint64_t damageBlocks = 0;
+        uint64_t jointBreakBlocks = 0;
+
         // Captured vanilla baselines for UI reference
         float vanillaDeformDist = 30.0f;
         int32_t vanillaDeformIdleSteps = 30;
@@ -107,4 +116,8 @@ public:
 
     static Stats GetStats();
     static std::vector<CarEntry> GetNetCarsSnapshot();
+
+    static void SetNoDamageOverride(bool enable);
+    static bool GetNoDamageOverride();
+    static void SetNoTireWearOverride(bool enable);
 };

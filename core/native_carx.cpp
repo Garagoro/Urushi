@@ -41,6 +41,19 @@ NativeCarX::t_CX_CarSetRigidBody NativeCarX::pfn_SetRigidBody = nullptr;
 NativeCarX::t_CX_CarGetVelocity NativeCarX::pfn_GetVelocity = nullptr;
 NativeCarX::t_CX_CarGetVelocity NativeCarX::pfn_GetAngularVelocity = nullptr;
 
+NativeCarX::t_CX_CarSetTyreWearMode NativeCarX::pfn_CarSetTyreWearMode = nullptr;
+NativeCarX::t_CX_CarGetTyreWearMode NativeCarX::pfn_CarGetTyreWearMode = nullptr;
+NativeCarX::t_CX_WheelTyreWearReset NativeCarX::pfn_WheelTyreWearReset = nullptr;
+NativeCarX::t_CX_WheelTyreTempReset NativeCarX::pfn_WheelTyreTempReset = nullptr;
+NativeCarX::t_CX_WheelSetWearFactor NativeCarX::pfn_WheelSetWearFactor = nullptr;
+NativeCarX::t_CX_WheelGetWearFactor NativeCarX::pfn_WheelGetWearFactor = nullptr;
+NativeCarX::t_CX_WheelSetDeformOffset NativeCarX::pfn_WheelSetDeformOffset = nullptr;
+NativeCarX::t_CX_WheelSetDeformAngle NativeCarX::pfn_WheelSetDeformAngle = nullptr;
+NativeCarX::t_CX_WheelGetDeformAngle NativeCarX::pfn_WheelGetDeformAngle = nullptr;
+
+bool NativeCarX::s_noDamage = false;
+bool NativeCarX::s_noTireWear = false;
+
 bool NativeCarX::Init() {
     if (s_initialized) return true;
 
@@ -76,6 +89,16 @@ bool NativeCarX::Init() {
     pfn_SetRigidBody = (t_CX_CarSetRigidBody)GetProcAddress(s_nativeCarXModule, "CX_CarSetRigidBody");
     pfn_GetVelocity = (t_CX_CarGetVelocity)GetProcAddress(s_nativeCarXModule, "CX_CarGetVelocity");
     pfn_GetAngularVelocity = (t_CX_CarGetVelocity)GetProcAddress(s_nativeCarXModule, "CX_CarGetAngularVelocity");
+
+    pfn_CarSetTyreWearMode = (t_CX_CarSetTyreWearMode)GetProcAddress(s_nativeCarXModule, "CX_CarSetTyreWearMode");
+    pfn_CarGetTyreWearMode = (t_CX_CarGetTyreWearMode)GetProcAddress(s_nativeCarXModule, "CX_CarGetTyreWearMode");
+    pfn_WheelTyreWearReset = (t_CX_WheelTyreWearReset)GetProcAddress(s_nativeCarXModule, "CX_WheelTyreWearReset");
+    pfn_WheelTyreTempReset = (t_CX_WheelTyreTempReset)GetProcAddress(s_nativeCarXModule, "CX_WheelTyreTempReset");
+    pfn_WheelSetWearFactor = (t_CX_WheelSetWearFactor)GetProcAddress(s_nativeCarXModule, "CX_WheelSetWearFactor");
+    pfn_WheelGetWearFactor = (t_CX_WheelGetWearFactor)GetProcAddress(s_nativeCarXModule, "CX_WheelGetWearFactor");
+    pfn_WheelSetDeformOffset = (t_CX_WheelSetDeformOffset)GetProcAddress(s_nativeCarXModule, "CX_WheelSetDeformOffset");
+    pfn_WheelSetDeformAngle = (t_CX_WheelSetDeformAngle)GetProcAddress(s_nativeCarXModule, "CX_WheelSetDeformAngle");
+    pfn_WheelGetDeformAngle = (t_CX_WheelGetDeformAngle)GetProcAddress(s_nativeCarXModule, "CX_WheelGetDeformAngle");
 
     void* pfn_DestroyManager = (void*)GetProcAddress(s_nativeCarXModule, "CX_DestroyManager");
 
@@ -346,7 +369,31 @@ void NativeCarX::UpdateCarTelemetry(CarTelemetry& tele) {
             if (pfn_GetToeIn) {
                 tele.wheels[i].toeIn = pfn_GetToeIn(wheel);
             }
+            if (pfn_WheelGetWearFactor) {
+                tele.wheels[i].wearFactor = pfn_WheelGetWearFactor(wheel);
+            }
+            if (pfn_WheelGetDeformAngle) {
+                tele.wheels[i].deformAngle = pfn_WheelGetDeformAngle(wheel);
+            }
+
+            // Enforce No Tire Wear
+            if (s_noTireWear) {
+                if (pfn_WheelSetWearFactor) pfn_WheelSetWearFactor(wheel, 0.0f);
+                if (pfn_WheelTyreWearReset) pfn_WheelTyreWearReset(wheel);
+                tele.wheels[i].wearFactor = 0.0f;
+            }
+
+            // Enforce No Suspension Deform
+            if (s_noDamage) {
+                if (pfn_WheelSetDeformOffset) pfn_WheelSetDeformOffset(wheel, 0.0f, 0.0f, 0.0f);
+                if (pfn_WheelSetDeformAngle) pfn_WheelSetDeformAngle(wheel, 0.0f);
+                tele.wheels[i].deformAngle = 0.0f;
+            }
         }
+    }
+
+    if (s_noTireWear && pfn_CarSetTyreWearMode) {
+        pfn_CarSetTyreWearMode(car, 0);
     }
 }
 
@@ -502,4 +549,74 @@ bool NativeCarX::DestroyCar(void* car) {
 void* NativeCarX::GetManagerPtr() {
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
     return s_managerPtr;
+}
+
+void NativeCarX::SetNoDamage(bool enable) {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    s_noDamage = enable;
+    if (enable) {
+        void* car = s_knownPlayerCarPtr ? s_knownPlayerCarPtr : s_playerCarPtr;
+        if (car) ResetCarDamage(car);
+    }
+}
+
+bool NativeCarX::IsNoDamage() {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    return s_noDamage;
+}
+
+void NativeCarX::SetNoTireWear(bool enable) {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    s_noTireWear = enable;
+    if (enable) {
+        void* car = s_knownPlayerCarPtr ? s_knownPlayerCarPtr : s_playerCarPtr;
+        if (car) ResetTireWear(car);
+    }
+}
+
+bool NativeCarX::IsNoTireWear() {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    return s_noTireWear;
+}
+
+void NativeCarX::ResetCarDamage(void* car) {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    if (!car) car = s_knownPlayerCarPtr ? s_knownPlayerCarPtr : s_playerCarPtr;
+    if (!car || !IsCarMemoryValid(car)) return;
+
+    if (pfn_GetWheel) {
+        for (int i = 0; i < 4; ++i) {
+            void* wheel = pfn_GetWheel(car, i);
+            if (!wheel) continue;
+            if (pfn_WheelSetDeformOffset) pfn_WheelSetDeformOffset(wheel, 0.0f, 0.0f, 0.0f);
+            if (pfn_WheelSetDeformAngle) pfn_WheelSetDeformAngle(wheel, 0.0f);
+        }
+    }
+}
+
+void NativeCarX::ResetTireWear(void* car) {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    if (!car) car = s_knownPlayerCarPtr ? s_knownPlayerCarPtr : s_playerCarPtr;
+    if (!car || !IsCarMemoryValid(car)) return;
+
+    if (pfn_CarSetTyreWearMode && s_noTireWear) {
+        pfn_CarSetTyreWearMode(car, 0);
+    }
+    if (pfn_GetWheel) {
+        for (int i = 0; i < 4; ++i) {
+            void* wheel = pfn_GetWheel(car, i);
+            if (!wheel) continue;
+            if (pfn_WheelSetWearFactor) pfn_WheelSetWearFactor(wheel, 0.0f);
+            if (pfn_WheelTyreWearReset) pfn_WheelTyreWearReset(wheel);
+            if (pfn_WheelTyreTempReset) pfn_WheelTyreTempReset(wheel);
+        }
+    }
+}
+
+float NativeCarX::GetWheelWear(void* car, int wheelIndex) {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    if (!car) car = s_knownPlayerCarPtr ? s_knownPlayerCarPtr : s_playerCarPtr;
+    if (!car || !IsCarMemoryValid(car) || !pfn_GetWheel || !pfn_WheelGetWearFactor) return 0.0f;
+    void* wheel = pfn_GetWheel(car, wheelIndex);
+    return wheel ? pfn_WheelGetWearFactor(wheel) : 0.0f;
 }

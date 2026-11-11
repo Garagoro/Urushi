@@ -8,10 +8,12 @@
 struct WheelData {
     std::array<float, 16> matrix;
     std::array<float, 16> caliperMatrix;
-    float smoke;
-    float smokeIntensity;
-    float camber;
-    float toeIn;
+    float smoke = 0.0f;
+    float smokeIntensity = 0.0f;
+    float camber = 0.0f;
+    float toeIn = 0.0f;
+    float wearFactor = 0.0f;
+    float deformAngle = 0.0f;
 };
 
 struct CarTelemetry {
@@ -56,6 +58,15 @@ public:
     static void* GetPlayerCarPtr();
     static void SetKnownPlayerCarPtr(void* car);
     static void* GetManagerPtr();
+
+    // Damage & Tire Wear Control
+    static void SetNoDamage(bool enable);
+    static bool IsNoDamage();
+    static void SetNoTireWear(bool enable);
+    static bool IsNoTireWear();
+    static void ResetCarDamage(void* car = nullptr);
+    static void ResetTireWear(void* car = nullptr);
+    static float GetWheelWear(void* car, int wheelIndex);
 
 private:
     static void Hooked_CX_CarSetRenderMatrix(void* car, const float* matrix, float factor);
@@ -135,4 +146,27 @@ private:
     static t_CX_CarSetRigidBody pfn_SetRigidBody;
     static t_CX_CarGetVelocity pfn_GetVelocity;
     static t_CX_CarGetVelocity pfn_GetAngularVelocity;
+
+    typedef void  (*t_CX_CarSetTyreWearMode)(void* car, int mode);
+    typedef int   (*t_CX_CarGetTyreWearMode)(void* car);
+    typedef void  (*t_CX_WheelTyreWearReset)(void* wheel);
+    typedef void  (*t_CX_WheelTyreTempReset)(void* wheel);
+    typedef void  (*t_CX_WheelSetWearFactor)(void* wheel, float factor);
+    typedef float (*t_CX_WheelGetWearFactor)(void* wheel);
+    typedef void  (*t_CX_WheelSetDeformOffset)(void* wheel, float x, float y, float z);
+    typedef void  (*t_CX_WheelSetDeformAngle)(void* wheel, float angle);
+    typedef float (*t_CX_WheelGetDeformAngle)(void* wheel);
+
+    static t_CX_CarSetTyreWearMode pfn_CarSetTyreWearMode;
+    static t_CX_CarGetTyreWearMode pfn_CarGetTyreWearMode;
+    static t_CX_WheelTyreWearReset pfn_WheelTyreWearReset;
+    static t_CX_WheelTyreTempReset pfn_WheelTyreTempReset;
+    static t_CX_WheelSetWearFactor pfn_WheelSetWearFactor;
+    static t_CX_WheelGetWearFactor pfn_WheelGetWearFactor;
+    static t_CX_WheelSetDeformOffset pfn_WheelSetDeformOffset;
+    static t_CX_WheelSetDeformAngle pfn_WheelSetDeformAngle;
+    static t_CX_WheelGetDeformAngle pfn_WheelGetDeformAngle;
+
+    static bool s_noDamage;
+    static bool s_noTireWear;
 };

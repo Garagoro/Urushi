@@ -48,4 +48,12 @@ public:
     static int Raycast(lua_State* L);
     static int ResetCar(lua_State* L);
     static int GetProximity(lua_State* L);
+
+    // Damage & Tire Wear API
+    static int SetNoDamage(lua_State* L);
+    static int GetNoDamage(lua_State* L);
+    static int SetNoTireWear(lua_State* L);
+    static int GetNoTireWear(lua_State* L);
+    static int RepairCar(lua_State* L);
+    static int ResetTireWear(lua_State* L);
 };
