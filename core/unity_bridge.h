@@ -111,7 +111,7 @@ public:
     static int GetGhostCount();
     static void SetGhostPositionRotation(const UnityVector3& pos, const UnityVector4& rot);
 
-    // Stage 2 + Multi-Car + Collision
+    // Multi-car ghost pose, mirror & collision
     static void ApplyGhostPose(const float* bodyMatrix, const float wheelMatrices[4][16], const float caliperMatrices[4][16], float steerAngle, const UnityVector3& worldOffset);
     static void SetGhostMirrorMode(bool enabled, float offsetRight = 3.8f);
     static bool IsGhostMirrorMode();

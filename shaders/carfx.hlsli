@@ -1,5 +1,5 @@
-// CarFX (CarX-WFX) common HLSL header for CarX Drift Racing Online 2
-// Mirrors WeaponFX ergonomics on top of CarX DR2's MAT_CAR_PAINT_3_0 Forward pass.
+// CarFX common HLSL header for CarX Drift Racing Online 2
+// Designed for CarX DR2's MAT_CAR_PAINT_3_0 Forward pass.
 // Include first in every shader:
 //     #include "carfx.hlsli"
 //     float4 main(PSIn i) : SV_Target { ... }

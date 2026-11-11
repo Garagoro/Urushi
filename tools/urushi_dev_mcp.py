@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """urushi_dev_mcp.py - Development MCP server & CLI for CarX2ScriptHook (URUSHI).
 
-Bridges an MCP client (Antigravity, Claude Code) or direct --cli calls to:
+Bridges an MCP client or direct --cli calls to:
   1. The in-game named pipe \\\\.\\pipe\\urushi_dev (DX11 backbuffer PNG shots,
      ImGui layout inspection, menu/window control, Lua eval & hot-reload,
      CarFX / Optimizer state, synthetic UI input).

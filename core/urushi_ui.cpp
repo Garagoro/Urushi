@@ -213,7 +213,7 @@ static WindowState* FindWindowLocked(const std::string& id) {
     return nullptr;
 }
 
-// Vector 16px icons drawn cleanly via ImDrawList (no emoji slop)
+// Vector 16px icons drawn via ImDrawList
 static void DrawModuleIcon(ImDrawList* dl, ImVec2 center, const std::string& icon, ImU32 col, float s) {
     const float r = 6.5f * s;
     const float th = std::max(1.2f, 1.5f * s);

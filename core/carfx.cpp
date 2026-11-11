@@ -990,7 +990,7 @@ bool Init(ID3D11Device* device, ID3D11DeviceContext* immediateContext, const std
     sdPt.MaxLOD = D3D11_FLOAT32_MAX;
     s_device->CreateSamplerState(&sdPt, &s_samplerPoint);
 
-    // Premultiplied alpha blend (matching WeaponFX: ONE / INV_SRC_ALPHA, preserving target alpha)
+    // Premultiplied alpha blend (ONE / INV_SRC_ALPHA, preserving target alpha)
     D3D11_BLEND_DESC bd = {};
     bd.RenderTarget[0].BlendEnable = TRUE;
     bd.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;

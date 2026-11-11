@@ -248,7 +248,7 @@ local function render_ghost_window()
         end
     end)
 
-    ui.card("Управление болванкой", "Stage 2 Mirror & Collision", function()
+    ui.card("Управление болванкой", "Mirror & Collision", function()
         local full_w = ui.avail_width()
         if not active then
             if ui.button("Создать 3D-болванку на месте [G]##gh_spawn", full_w, 32, "primary") then

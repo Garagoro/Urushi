@@ -1,4 +1,4 @@
-// Crystal Car Glass (WeaponFX glass.hlsl port): real-scene refraction, prism dispersion,
+// Crystal Car Glass: real-scene refraction, prism dispersion,
 // 12-tap golden-spiral frosted roughness blur, Beer-Lambert thickness tint, Schlick Fresnel & optional livery decals.
 // @param refraction   p0.x 0..120 = 45.0  : refraction bend in pixels
 // @param dispersion   p0.y 0..1   = 0.16  : prism RGB split fraction

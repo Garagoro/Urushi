@@ -1,5 +1,5 @@
--- CarFX (CarX-WFX): Custom HLSL Livery & Body Shader Control Panel [F9]
--- Uses WeaponFX-style @param / @color / @tex / @mode directives & hot-reloading.
+-- CarFX: Custom HLSL Livery & Body Shader Control Panel [F9]
+-- Supports @param / @color / @tex / @mode directives & live hot-reloading.
 
 local VK_F9 = 0x78
 
