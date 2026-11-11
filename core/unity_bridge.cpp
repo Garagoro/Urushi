@@ -42,6 +42,7 @@ std::atomic<bool> UnityBridge::s_ghostCollisionEnabled{ false };
 std::atomic<bool> UnityBridge::s_ghostMirrorPlayerShader{ true };
 std::atomic<bool> UnityBridge::s_pendingCollisionSync{ false };
 std::atomic<bool> UnityBridge::s_pendingTeleport{ false };
+std::atomic<bool> UnityBridge::s_pendingRepairCar{ false };
 TeleportPose UnityBridge::s_pendingTeleportPose{};
 int UnityBridge::s_pendingTeleportVelMode = 0;
 UnityVector3 UnityBridge::s_pendingPos{};
@@ -281,6 +282,35 @@ static bool SafeInspectCarBehaviourOnRootGoSEH(void* rootGo, CarBehaviourInfo* o
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         *outInfo = CarBehaviourInfo{};
         return false;
+    }
+}
+
+static void* SafeFindDeformationControllerSEH(void* carBehaviour) {
+    if (!carBehaviour) return nullptr;
+    uintptr_t cb = reinterpret_cast<uintptr_t>(carBehaviour);
+    if (!IsReadableMem(cb, 0x150)) return nullptr;
+    __try {
+        uintptr_t dict = *reinterpret_cast<const uintptr_t*>(cb + 0x140);
+        if (!IsReadableMem(dict, 0x30)) return nullptr;
+        uint32_t count = *reinterpret_cast<const uint32_t*>(dict + 0x20);
+        uintptr_t entries = *reinterpret_cast<const uintptr_t*>(dict + 0x18);
+        if (!entries || count == 0 || count > 64) return nullptr;
+        if (!IsReadableMem(entries, 0x20 + count * 24)) return nullptr;
+        for (uint32_t i = 0; i < count; ++i) {
+            uintptr_t val = *reinterpret_cast<const uintptr_t*>(entries + 0x20 + i * 24 + 16);
+            if (!val || !IsReadableMem(val, 0x18)) continue;
+            uintptr_t klass = *reinterpret_cast<const uintptr_t*>(val);
+            if (!klass || !IsReadableMem(klass, 0x20)) continue;
+            uintptr_t namePtr = *reinterpret_cast<const uintptr_t*>(klass + 0x10);
+            if (!IsReadableMem(namePtr, 32)) continue;
+            const char* kname = reinterpret_cast<const char*>(namePtr);
+            if (strcmp(kname, "CarDeformationFeatureController") == 0) {
+                return reinterpret_cast<void*>(val);
+            }
+        }
+        return nullptr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
     }
 }
 
@@ -1565,6 +1595,7 @@ void UnityBridge::Shutdown() {
     s_pendingDestroy.store(false);
     s_pendingTransform.store(false);
     s_pendingCollisionSync.store(false);
+    s_pendingRepairCar.store(false);
 
     EcsCollision::Shutdown();
 
@@ -1658,6 +1689,10 @@ void UnityBridge::ProcessPendingMainThreadTasks(float dt) {
         ApplyTeleportPlayerInternal(poseCopy, velMode);
     }
 
+    if (s_pendingRepairCar.exchange(false)) {
+        ApplyRepairPlayerCarInternal();
+    }
+
     // Periodically sync scene car model cache + per-frame lightweight position matching
     if (NativeCarX::IsInSession()) {
         RefreshLiveCarListOnMainThread(false);
@@ -1668,6 +1703,7 @@ void UnityBridge::ProcessPendingMainThreadTasks(float dt) {
         }
         EcsCollision::UpdateOnMainThread(dt, liveSnapshot);
         CarSimOptimizer::UpdateOnMainThread(dt, liveSnapshot);
+        NativeCarX::UpdatePerFrame();
 
         if (s_pendingCollisionSync.exchange(false)) {
             bool col = s_ghostCollisionEnabled.load(std::memory_order_relaxed);
@@ -4255,4 +4291,113 @@ bool UnityBridge::RaycastWorld(const UnityVector3& origin, const UnityVector3& d
     UnityRay ray{ origin, dir };
     return SafePhysicsRaycastSEH(reinterpret_cast<void*>(pfn_InternalRaycast), &ray, maxDist, &outHit, layerMask);
 }
+
+void UnityBridge::RequestRepairPlayerCar() {
+    if (IsOnMainThread()) {
+        ApplyRepairPlayerCarInternal();
+        return;
+    }
+    s_pendingRepairCar.store(true);
+}
+
+static void* SafeGetCarModelSEH(void* carBehaviour) {
+    if (!carBehaviour) return nullptr;
+    __try {
+        return *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(carBehaviour) + 0x60);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+static void* SafeGetDeformationBehavioursListSEH(void* deformCtrl) {
+    if (!deformCtrl) return nullptr;
+    __try {
+        return *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(deformCtrl) + 0x20);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+static bool SafeInvokeCarRepairSEH(void* pfn, void* carModel, uint8_t resetVisual) {
+    if (!pfn || !carModel) return false;
+    __try {
+        reinterpret_cast<void(__fastcall*)(void*, uint8_t, void*)>(pfn)(carModel, resetVisual, nullptr);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static bool SafeInvokeVisualRepairSEH(void* pfn, void* carModel) {
+    if (!pfn || !carModel) return false;
+    __try {
+        reinterpret_cast<void(__fastcall*)(void*, void*)>(pfn)(carModel, nullptr);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static bool SafeInvokeFullCarRepairSEH(void* pfn, void* defBehavList) {
+    if (!pfn || !defBehavList) return false;
+    __try {
+        reinterpret_cast<void(__fastcall*)(void*, void*)>(pfn)(defBehavList, nullptr);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void UnityBridge::ApplyRepairPlayerCarInternal() {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    void* activePlayer = NativeCarX::GetPlayerCarPtr();
+    if (activePlayer) {
+        NativeCarX::ResetCarDamage(activePlayer);
+        NativeCarX::ResetTireWear(activePlayer);
+    }
+
+    HMODULE hGA = GetModuleHandleW(L"GameAssembly.dll");
+    typedef void (__fastcall *t_CarRepair)(void* carModel, uint8_t resetVisual, void* method);
+    typedef void (__fastcall *t_VisualRepair)(void* carModel, void* method);
+    typedef void (__fastcall *t_FullCarRepair)(void* list, void* method);
+
+    static t_CarRepair pfn_CarRepair = hGA ? reinterpret_cast<t_CarRepair>((uintptr_t)hGA + 0x12FEC20) : nullptr;
+    static t_VisualRepair pfn_VisualRepair = hGA ? reinterpret_cast<t_VisualRepair>((uintptr_t)hGA + 0x12FF9A0) : nullptr;
+    static t_FullCarRepair pfn_FullCarRepair = hGA ? reinterpret_cast<t_FullCarRepair>((uintptr_t)hGA + 0x1E570D0) : nullptr;
+
+    bool repaired = false;
+    for (const auto& sc : s_sceneCarCache) {
+        bool isPlayerCar = sc.isPlayer || (activePlayer && sc.nativeCarPtr == activePlayer);
+        if (isPlayerCar && sc.carBehaviour) {
+            void* carModel = SafeGetCarModelSEH(sc.carBehaviour);
+            if (carModel) {
+                if (pfn_CarRepair && SafeInvokeCarRepairSEH(reinterpret_cast<void*>(pfn_CarRepair), carModel, 1)) {
+                    Logger::Info("CarExtensions::Repair executed on player car.");
+                    repaired = true;
+                }
+                if (pfn_VisualRepair && SafeInvokeVisualRepairSEH(reinterpret_cast<void*>(pfn_VisualRepair), carModel)) {
+                    Logger::Info("CarExtensions::VisualRepair executed on player car.");
+                    repaired = true;
+                }
+            }
+
+            void* deformCtrl = SafeFindDeformationControllerSEH(sc.carBehaviour);
+            if (deformCtrl && pfn_FullCarRepair) {
+                void* defBehavList = SafeGetDeformationBehavioursListSEH(deformCtrl);
+                if (defBehavList) {
+                    if (SafeInvokeFullCarRepairSEH(reinterpret_cast<void*>(pfn_FullCarRepair), defBehavList)) {
+                        Logger::Info("CarDeformationFeatureController::FullCarRepair executed on player car.");
+                        repaired = true;
+                    }
+                }
+            }
+            break;
+        }
+    }
+
+    if (!repaired) {
+        Logger::Warn("ApplyRepairPlayerCarInternal: player car or carModel not found in scene car cache.");
+    }
+}
+
 

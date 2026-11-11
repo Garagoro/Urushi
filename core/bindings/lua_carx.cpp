@@ -99,10 +99,14 @@ static void PushCarTelemetry(lua_State* L, const CarTelemetry& car) {
         lua_setfield(L, -2, "camber");
         lua_pushnumber(L, car.wheels[w].toeIn);
         lua_setfield(L, -2, "toe_in");
-        lua_pushnumber(L, car.wheels[w].wearFactor);
+        float life = std::clamp(car.wheels[w].zoneRest * 100.0f, 0.0f, 100.0f);
+        float wear = std::clamp((1.0f - car.wheels[w].zoneRest) * 100.0f, 0.0f, 100.0f);
+        lua_pushnumber(L, wear);
         lua_setfield(L, -2, "wear");
-        lua_pushnumber(L, (1.0f - car.wheels[w].wearFactor) * 100.0f);
+        lua_pushnumber(L, life);
         lua_setfield(L, -2, "life_percent");
+        lua_pushnumber(L, car.wheels[w].zoneRest);
+        lua_setfield(L, -2, "zone_rest");
         lua_pushnumber(L, car.wheels[w].deformAngle);
         lua_setfield(L, -2, "deform_angle");
 
@@ -1144,6 +1148,7 @@ int LuaCarX::RepairCar(lua_State* L) {
     }
     NativeCarX::ResetCarDamage(car);
     NativeCarX::ResetTireWear(car);
+    UnityBridge::RequestRepairPlayerCar();
     lua_pushboolean(L, true);
     return 1;
 }
@@ -1154,6 +1159,152 @@ int LuaCarX::ResetTireWear(lua_State* L) {
         car = lua_touserdata(L, 1);
     }
     NativeCarX::ResetTireWear(car);
+    lua_pushboolean(L, true);
+    return 1;
+}
+
+int LuaCarX::GetTyreConfig(lua_State* L) {
+    TyreConfig cfg = NativeCarX::GetTyreConfig();
+    lua_newtable(L);
+
+    lua_pushboolean(L, cfg.infiniteWear);
+    lua_setfield(L, -2, "infinite_wear");
+
+    lua_pushnumber(L, cfg.wearMultiplier);
+    lua_setfield(L, -2, "wear_multiplier");
+
+    lua_pushnumber(L, cfg.desiredLife);
+    lua_setfield(L, -2, "desired_life");
+
+    lua_pushboolean(L, cfg.overrideGrip);
+    lua_setfield(L, -2, "override_grip");
+
+    lua_pushnumber(L, cfg.frontGrip);
+    lua_setfield(L, -2, "front_grip");
+
+    lua_pushnumber(L, cfg.rearGrip);
+    lua_setfield(L, -2, "rear_grip");
+
+    lua_pushnumber(L, cfg.ballisticGrip);
+    lua_setfield(L, -2, "ballistic_grip");
+
+    lua_pushboolean(L, cfg.lockTemperature);
+    lua_setfield(L, -2, "lock_temp");
+
+    lua_pushnumber(L, cfg.targetTemperature);
+    lua_setfield(L, -2, "target_temp");
+
+    lua_pushboolean(L, cfg.overridePressure);
+    lua_setfield(L, -2, "override_pressure");
+
+    lua_pushnumber(L, cfg.frontPressure);
+    lua_setfield(L, -2, "front_pressure");
+
+    lua_pushnumber(L, cfg.rearPressure);
+    lua_setfield(L, -2, "rear_pressure");
+
+    return 1;
+}
+
+int LuaCarX::SetTyreConfig(lua_State* L) {
+    if (!lua_istable(L, 1)) {
+        lua_pushboolean(L, false);
+        return 1;
+    }
+
+    TyreConfig cfg = NativeCarX::GetTyreConfig();
+
+    lua_getfield(L, 1, "infinite_wear");
+    if (lua_isboolean(L, -1)) cfg.infiniteWear = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "wear_multiplier");
+    if (lua_isnumber(L, -1)) cfg.wearMultiplier = (float)lua_tonumber(L, -1);
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "desired_life");
+    if (lua_isnumber(L, -1)) cfg.desiredLife = std::clamp((float)lua_tonumber(L, -1), 0.0f, 1.0f);
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "override_grip");
+    if (lua_isboolean(L, -1)) cfg.overrideGrip = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "front_grip");
+    if (lua_isnumber(L, -1)) cfg.frontGrip = (float)lua_tonumber(L, -1);
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "rear_grip");
+    if (lua_isnumber(L, -1)) cfg.rearGrip = (float)lua_tonumber(L, -1);
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "ballistic_grip");
+    if (lua_isnumber(L, -1)) cfg.ballisticGrip = (float)lua_tonumber(L, -1);
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "lock_temp");
+    if (lua_isboolean(L, -1)) cfg.lockTemperature = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "target_temp");
+    if (lua_isnumber(L, -1)) cfg.targetTemperature = (float)lua_tonumber(L, -1);
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "override_pressure");
+    if (lua_isboolean(L, -1)) cfg.overridePressure = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "front_pressure");
+    if (lua_isnumber(L, -1)) cfg.frontPressure = (float)lua_tonumber(L, -1);
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "rear_pressure");
+    if (lua_isnumber(L, -1)) cfg.rearPressure = (float)lua_tonumber(L, -1);
+    lua_pop(L, 1);
+
+    NativeCarX::SetTyreConfig(cfg);
+    lua_pushboolean(L, true);
+    return 1;
+}
+
+int LuaCarX::GetTyreLive(lua_State* L) {
+    TyreLiveStats st = NativeCarX::GetTyreLiveStats();
+    lua_newtable(L);
+
+    lua_pushboolean(L, st.valid);
+    lua_setfield(L, -2, "valid");
+
+    lua_newtable(L);
+    for (int i = 0; i < 4; ++i) {
+        lua_newtable(L);
+
+        lua_pushnumber(L, st.wheels[i].life);
+        lua_setfield(L, -2, "life");
+
+        lua_pushnumber(L, st.wheels[i].temp);
+        lua_setfield(L, -2, "temp");
+
+        lua_pushnumber(L, st.wheels[i].pressureKpa);
+        lua_setfield(L, -2, "pressure_kpa");
+
+        lua_pushnumber(L, st.wheels[i].friction);
+        lua_setfield(L, -2, "friction");
+
+        lua_pushnumber(L, st.wheels[i].ballisticGrip);
+        lua_setfield(L, -2, "ballistic");
+
+        lua_pushnumber(L, st.wheels[i].wearFactor);
+        lua_setfield(L, -2, "wear_factor");
+
+        lua_rawseti(L, -2, i + 1);
+    }
+    lua_setfield(L, -2, "wheels");
+
+    return 1;
+}
+
+int LuaCarX::ResetTyreDefaults(lua_State* L) {
+    NativeCarX::ResetTyreDefaults();
     lua_pushboolean(L, true);
     return 1;
 }
@@ -1205,6 +1356,10 @@ static const luaL_Reg carx_funcs[] = {
     { "get_no_tire_wear", LuaCarX::GetNoTireWear },
     { "repair_car", LuaCarX::RepairCar },
     { "reset_tire_wear", LuaCarX::ResetTireWear },
+    { "get_tyre_config", LuaCarX::GetTyreConfig },
+    { "set_tyre_config", LuaCarX::SetTyreConfig },
+    { "get_tyre_live", LuaCarX::GetTyreLive },
+    { "reset_tyre_defaults", LuaCarX::ResetTyreDefaults },
     { nullptr, nullptr }
 };
 

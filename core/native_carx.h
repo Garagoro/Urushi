@@ -14,6 +14,36 @@ struct WheelData {
     float toeIn = 0.0f;
     float wearFactor = 0.0f;
     float deformAngle = 0.0f;
+    float zoneRest = 1.0f;
+};
+
+struct TyreConfig {
+    bool infiniteWear = false;
+    float wearMultiplier = 1.0f;
+    float desiredLife = 1.0f; // 0.0 .. 1.0 (1.0 = 100% fresh)
+    bool overrideGrip = false;
+    float frontGrip = 1.15f;
+    float rearGrip = 0.95f;
+    float ballisticGrip = 0.10f;
+    bool lockTemperature = false;
+    float targetTemperature = 80.0f;
+    bool overridePressure = false;
+    float frontPressure = 145.0f; // in kPa
+    float rearPressure = 95.0f;   // in kPa
+};
+
+struct TyreWheelLive {
+    float life = 1.0f;
+    float temp = 80.0f;
+    float pressureKpa = 145.0f;
+    float friction = 1.15f;
+    float ballisticGrip = 0.10f;
+    float wearFactor = 1.0f;
+};
+
+struct TyreLiveStats {
+    bool valid = false;
+    std::array<TyreWheelLive, 4> wheels;
 };
 
 struct CarTelemetry {
@@ -67,6 +97,13 @@ public:
     static void ResetCarDamage(void* car = nullptr);
     static void ResetTireWear(void* car = nullptr);
     static float GetWheelWear(void* car, int wheelIndex);
+    static void UpdatePerFrame();
+
+    // Tire & Grip Tuning API
+    static TyreConfig GetTyreConfig();
+    static void SetTyreConfig(const TyreConfig& cfg);
+    static TyreLiveStats GetTyreLiveStats();
+    static void ResetTyreDefaults();
 
 private:
     static void Hooked_CX_CarSetRenderMatrix(void* car, const float* matrix, float factor);
@@ -149,11 +186,12 @@ private:
 
     typedef void  (*t_CX_CarSetTyreWearMode)(void* car, int mode);
     typedef int   (*t_CX_CarGetTyreWearMode)(void* car);
-    typedef void  (*t_CX_WheelTyreWearReset)(void* wheel);
+    typedef void  (*t_CX_WheelTyreWearReset)(void* wheel, float initialLife);
     typedef void  (*t_CX_WheelTyreTempReset)(void* wheel);
     typedef void  (*t_CX_WheelSetWearFactor)(void* wheel, float factor);
     typedef float (*t_CX_WheelGetWearFactor)(void* wheel);
-    typedef void  (*t_CX_WheelSetDeformOffset)(void* wheel, float x, float y, float z);
+    typedef float (*t_CX_WheelGetZoneRest)(void* wheel, int zoneIndex);
+    typedef void  (*t_CX_WheelSetDeformOffset)(void* wheel, float offset);
     typedef void  (*t_CX_WheelSetDeformAngle)(void* wheel, float angle);
     typedef float (*t_CX_WheelGetDeformAngle)(void* wheel);
 
@@ -163,10 +201,30 @@ private:
     static t_CX_WheelTyreTempReset pfn_WheelTyreTempReset;
     static t_CX_WheelSetWearFactor pfn_WheelSetWearFactor;
     static t_CX_WheelGetWearFactor pfn_WheelGetWearFactor;
+    static t_CX_WheelGetZoneRest pfn_WheelGetZoneRest;
     static t_CX_WheelSetDeformOffset pfn_WheelSetDeformOffset;
     static t_CX_WheelSetDeformAngle pfn_WheelSetDeformAngle;
     static t_CX_WheelGetDeformAngle pfn_WheelGetDeformAngle;
 
+    typedef float (*t_CX_WheelGetTyrePressure)(void* wheel);
+    typedef void  (*t_CX_WheelSetTyrePressure)(void* wheel, float pressure);
+    typedef float (*t_CX_WheelGetZoneTemp)(void* wheel, int zoneIndex);
+    typedef int   (*t_CX_WheelGetTyreWearZones)(void* wheel);
+    typedef float (*t_CX_WheelGetFrictionMultiplier)(void* wheel);
+    typedef void  (*t_CX_WheelSetFrictionMultiplier)(void* wheel, float mult);
+    typedef float (*t_CX_WheelGetBallisticGripFactor)(void* wheel);
+    typedef void  (*t_CX_WheelSetBallisticGripFactor)(void* wheel, float factor);
+
+    static t_CX_WheelGetTyrePressure pfn_WheelGetTyrePressure;
+    static t_CX_WheelSetTyrePressure pfn_WheelSetTyrePressure;
+    static t_CX_WheelGetZoneTemp pfn_WheelGetZoneTemp;
+    static t_CX_WheelGetTyreWearZones pfn_WheelGetTyreWearZones;
+    static t_CX_WheelGetFrictionMultiplier pfn_WheelGetFrictionMultiplier;
+    static t_CX_WheelSetFrictionMultiplier pfn_WheelSetFrictionMultiplier;
+    static t_CX_WheelGetBallisticGripFactor pfn_WheelGetBallisticGripFactor;
+    static t_CX_WheelSetBallisticGripFactor pfn_WheelSetBallisticGripFactor;
+
+    static TyreConfig s_tyreConfig;
     static bool s_noDamage;
     static bool s_noTireWear;
 };

@@ -47,12 +47,32 @@ NativeCarX::t_CX_WheelTyreWearReset NativeCarX::pfn_WheelTyreWearReset = nullptr
 NativeCarX::t_CX_WheelTyreTempReset NativeCarX::pfn_WheelTyreTempReset = nullptr;
 NativeCarX::t_CX_WheelSetWearFactor NativeCarX::pfn_WheelSetWearFactor = nullptr;
 NativeCarX::t_CX_WheelGetWearFactor NativeCarX::pfn_WheelGetWearFactor = nullptr;
+NativeCarX::t_CX_WheelGetZoneRest NativeCarX::pfn_WheelGetZoneRest = nullptr;
 NativeCarX::t_CX_WheelSetDeformOffset NativeCarX::pfn_WheelSetDeformOffset = nullptr;
 NativeCarX::t_CX_WheelSetDeformAngle NativeCarX::pfn_WheelSetDeformAngle = nullptr;
 NativeCarX::t_CX_WheelGetDeformAngle NativeCarX::pfn_WheelGetDeformAngle = nullptr;
 
+NativeCarX::t_CX_WheelGetTyrePressure NativeCarX::pfn_WheelGetTyrePressure = nullptr;
+NativeCarX::t_CX_WheelSetTyrePressure NativeCarX::pfn_WheelSetTyrePressure = nullptr;
+NativeCarX::t_CX_WheelGetZoneTemp NativeCarX::pfn_WheelGetZoneTemp = nullptr;
+NativeCarX::t_CX_WheelGetTyreWearZones NativeCarX::pfn_WheelGetTyreWearZones = nullptr;
+NativeCarX::t_CX_WheelGetFrictionMultiplier NativeCarX::pfn_WheelGetFrictionMultiplier = nullptr;
+NativeCarX::t_CX_WheelSetFrictionMultiplier NativeCarX::pfn_WheelSetFrictionMultiplier = nullptr;
+NativeCarX::t_CX_WheelGetBallisticGripFactor NativeCarX::pfn_WheelGetBallisticGripFactor = nullptr;
+NativeCarX::t_CX_WheelSetBallisticGripFactor NativeCarX::pfn_WheelSetBallisticGripFactor = nullptr;
+
+TyreConfig NativeCarX::s_tyreConfig;
 bool NativeCarX::s_noDamage = false;
 bool NativeCarX::s_noTireWear = false;
+
+static bool IsReadableMem(uintptr_t ptr, size_t size) {
+    if (ptr < 0x10000) return false;
+    MEMORY_BASIC_INFORMATION mbi = {};
+    if (!VirtualQuery(reinterpret_cast<const void*>(ptr), &mbi, sizeof(mbi))) return false;
+    if (mbi.State != MEM_COMMIT) return false;
+    if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return false;
+    return (reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize) >= (ptr + size);
+}
 
 bool NativeCarX::Init() {
     if (s_initialized) return true;
@@ -96,9 +116,19 @@ bool NativeCarX::Init() {
     pfn_WheelTyreTempReset = (t_CX_WheelTyreTempReset)GetProcAddress(s_nativeCarXModule, "CX_WheelTyreTempReset");
     pfn_WheelSetWearFactor = (t_CX_WheelSetWearFactor)GetProcAddress(s_nativeCarXModule, "CX_WheelSetWearFactor");
     pfn_WheelGetWearFactor = (t_CX_WheelGetWearFactor)GetProcAddress(s_nativeCarXModule, "CX_WheelGetWearFactor");
+    pfn_WheelGetZoneRest = (t_CX_WheelGetZoneRest)GetProcAddress(s_nativeCarXModule, "CX_WheelGetZoneRest");
     pfn_WheelSetDeformOffset = (t_CX_WheelSetDeformOffset)GetProcAddress(s_nativeCarXModule, "CX_WheelSetDeformOffset");
     pfn_WheelSetDeformAngle = (t_CX_WheelSetDeformAngle)GetProcAddress(s_nativeCarXModule, "CX_WheelSetDeformAngle");
     pfn_WheelGetDeformAngle = (t_CX_WheelGetDeformAngle)GetProcAddress(s_nativeCarXModule, "CX_WheelGetDeformAngle");
+
+    pfn_WheelGetTyrePressure = (t_CX_WheelGetTyrePressure)GetProcAddress(s_nativeCarXModule, "CX_WheelGetTyrePressure");
+    pfn_WheelSetTyrePressure = (t_CX_WheelSetTyrePressure)GetProcAddress(s_nativeCarXModule, "CX_WheelSetTyrePressure");
+    pfn_WheelGetZoneTemp = (t_CX_WheelGetZoneTemp)GetProcAddress(s_nativeCarXModule, "CX_WheelGetZoneTemp");
+    pfn_WheelGetTyreWearZones = (t_CX_WheelGetTyreWearZones)GetProcAddress(s_nativeCarXModule, "CX_WheelGetTyreWearZones");
+    pfn_WheelGetFrictionMultiplier = (t_CX_WheelGetFrictionMultiplier)GetProcAddress(s_nativeCarXModule, "CX_WheelGetFrictionMultiplier");
+    pfn_WheelSetFrictionMultiplier = (t_CX_WheelSetFrictionMultiplier)GetProcAddress(s_nativeCarXModule, "CX_WheelSetFrictionMultiplier");
+    pfn_WheelGetBallisticGripFactor = (t_CX_WheelGetBallisticGripFactor)GetProcAddress(s_nativeCarXModule, "CX_WheelGetBallisticGripFactor");
+    pfn_WheelSetBallisticGripFactor = (t_CX_WheelSetBallisticGripFactor)GetProcAddress(s_nativeCarXModule, "CX_WheelSetBallisticGripFactor");
 
     void* pfn_DestroyManager = (void*)GetProcAddress(s_nativeCarXModule, "CX_DestroyManager");
 
@@ -372,6 +402,13 @@ void NativeCarX::UpdateCarTelemetry(CarTelemetry& tele) {
             if (pfn_WheelGetWearFactor) {
                 tele.wheels[i].wearFactor = pfn_WheelGetWearFactor(wheel);
             }
+            float zoneRest = 1.0f;
+            if (IsReadableMem(reinterpret_cast<uintptr_t>(wheel) + 0x1198, sizeof(float))) {
+                zoneRest = *reinterpret_cast<const float*>(reinterpret_cast<const char*>(wheel) + 0x1198);
+            } else if (pfn_WheelGetZoneRest) {
+                zoneRest = pfn_WheelGetZoneRest(wheel, 0);
+            }
+            tele.wheels[i].zoneRest = std::clamp(zoneRest, 0.0f, 1.0f);
             if (pfn_WheelGetDeformAngle) {
                 tele.wheels[i].deformAngle = pfn_WheelGetDeformAngle(wheel);
             }
@@ -379,13 +416,13 @@ void NativeCarX::UpdateCarTelemetry(CarTelemetry& tele) {
             // Enforce No Tire Wear
             if (s_noTireWear) {
                 if (pfn_WheelSetWearFactor) pfn_WheelSetWearFactor(wheel, 0.0f);
-                if (pfn_WheelTyreWearReset) pfn_WheelTyreWearReset(wheel);
                 tele.wheels[i].wearFactor = 0.0f;
+                tele.wheels[i].zoneRest = 1.0f;
             }
 
             // Enforce No Suspension Deform
             if (s_noDamage) {
-                if (pfn_WheelSetDeformOffset) pfn_WheelSetDeformOffset(wheel, 0.0f, 0.0f, 0.0f);
+                if (pfn_WheelSetDeformOffset) pfn_WheelSetDeformOffset(wheel, 0.0f);
                 if (pfn_WheelSetDeformAngle) pfn_WheelSetDeformAngle(wheel, 0.0f);
                 tele.wheels[i].deformAngle = 0.0f;
             }
@@ -568,15 +605,27 @@ bool NativeCarX::IsNoDamage() {
 void NativeCarX::SetNoTireWear(bool enable) {
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
     s_noTireWear = enable;
-    if (enable) {
-        void* car = s_knownPlayerCarPtr ? s_knownPlayerCarPtr : s_playerCarPtr;
-        if (car) ResetTireWear(car);
+    s_tyreConfig.infiniteWear = enable;
+    void* car = s_knownPlayerCarPtr ? s_knownPlayerCarPtr : s_playerCarPtr;
+    if (car && IsCarMemoryValid(car)) {
+        if (enable) {
+            ResetTireWear(car);
+        } else {
+            if (pfn_CarSetTyreWearMode) pfn_CarSetTyreWearMode(car, 1);
+            if (pfn_GetWheel) {
+                for (int i = 0; i < 4; ++i) {
+                    void* wheel = pfn_GetWheel(car, i);
+                    if (!wheel) continue;
+                    if (pfn_WheelSetWearFactor) pfn_WheelSetWearFactor(wheel, s_tyreConfig.wearMultiplier);
+                }
+            }
+        }
     }
 }
 
 bool NativeCarX::IsNoTireWear() {
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    return s_noTireWear;
+    return s_noTireWear || s_tyreConfig.infiniteWear;
 }
 
 void NativeCarX::ResetCarDamage(void* car) {
@@ -588,7 +637,7 @@ void NativeCarX::ResetCarDamage(void* car) {
         for (int i = 0; i < 4; ++i) {
             void* wheel = pfn_GetWheel(car, i);
             if (!wheel) continue;
-            if (pfn_WheelSetDeformOffset) pfn_WheelSetDeformOffset(wheel, 0.0f, 0.0f, 0.0f);
+            if (pfn_WheelSetDeformOffset) pfn_WheelSetDeformOffset(wheel, 0.0f);
             if (pfn_WheelSetDeformAngle) pfn_WheelSetDeformAngle(wheel, 0.0f);
         }
     }
@@ -599,16 +648,37 @@ void NativeCarX::ResetTireWear(void* car) {
     if (!car) car = s_knownPlayerCarPtr ? s_knownPlayerCarPtr : s_playerCarPtr;
     if (!car || !IsCarMemoryValid(car)) return;
 
-    if (pfn_CarSetTyreWearMode && s_noTireWear) {
-        pfn_CarSetTyreWearMode(car, 0);
+    bool inf = s_noTireWear || s_tyreConfig.infiniteWear;
+    if (pfn_CarSetTyreWearMode) {
+        pfn_CarSetTyreWearMode(car, inf ? 0 : 1);
     }
     if (pfn_GetWheel) {
         for (int i = 0; i < 4; ++i) {
             void* wheel = pfn_GetWheel(car, i);
             if (!wheel) continue;
-            if (pfn_WheelSetWearFactor) pfn_WheelSetWearFactor(wheel, 0.0f);
-            if (pfn_WheelTyreWearReset) pfn_WheelTyreWearReset(wheel);
-            if (pfn_WheelTyreTempReset) pfn_WheelTyreTempReset(wheel);
+            if (pfn_WheelSetWearFactor) pfn_WheelSetWearFactor(wheel, inf ? 0.0f : s_tyreConfig.wearMultiplier);
+            if (pfn_WheelTyreWearReset) pfn_WheelTyreWearReset(wheel, s_tyreConfig.desiredLife);
+
+            // Set optimal operating temperature (80°C by default, never freeze to 0.0°C!)
+            float targetTemp = s_tyreConfig.lockTemperature ? s_tyreConfig.targetTemperature : 80.0f;
+            int zones = pfn_WheelGetTyreWearZones ? pfn_WheelGetTyreWearZones(wheel) : 4;
+            if (zones < 1 || zones > 16) zones = 4;
+            for (int z = 0; z < zones; ++z) {
+                float* pTemp = reinterpret_cast<float*>(reinterpret_cast<char*>(wheel) + 0x11b8 + z * 4);
+                if (IsReadableMem(reinterpret_cast<uintptr_t>(pTemp), sizeof(float))) {
+                    *pTemp = targetTemp;
+                }
+            }
+
+            if (s_tyreConfig.overrideGrip) {
+                float grip = (i < 2) ? s_tyreConfig.frontGrip : s_tyreConfig.rearGrip;
+                if (pfn_WheelSetFrictionMultiplier) pfn_WheelSetFrictionMultiplier(wheel, grip);
+                if (pfn_WheelSetBallisticGripFactor) pfn_WheelSetBallisticGripFactor(wheel, s_tyreConfig.ballisticGrip);
+            }
+            if (s_tyreConfig.overridePressure) {
+                float kpa = (i < 2) ? s_tyreConfig.frontPressure : s_tyreConfig.rearPressure;
+                if (pfn_WheelSetTyrePressure) pfn_WheelSetTyrePressure(wheel, kpa * 1000.0f);
+            }
         }
     }
 }
@@ -620,3 +690,231 @@ float NativeCarX::GetWheelWear(void* car, int wheelIndex) {
     void* wheel = pfn_GetWheel(car, wheelIndex);
     return wheel ? pfn_WheelGetWearFactor(wheel) : 0.0f;
 }
+
+TyreConfig NativeCarX::GetTyreConfig() {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    return s_tyreConfig;
+}
+
+void NativeCarX::SetTyreConfig(const TyreConfig& cfg) {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    s_tyreConfig = cfg;
+    s_noTireWear = cfg.infiniteWear;
+
+    void* car = s_knownPlayerCarPtr ? s_knownPlayerCarPtr : s_playerCarPtr;
+    if (!car || !IsCarMemoryValid(car)) return;
+
+    if (pfn_CarSetTyreWearMode) {
+        pfn_CarSetTyreWearMode(car, cfg.infiniteWear ? 0 : 1);
+    }
+
+    if (pfn_GetWheel) {
+        for (int i = 0; i < 4; ++i) {
+            void* wheel = pfn_GetWheel(car, i);
+            if (!wheel) continue;
+
+            if (pfn_WheelSetWearFactor) {
+                pfn_WheelSetWearFactor(wheel, cfg.infiniteWear ? 0.0f : cfg.wearMultiplier);
+            }
+
+            if (cfg.infiniteWear) {
+                if (pfn_WheelTyreWearReset) {
+                    pfn_WheelTyreWearReset(wheel, cfg.desiredLife);
+                }
+            }
+
+            if (cfg.lockTemperature) {
+                int zones = pfn_WheelGetTyreWearZones ? pfn_WheelGetTyreWearZones(wheel) : 4;
+                if (zones < 1 || zones > 16) zones = 4;
+                for (int z = 0; z < zones; ++z) {
+                    float* pTemp = reinterpret_cast<float*>(reinterpret_cast<char*>(wheel) + 0x11b8 + z * 4);
+                    if (IsReadableMem(reinterpret_cast<uintptr_t>(pTemp), sizeof(float))) {
+                        *pTemp = cfg.targetTemperature;
+                    }
+                }
+            }
+
+            if (cfg.overrideGrip) {
+                float targetFriction = (i < 2) ? cfg.frontGrip : cfg.rearGrip;
+                if (pfn_WheelSetFrictionMultiplier) {
+                    pfn_WheelSetFrictionMultiplier(wheel, targetFriction);
+                }
+                if (pfn_WheelSetBallisticGripFactor) {
+                    pfn_WheelSetBallisticGripFactor(wheel, cfg.ballisticGrip);
+                }
+            }
+
+            if (cfg.overridePressure) {
+                float targetKpa = (i < 2) ? cfg.frontPressure : cfg.rearPressure;
+                if (pfn_WheelSetTyrePressure) {
+                    pfn_WheelSetTyrePressure(wheel, targetKpa * 1000.0f);
+                }
+            }
+        }
+    }
+}
+
+void NativeCarX::ResetTyreDefaults() {
+    TyreConfig def;
+    def.infiniteWear = false;
+    def.wearMultiplier = 1.0f;
+    def.desiredLife = 1.0f;
+    def.overrideGrip = false;
+    def.frontGrip = 1.15f;
+    def.rearGrip = 0.95f;
+    def.ballisticGrip = 0.10f;
+    def.lockTemperature = false;
+    def.targetTemperature = 80.0f;
+    def.overridePressure = false;
+    def.frontPressure = 145.0f;
+    def.rearPressure = 95.0f;
+
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    s_tyreConfig = def;
+    s_noTireWear = false;
+
+    void* car = s_knownPlayerCarPtr ? s_knownPlayerCarPtr : s_playerCarPtr;
+    if (car && IsCarMemoryValid(car)) {
+        if (pfn_CarSetTyreWearMode) pfn_CarSetTyreWearMode(car, 1);
+        if (pfn_GetWheel) {
+            for (int i = 0; i < 4; ++i) {
+                void* wheel = pfn_GetWheel(car, i);
+                if (!wheel) continue;
+                if (pfn_WheelSetWearFactor) pfn_WheelSetWearFactor(wheel, 1.0f);
+                if (pfn_WheelTyreWearReset) pfn_WheelTyreWearReset(wheel, 1.0f);
+                if (pfn_WheelSetFrictionMultiplier) pfn_WheelSetFrictionMultiplier(wheel, (i < 2) ? 1.15f : 0.95f);
+                if (pfn_WheelSetBallisticGripFactor) pfn_WheelSetBallisticGripFactor(wheel, 0.10f);
+                if (pfn_WheelSetTyrePressure) pfn_WheelSetTyrePressure(wheel, ((i < 2) ? 145.0f : 95.0f) * 1000.0f);
+                int zones = pfn_WheelGetTyreWearZones ? pfn_WheelGetTyreWearZones(wheel) : 4;
+                if (zones < 1 || zones > 16) zones = 4;
+                for (int z = 0; z < zones; ++z) {
+                    float* pTemp = reinterpret_cast<float*>(reinterpret_cast<char*>(wheel) + 0x11b8 + z * 4);
+                    if (IsReadableMem(reinterpret_cast<uintptr_t>(pTemp), sizeof(float))) {
+                        *pTemp = 80.0f;
+                    }
+                }
+            }
+        }
+    }
+}
+
+TyreLiveStats NativeCarX::GetTyreLiveStats() {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    TyreLiveStats st;
+    void* car = s_knownPlayerCarPtr ? s_knownPlayerCarPtr : s_playerCarPtr;
+    if (!car || !IsCarMemoryValid(car) || !pfn_GetWheel) {
+        return st;
+    }
+
+    st.valid = true;
+    for (int i = 0; i < 4; ++i) {
+        void* wheel = pfn_GetWheel(car, i);
+        if (!wheel) continue;
+
+        if (pfn_WheelGetZoneRest) {
+            st.wheels[i].life = pfn_WheelGetZoneRest(wheel, 0);
+        } else if (IsReadableMem(reinterpret_cast<uintptr_t>(wheel) + 0x1198, sizeof(float))) {
+            st.wheels[i].life = *reinterpret_cast<const float*>(reinterpret_cast<const char*>(wheel) + 0x1198);
+        }
+
+        if (pfn_WheelGetZoneTemp) {
+            st.wheels[i].temp = pfn_WheelGetZoneTemp(wheel, 0);
+        } else if (IsReadableMem(reinterpret_cast<uintptr_t>(wheel) + 0x11b8, sizeof(float))) {
+            st.wheels[i].temp = *reinterpret_cast<const float*>(reinterpret_cast<const char*>(wheel) + 0x11b8);
+        }
+
+        if (pfn_WheelGetTyrePressure) {
+            st.wheels[i].pressureKpa = pfn_WheelGetTyrePressure(wheel) * 0.001f;
+        } else if (IsReadableMem(reinterpret_cast<uintptr_t>(wheel) + 0x5c, sizeof(float))) {
+            st.wheels[i].pressureKpa = *reinterpret_cast<const float*>(reinterpret_cast<const char*>(wheel) + 0x5c) * 0.001f;
+        }
+
+        if (pfn_WheelGetFrictionMultiplier) {
+            st.wheels[i].friction = pfn_WheelGetFrictionMultiplier(wheel);
+        }
+
+        if (pfn_WheelGetBallisticGripFactor) {
+            st.wheels[i].ballisticGrip = pfn_WheelGetBallisticGripFactor(wheel);
+        }
+
+        if (pfn_WheelGetWearFactor) {
+            st.wheels[i].wearFactor = pfn_WheelGetWearFactor(wheel);
+        }
+    }
+    return st;
+}
+
+void NativeCarX::UpdatePerFrame() {
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    void* car = s_knownPlayerCarPtr ? s_knownPlayerCarPtr : s_playerCarPtr;
+    if (!car || !IsCarMemoryValid(car)) return;
+
+    if (s_noDamage) {
+        if (pfn_GetWheel) {
+            for (int i = 0; i < 4; ++i) {
+                void* wheel = pfn_GetWheel(car, i);
+                if (!wheel) continue;
+                if (pfn_WheelSetDeformOffset) pfn_WheelSetDeformOffset(wheel, 0.0f);
+                if (pfn_WheelSetDeformAngle) pfn_WheelSetDeformAngle(wheel, 0.0f);
+            }
+        }
+    }
+
+    bool infWear = s_noTireWear || s_tyreConfig.infiniteWear;
+    if (infWear && pfn_CarSetTyreWearMode) {
+        pfn_CarSetTyreWearMode(car, 0);
+    }
+
+    if (pfn_GetWheel) {
+        for (int i = 0; i < 4; ++i) {
+            void* wheel = pfn_GetWheel(car, i);
+            if (!wheel) continue;
+
+            if (infWear) {
+                if (pfn_WheelSetWearFactor) {
+                    pfn_WheelSetWearFactor(wheel, 0.0f);
+                }
+                int zones = pfn_WheelGetTyreWearZones ? pfn_WheelGetTyreWearZones(wheel) : 4;
+                if (zones < 1 || zones > 16) zones = 4;
+                for (int z = 0; z < zones; ++z) {
+                    float* pRest = reinterpret_cast<float*>(reinterpret_cast<char*>(wheel) + 0x1198 + z * 4);
+                    if (IsReadableMem(reinterpret_cast<uintptr_t>(pRest), sizeof(float))) {
+                        if (*pRest < s_tyreConfig.desiredLife) {
+                            *pRest = s_tyreConfig.desiredLife;
+                        }
+                    }
+                }
+            }
+
+            if (s_tyreConfig.lockTemperature) {
+                int zones = pfn_WheelGetTyreWearZones ? pfn_WheelGetTyreWearZones(wheel) : 4;
+                if (zones < 1 || zones > 16) zones = 4;
+                for (int z = 0; z < zones; ++z) {
+                    float* pTemp = reinterpret_cast<float*>(reinterpret_cast<char*>(wheel) + 0x11b8 + z * 4);
+                    if (IsReadableMem(reinterpret_cast<uintptr_t>(pTemp), sizeof(float))) {
+                        *pTemp = s_tyreConfig.targetTemperature;
+                    }
+                }
+            }
+
+            if (s_tyreConfig.overrideGrip) {
+                float targetFriction = (i < 2) ? s_tyreConfig.frontGrip : s_tyreConfig.rearGrip;
+                if (pfn_WheelSetFrictionMultiplier) {
+                    pfn_WheelSetFrictionMultiplier(wheel, targetFriction);
+                }
+                if (pfn_WheelSetBallisticGripFactor) {
+                    pfn_WheelSetBallisticGripFactor(wheel, s_tyreConfig.ballisticGrip);
+                }
+            }
+
+            if (s_tyreConfig.overridePressure) {
+                float targetKpa = (i < 2) ? s_tyreConfig.frontPressure : s_tyreConfig.rearPressure;
+                if (pfn_WheelSetTyrePressure) {
+                    pfn_WheelSetTyrePressure(wheel, targetKpa * 1000.0f);
+                }
+            }
+        }
+    }
+}
+
+

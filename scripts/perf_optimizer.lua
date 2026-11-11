@@ -115,44 +115,23 @@ local function render_optimizer_window()
         })
     end)
 
-    ui.card(T("Повреждения и износ шин", "Damage & Tire Wear"), nil, function()
+    ui.card(T("Защита кузова (Деформация)", "Body Protection (Deformation)"), nil, function()
         local no_dam = (cfg.disable_damage == true) or (carx and carx.get_no_damage and carx.get_no_damage() == true)
-        local no_wear = (cfg.disable_tire_wear == true) or (carx and carx.get_no_tire_wear and carx.get_no_tire_wear() == true)
 
-        local ch_dam, val_dam = ui.toggle(T("Без повреждений (кузов, подвеска)##opt_no_dam", "No Car Damage (Body & Suspension)##opt_no_dam"), no_dam)
+        local ch_dam, val_dam = ui.toggle(T("Без деформации (кузов и подвеска)##opt_no_dam", "No Deformation (Body & Suspension)##opt_no_dam"), no_dam)
         if ch_dam then
             cfg.disable_damage = val_dam
             if carx and carx.set_no_damage then carx.set_no_damage(val_dam) end
             dirty = true
         end
 
-        local ch_wear, val_wear = ui.toggle(T("Без износа шин (бесконечный зацеп)##opt_no_wear", "No Tire Wear (Infinite Grip)##opt_no_wear"), no_wear)
-        if ch_wear then
-            cfg.disable_tire_wear = val_wear
-            if carx and carx.set_no_tire_wear then carx.set_no_tire_wear(val_wear) end
-            dirty = true
-        end
-
-        ui.spacing(4)
-        local bw = (ui.avail_width() - 6) / 2.0
-        if ui.button(T("Починить авто##opt_rep_car", "Repair Car##opt_rep_car"), bw, 26, "ghost") then
-            if carx and carx.repair_car then carx.repair_car() end
-        end
-        ui.same_line(0, 6)
-        if ui.button(T("Сбросить шины##opt_rep_tyres", "Reset Tires##opt_rep_tyres"), bw, 26, "ghost") then
-            if carx and carx.reset_tire_wear then carx.reset_tire_wear() end
-        end
-
         local dam_blocks = st.damage_blocks or 0
         local joint_blocks = st.joint_break_blocks or 0
-        if no_dam or no_wear then
-            ui.spacing(2)
-            ui.stat_row({
-                { label = T("Кузов", "Body"), value = no_dam and string.format(T("Блок: %d", "Block: %d"), dam_blocks) or T("Уязвим", "Vulnerable"), tone = no_dam and "green" or "yellow" },
-                { label = T("Детали", "Parts"), value = no_dam and string.format(T("Блок: %d", "Block: %d"), joint_blocks) or T("Отрыв", "Detaching"), tone = no_dam and "green" or "yellow" },
-                { label = T("Шины", "Tires"), value = no_wear and T("100% зацеп", "100% Grip") or T("Износ вкл", "Wearing"), tone = no_wear and "accent" or "muted" },
-            })
-        end
+        ui.spacing(2)
+        ui.stat_row({
+            { label = T("Кузов", "Body"), value = no_dam and string.format(T("Блок: %d", "Block: %d"), dam_blocks) or T("Уязвим", "Vulnerable"), tone = no_dam and "green" or "yellow" },
+            { label = T("Детали", "Parts"), value = no_dam and string.format(T("Блок: %d", "Block: %d"), joint_blocks) or T("Отрыв", "Detaching"), tone = no_dam and "green" or "yellow" },
+        })
     end)
 
     ui.card(T("Бюджет симуляции", "Simulation Budget"), nil, function()

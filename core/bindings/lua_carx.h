@@ -56,4 +56,10 @@ public:
     static int GetNoTireWear(lua_State* L);
     static int RepairCar(lua_State* L);
     static int ResetTireWear(lua_State* L);
+
+    // Tire & Grip Tuning API
+    static int GetTyreConfig(lua_State* L);
+    static int SetTyreConfig(lua_State* L);
+    static int GetTyreLive(lua_State* L);
+    static int ResetTyreDefaults(lua_State* L);
 };

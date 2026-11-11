@@ -138,6 +138,9 @@ public:
     static bool RequestTeleportPlayerPose(const TeleportPose& pose, int velMode = 0);
     static bool GetPlayerCurrentPose(TeleportPose& outPose, std::string* outCarName = nullptr);
 
+    // Car Deformation & Repair
+    static void RequestRepairPlayerCar();
+
     static void SetGhostCollisionEnabled(bool enabled);
     static bool IsGhostCollisionEnabled();
 
@@ -291,8 +294,11 @@ private:
     static std::atomic<bool> s_ghostMirrorPlayerShader;
     static std::atomic<bool> s_pendingCollisionSync;
     static std::atomic<bool> s_pendingTeleport;
+    static std::atomic<bool> s_pendingRepairCar;
     static TeleportPose s_pendingTeleportPose;
     static int s_pendingTeleportVelMode;
     static UnityVector3 s_pendingPos;
     static UnityVector4 s_pendingRot;
+
+    static void ApplyRepairPlayerCarInternal();
 };
