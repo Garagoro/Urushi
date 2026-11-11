@@ -37,4 +37,15 @@ public:
     static int TeleportRigidBody(lua_State* L);
     static int GetTime(lua_State* L);
     static int GetDeltaTime(lua_State* L);
+
+    // Dynamic Physics & World API
+    static int GetVelocity(lua_State* L);
+    static int SetVelocity(lua_State* L);
+    static int GetAngularVelocity(lua_State* L);
+    static int SetAngularVelocity(lua_State* L);
+    static int GetDriftInfo(lua_State* L);
+    static int GetCamera(lua_State* L);
+    static int Raycast(lua_State* L);
+    static int ResetCar(lua_State* L);
+    static int GetProximity(lua_State* L);
 };

@@ -46,4 +46,13 @@ public:
     static int SetValue(lua_State* L);
     static int GetValue(lua_State* L);
     static int SetOptions(lua_State* L);
+
+    // 2D Canvas & Overlay Drawing
+    static int GetDisplaySize(lua_State* L);
+    static int DrawLine(lua_State* L);
+    static int DrawRect(lua_State* L);
+    static int DrawRectFilled(lua_State* L);
+    static int DrawCircle(lua_State* L);
+    static int DrawCircleFilled(lua_State* L);
+    static int DrawText2D(lua_State* L);
 };

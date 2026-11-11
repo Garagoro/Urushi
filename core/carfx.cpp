@@ -270,6 +270,8 @@ std::atomic<uint32_t> s_totalDrawsFrame{ 0 };
 std::atomic<uint32_t> s_totalDrawsLastFrame{ 0 };
 std::atomic<uint32_t> s_matchedDrawsFrame{ 0 };
 std::atomic<uint32_t> s_matchedDrawsLastFrame{ 0 };
+std::atomic<uint32_t> s_targetMatchedFrame[kTargetCount]{};
+std::atomic<uint32_t> s_targetMatchedLastFrame[kTargetCount]{};
 std::atomic<uint32_t> s_sceneCopiesTotal{ 0 };
 std::atomic<uint32_t> s_depthCopiesTotal{ 0 };
 std::atomic<uint32_t> s_lastSlotMask{ 0 };
@@ -1159,11 +1161,19 @@ void OnNewFrame(ID3D11DeviceContext* /*context*/) {
     const uint32_t prevFrame = s_frameCounter.fetch_add(1, std::memory_order_relaxed);
     const uint32_t totalPrev = s_totalDrawsFrame.exchange(0, std::memory_order_relaxed);
     const uint32_t matchedPrev = s_matchedDrawsFrame.exchange(0, std::memory_order_relaxed);
+    uint32_t targetPrev[kTargetCount]{};
+    for (int t = 0; t < kTargetCount; ++t) {
+        targetPrev[t] = s_targetMatchedFrame[t].exchange(0, std::memory_order_relaxed);
+    }
     s_totalDrawsLastFrame.store(totalPrev, std::memory_order_relaxed);
     const bool active = s_enabled.load(std::memory_order_relaxed) &&
                         (s_targets[kTargetBody].ps.load(std::memory_order_relaxed) != nullptr);
-    if (active || (prevFrame % 30) == 0) {
+    const bool ghostActive = (s_activeGhostShaderMask.load(std::memory_order_relaxed) != 0);
+    if (active || ghostActive || (prevFrame % 30) == 0) {
         s_matchedDrawsLastFrame.store(matchedPrev, std::memory_order_relaxed);
+        for (int t = 0; t < kTargetCount; ++t) {
+            s_targetMatchedLastFrame[t].store(targetPrev[t], std::memory_order_relaxed);
+        }
     }
 
     SweepGraveyard(false);
@@ -1721,9 +1731,68 @@ bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, Draw
 
     if (!MatchTargetAndCheckRT(context, &matchedTarget, &slotMask, &albedoSrv,
                                &rtRes, &rtW, &rtH, &rtFmt, &dsv)) {
+        const uintptr_t knownPs = s_lastGamePs.load(std::memory_order_relaxed);
+        static uint32_t s_lastGhostMissDiagFrame = ~0u;
+        if (anyGhostWant && knownPs && s_targetMatchedLastFrame[kTargetGhostBase].load(std::memory_order_relaxed) == 0 &&
+            (frameId - s_lastGhostMissDiagFrame) >= 180) {
+            ID3D11PixelShader* ps = nullptr;
+            context->PSGetShader(&ps, nullptr, nullptr);
+            if (ps) ps->Release();
+            if (reinterpret_cast<uintptr_t>(ps) == knownPs) {
+                ID3D11RenderTargetView* rtv = nullptr;
+                context->OMGetRenderTargets(1, &rtv, nullptr);
+                if (rtv) {
+                    ID3D11Resource* rtR = nullptr;
+                    rtv->GetResource(&rtR);
+                    rtv->Release();
+                    UINT w = 0, h = 0; DXGI_FORMAT f = DXGI_FORMAT_UNKNOWN;
+                    if (rtR) {
+                        ID3D11Texture2D* tx = nullptr;
+                        if (SUCCEEDED(rtR->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tx))) && tx) {
+                            D3D11_TEXTURE2D_DESC td{}; tx->GetDesc(&td);
+                            w = td.Width; h = td.Height; f = td.Format;
+                            tx->Release();
+                        }
+                        rtR->Release();
+                    }
+                    if (w >= 640 && !IsTwoChannelOrDepthFormat(f)) {
+                        s_lastGhostMissDiagFrame = frameId;
+                        ID3D11ShaderResourceView* srvs[kScanSlotCount] = {};
+                        context->PSGetShaderResources(kScanStartSlot, kScanSlotCount, srvs);
+                        ID3D11Resource* gPackRes = nullptr;
+                        ID3D11ShaderResourceView* gPackSrv = nullptr;
+                        {
+                            AcquireSRWLockShared(&s_gameTexLock);
+                            gPackRes = s_gameTex[kTargetGhostBase].packedRes;
+                            gPackSrv = s_gameTex[kTargetGhostBase].packedSrv;
+                            ReleaseSRWLockShared(&s_gameTexLock);
+                        }
+                        char info[384] = {};
+                        int off = _snprintf_s(info, sizeof(info), _TRUNCATE,
+                            "Ghost miss-diag PS=%p RT=%ux%u(fmt=%u) gPack=(srv=%p,res=%p) bound:",
+                            ps, w, h, (unsigned)f, gPackSrv, gPackRes);
+                        for (int i = 0; i < kScanSlotCount; ++i) {
+                            if (!srvs[i]) continue;
+                            ID3D11Resource* r = nullptr;
+                            srvs[i]->GetResource(&r);
+                            if (off > 0 && off < (int)sizeof(info) - 32) {
+                                off += _snprintf_s(info + off, sizeof(info) - off, _TRUNCATE,
+                                    " t%d=%p/%p", kScanStartSlot + i, srvs[i], r);
+                            }
+                            if (r) r->Release();
+                            srvs[i]->Release();
+                        }
+                        Logger::Info(info);
+                    }
+                }
+            }
+        }
         return false;
     }
 
+    if (ValidTarget(matchedTarget)) {
+        s_targetMatchedFrame[matchedTarget].fetch_add(1, std::memory_order_relaxed);
+    }
     // Record telemetry for player diagnostics (and first-time ghost verification)
     if (matchedTarget == kTargetBody) {
         s_matchedDrawsFrame.fetch_add(1, std::memory_order_relaxed);
@@ -1919,9 +1988,10 @@ DiagnosticStatus GetStatus(int target) {
         : s_enabled.load(std::memory_order_acquire);
     st.hookedDraw = s_hookedDraw.load(std::memory_order_acquire);
 
+    const int tIdx = ValidTarget(target) ? target : kTargetBody;
     st.totalDrawsFrame = s_totalDrawsLastFrame.load(std::memory_order_relaxed);
-    st.matchedDrawsFrame = s_matchedDrawsFrame.load(std::memory_order_relaxed);
-    st.matchedDrawsLastFrame = s_matchedDrawsLastFrame.load(std::memory_order_relaxed);
+    st.matchedDrawsFrame = s_targetMatchedFrame[tIdx].load(std::memory_order_relaxed);
+    st.matchedDrawsLastFrame = s_targetMatchedLastFrame[tIdx].load(std::memory_order_relaxed);
     st.sceneCopiesTotal = s_sceneCopiesTotal.load(std::memory_order_relaxed);
     st.depthCopiesTotal = s_depthCopiesTotal.load(std::memory_order_relaxed);
     st.lastSlotMask = s_lastSlotMask.load(std::memory_order_relaxed);

@@ -2457,8 +2457,16 @@ void UnityBridge::IsolateGhostSlotCarFXTextures(size_t slotIdx, GhostSlot& slot)
         CarFX::ClearTargetTextures(gTarget);
         return;
     }
+    int multiSlotCount = (bodySlots[0].slotIdx != 0) ? 1 : 0;
+    int assignOk = 1;
+    int assignFail = 0;
     for (size_t i = 1; i < bodySlots.size(); ++i) {
-        SafeCloneOrAssignRendererMatSEH(s_unityBase, bodySlots[i].rendererId, bodySlots[i].slotIdx, isoMatId, nullptr);
+        if (bodySlots[i].slotIdx != 0) multiSlotCount++;
+        if (SafeCloneOrAssignRendererMatSEH(s_unityBase, bodySlots[i].rendererId, bodySlots[i].slotIdx, isoMatId, nullptr)) {
+            assignOk++;
+        } else {
+            assignFail++;
+        }
     }
 
     void* natMat = nullptr;
@@ -2505,8 +2513,9 @@ void UnityBridge::IsolateGhostSlotCarFXTextures(size_t slotIdx, GhostSlot& slot)
 
     char dbg[256];
     _snprintf_s(dbg, sizeof(dbg), _TRUNCATE,
-                "Ghost[%zu] CarFX isolated: mat=%d bodySlots=%zu albSrv=%p(def=%d) packSrv=%p(iso=%d,copy=%d)",
-                slotIdx, isoMatId, bodySlots.size(), albSrvPtr, (int)albIsDef, packSrvPtr, (int)slot.carFxIsolated, (int)copyOk);
+                "Ghost[%zu] CarFX isolated: mat=%d q=%d bodySlots=%zu(ok=%d,fail=%d,multi=%d) albSrv=%p(def=%d) packSrv=%p(iso=%d,copy=%d)",
+                slotIdx, isoMatId, origQ, bodySlots.size(), assignOk, assignFail, multiSlotCount,
+                albSrvPtr, (int)albIsDef, packSrvPtr, (int)slot.carFxIsolated, (int)copyOk);
     Logger::Info(dbg);
 }
 
@@ -2855,22 +2864,8 @@ void UnityBridge::ApplyAllReplayTracksAtTimeInternal(float targetTime, float off
     }
 }
 
-struct UnityRay {
-    UnityVector3 origin;
-    UnityVector3 direction;
-};
-
-struct UnityRaycastHit {
-    UnityVector3 point;       // +0x00
-    UnityVector3 normal;      // +0x0C
-    uint32_t     faceId;      // +0x18
-    float        distance;    // +0x1C
-    float        uv[2];       // +0x20
-    int32_t      colliderId;  // +0x28
-};
-static_assert(sizeof(UnityRaycastHit) == 44, "UnityRaycastHit size mismatch");
-
-static void QuatToAxes(UnityVector4 q, UnityVector3& right, UnityVector3& up, UnityVector3& fwd) {
+void UnityBridge::QuatToAxes(const UnityVector4& qIn, UnityVector3& right, UnityVector3& up, UnityVector3& fwd) {
+    UnityVector4 q = qIn;
     float lenSq = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
     if (lenSq > 1e-8f) {
         float inv = 1.0f / sqrtf(lenSq);
@@ -2886,11 +2881,12 @@ static void QuatToAxes(UnityVector4 q, UnityVector3& right, UnityVector3& up, Un
     fwd   = VecNormalize({ 2.0f * (xz + wy), 2.0f * (yz - wx), 1.0f - 2.0f * (xx + yy) });
 }
 
-static bool SafeGetMainCameraPosSEH(void* fnGetCam, void* fnTfGetPos, UnityVector3* outPos) {
-    if (!fnGetCam || !fnTfGetPos || !outPos) return false;
+static bool SafeGetMainCameraPoseSEH(void* fnGetCam, void* fnTfGetPos, void* fnTfGetRot, UnityVector3* outPos, UnityVector4* outRot) {
+    if (!fnGetCam || (!outPos && !outRot)) return false;
     __try {
         using t_GetCam = void* (*)();
         using t_GetPos = void (*)(void*, UnityVector3*);
+        using t_GetRot = void (*)(void*, UnityVector4*);
         void* camNative = reinterpret_cast<t_GetCam>(fnGetCam)();
         if (!IsReadableMem(reinterpret_cast<uintptr_t>(camNative), 0x28)) return false;
         uintptr_t camGo = *reinterpret_cast<const uintptr_t*>(reinterpret_cast<uintptr_t>(camNative) + 0x20);
@@ -2899,11 +2895,16 @@ static bool SafeGetMainCameraPosSEH(void* fnGetCam, void* fnTfGetPos, UnityVecto
         if (!IsReadableMem(compArr, 0x10)) return false;
         void* camTf = *reinterpret_cast<void* const*>(compArr + 0x08);
         if (reinterpret_cast<uintptr_t>(camTf) < 0x10000) return false;
-        reinterpret_cast<t_GetPos>(fnTfGetPos)(camTf, outPos);
+        if (outPos && fnTfGetPos) reinterpret_cast<t_GetPos>(fnTfGetPos)(camTf, outPos);
+        if (outRot && fnTfGetRot) reinterpret_cast<t_GetRot>(fnTfGetRot)(camTf, outRot);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
+}
+
+static bool SafeGetMainCameraPosSEH(void* fnGetCam, void* fnTfGetPos, UnityVector3* outPos) {
+    return SafeGetMainCameraPoseSEH(fnGetCam, fnTfGetPos, nullptr, outPos, nullptr);
 }
 
 static bool SafePhysicsRaycastSEH(void* fnRaycast, const UnityRay* ray, float maxDist, UnityRaycastHit* outHit, int layerMask) {
@@ -4239,3 +4240,19 @@ void UnityBridge::SetGhostPositionRotation(const UnityVector3& pos, const UnityV
     s_pendingRot = rot;
     s_pendingTransform.store(true);
 }
+
+bool UnityBridge::GetMainCameraPose(UnityVector3& outPos, UnityVector4& outRot) {
+    return SafeGetMainCameraPoseSEH(
+        reinterpret_cast<void*>(pfn_GetMainCameraNative),
+        reinterpret_cast<void*>(pfn_Transform_get_position),
+        reinterpret_cast<void*>(pfn_Transform_get_rotation),
+        &outPos, &outRot
+    );
+}
+
+bool UnityBridge::RaycastWorld(const UnityVector3& origin, const UnityVector3& dir, float maxDist, UnityRaycastHit& outHit, int layerMask) {
+    if (!pfn_InternalRaycast) return false;
+    UnityRay ray{ origin, dir };
+    return SafePhysicsRaycastSEH(reinterpret_cast<void*>(pfn_InternalRaycast), &ray, maxDist, &outHit, layerMask);
+}
+

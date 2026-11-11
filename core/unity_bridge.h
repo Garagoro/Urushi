@@ -67,6 +67,21 @@ struct TeleportPose {
     bool hasRb = false;
 };
 
+struct UnityRay {
+    UnityVector3 origin;
+    UnityVector3 direction;
+};
+
+struct UnityRaycastHit {
+    UnityVector3 point;       // +0x00
+    UnityVector3 normal;      // +0x0C
+    uint32_t     faceId;      // +0x18
+    float        distance;    // +0x1C
+    float        uv[2];       // +0x20
+    int32_t      colliderId;  // +0x28
+};
+static_assert(sizeof(UnityRaycastHit) == 44, "UnityRaycastHit size mismatch");
+
 class UnityBridge {
 public:
     static bool Init();
@@ -129,6 +144,13 @@ public:
     // When a replay has no recorded CarFX shader, optionally mirror player's active shader onto the ghost
     static void SetGhostMirrorPlayerShader(bool enabled);
     static bool IsGhostMirrorPlayerShader();
+
+    // Camera & World Spatial API
+    static bool GetMainCameraPose(UnityVector3& outPos, UnityVector4& outRot);
+    static void QuatToAxes(const UnityVector4& q, UnityVector3& right, UnityVector3& up, UnityVector3& fwd);
+
+    // Physics Raycast
+    static bool RaycastWorld(const UnityVector3& origin, const UnityVector3& dir, float maxDist, UnityRaycastHit& outHit, int layerMask = -1);
 
 private:
     struct ChildLayerInfo {

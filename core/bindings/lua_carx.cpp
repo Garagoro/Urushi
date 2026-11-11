@@ -2,7 +2,10 @@
 #include "../native_carx.h"
 #include "../unity_bridge.h"
 #include "../ecs_collision.h"
+#include "../carfx.h"
 #include <chrono>
+#include <cmath>
+#include <algorithm>
 
 static auto g_startTime = std::chrono::steady_clock::now();
 static auto g_lastFrameTime = std::chrono::steady_clock::now();
@@ -65,6 +68,16 @@ static void PushCarTelemetry(lua_State* L, const CarTelemetry& car) {
     // Matrix
     PushMatrixField(L, "matrix", car.transformMatrix);
 
+    // Live Velocity vector
+    float curVel[3] = { 0.0f, 0.0f, 0.0f };
+    if (car.carPtr && NativeCarX::GetCarVelocity(car.carPtr, curVel)) {
+        lua_newtable(L);
+        lua_pushnumber(L, curVel[0]); lua_setfield(L, -2, "x");
+        lua_pushnumber(L, curVel[1]); lua_setfield(L, -2, "y");
+        lua_pushnumber(L, curVel[2]); lua_setfield(L, -2, "z");
+        lua_setfield(L, -2, "velocity");
+    }
+
     // Wheels
     lua_newtable(L);
     for (int w = 0; w < 4; ++w) {
@@ -72,6 +85,10 @@ static void PushCarTelemetry(lua_State* L, const CarTelemetry& car) {
 
         PushMatrixField(L, "matrix", car.wheels[w].matrix);
         PushMatrixField(L, "caliper_matrix", car.wheels[w].caliperMatrix);
+
+        lua_pushnumber(L, car.wheels[w].matrix[12]); lua_setfield(L, -2, "x");
+        lua_pushnumber(L, car.wheels[w].matrix[13]); lua_setfield(L, -2, "y");
+        lua_pushnumber(L, car.wheels[w].matrix[14]); lua_setfield(L, -2, "z");
 
         lua_pushnumber(L, car.wheels[w].smoke);
         lua_setfield(L, -2, "smoke");
@@ -495,12 +512,39 @@ static bool ReadLuaFloatField(lua_State* L, int tableIdx, const char* name, floa
 }
 
 int LuaCarX::TeleportRigidBody(lua_State* L) {
+    int top = lua_gettop(L);
+    TeleportPose pose{};
+
+    // 1. Positional numbers signature: carx.teleport(x, y, z, [yaw_deg], [vel_mode])
+    if (top >= 3 && lua_isnumber(L, 1) && lua_isnumber(L, 2) && lua_isnumber(L, 3)) {
+        pose.pos[0] = static_cast<float>(lua_tonumber(L, 1));
+        pose.pos[1] = static_cast<float>(lua_tonumber(L, 2));
+        pose.pos[2] = static_cast<float>(lua_tonumber(L, 3));
+        pose.rb[20] = pose.pos[0];
+        pose.rb[21] = pose.pos[1];
+        pose.rb[22] = pose.pos[2];
+
+        if (top >= 4 && lua_isnumber(L, 4)) {
+            float yawDeg = static_cast<float>(lua_tonumber(L, 4));
+            float halfRad = (yawDeg * 0.0174532925f) * 0.5f;
+            pose.rot[0] = 0.0f;
+            pose.rot[1] = sinf(halfRad);
+            pose.rot[2] = 0.0f;
+            pose.rot[3] = cosf(halfRad);
+            pose.hasQuat = true;
+        }
+
+        int velMode = 0;
+        if (top >= 5 && lua_isnumber(L, 5)) velMode = static_cast<int>(lua_tointeger(L, 5));
+        bool ok = UnityBridge::RequestTeleportPlayerPose(pose, velMode);
+        lua_pushboolean(L, ok);
+        return 1;
+    }
+
     if (!lua_istable(L, 1)) {
         lua_pushboolean(L, false);
         return 1;
     }
-
-    TeleportPose pose{};
 
     // Check for nested `.rb` array or direct 29-element array in arg 1
     int rbTableIdx = 0;
@@ -554,32 +598,500 @@ int LuaCarX::TeleportRigidBody(lua_State* L) {
         pose.rot[2] = qz;
         pose.rot[3] = qw;
         pose.hasQuat = true;
+    } else {
+        float yawDeg = 0.0f;
+        if (ReadLuaFloatField(L, 1, "yaw", yawDeg) || ReadLuaFloatField(L, 1, "yaw_deg", yawDeg)) {
+            float halfRad = (yawDeg * 0.0174532925f) * 0.5f;
+            pose.rot[0] = 0.0f;
+            pose.rot[1] = sinf(halfRad);
+            pose.rot[2] = 0.0f;
+            pose.rot[3] = cosf(halfRad);
+            pose.hasQuat = true;
+        }
     }
 
-    if (ReadLuaVecField(L, 1, "vel", pose.linVel)) {
+    int velMode = 0;
+    if (ReadLuaVecField(L, 1, "vel", pose.linVel) || ReadLuaVecField(L, 1, "velocity", pose.linVel)) {
         pose.rb[23] = pose.linVel[0];
         pose.rb[24] = pose.linVel[1];
         pose.rb[25] = pose.linVel[2];
+        velMode = 1;
+    } else {
+        float vx = 0.0f, vy = 0.0f, vz = 0.0f;
+        bool hasVx = ReadLuaFloatField(L, 1, "vx", vx);
+        bool hasVy = ReadLuaFloatField(L, 1, "vy", vy);
+        bool hasVz = ReadLuaFloatField(L, 1, "vz", vz);
+        if (hasVx || hasVy || hasVz) {
+            pose.linVel[0] = vx; pose.linVel[1] = vy; pose.linVel[2] = vz;
+            pose.rb[23] = vx; pose.rb[24] = vy; pose.rb[25] = vz;
+            velMode = 1;
+        }
     }
-    if (ReadLuaVecField(L, 1, "ang_vel", pose.angVel)) {
+
+    if (ReadLuaVecField(L, 1, "ang_vel", pose.angVel) || ReadLuaVecField(L, 1, "angular_velocity", pose.angVel)) {
         pose.rb[26] = pose.angVel[0];
         pose.rb[27] = pose.angVel[1];
         pose.rb[28] = pose.angVel[2];
     }
 
-    int velMode = 0;
     if (lua_type(L, 2) == LUA_TNUMBER) {
         velMode = static_cast<int>(lua_tointeger(L, 2));
     } else if (lua_type(L, 2) == LUA_TSTRING) {
         const char* s = lua_tostring(L, 2);
         if (s) {
-            if (_stricmp(s, "saved") == 0) velMode = 1;
+            if (_stricmp(s, "saved") == 0 || _stricmp(s, "custom") == 0) velMode = 1;
             else if (_stricmp(s, "keep") == 0) velMode = 2;
         }
     }
 
     bool ok = UnityBridge::RequestTeleportPlayerPose(pose, velMode);
     lua_pushboolean(L, ok);
+    return 1;
+}
+
+int LuaCarX::GetVelocity(lua_State* L) {
+    void* car = nullptr;
+    if (lua_islightuserdata(L, 1)) {
+        car = lua_touserdata(L, 1);
+    } else {
+        car = NativeCarX::GetPlayerCarPtr();
+    }
+    float vel[3] = { 0.0f, 0.0f, 0.0f };
+    if (car && NativeCarX::GetCarVelocity(car, vel)) {
+        lua_newtable(L);
+        lua_pushnumber(L, vel[0]); lua_setfield(L, -2, "x");
+        lua_pushnumber(L, vel[1]); lua_setfield(L, -2, "y");
+        lua_pushnumber(L, vel[2]); lua_setfield(L, -2, "z");
+        float len = sqrtf(vel[0]*vel[0] + vel[1]*vel[1] + vel[2]*vel[2]);
+        lua_pushnumber(L, len); lua_setfield(L, -2, "length");
+        lua_pushnumber(L, len * 3.6f); lua_setfield(L, -2, "speed_kmh");
+        return 1;
+    }
+    lua_pushnil(L);
+    return 1;
+}
+
+int LuaCarX::SetVelocity(lua_State* L) {
+    int top = lua_gettop(L);
+    void* car = nullptr;
+    int argStart = 1;
+    if (lua_islightuserdata(L, 1)) {
+        car = lua_touserdata(L, 1);
+        argStart = 2;
+    } else {
+        car = NativeCarX::GetPlayerCarPtr();
+    }
+    if (!car) {
+        lua_pushboolean(L, false);
+        return 1;
+    }
+    float vx = 0.0f, vy = 0.0f, vz = 0.0f;
+    if (lua_istable(L, argStart)) {
+        lua_getfield(L, argStart, "x");
+        if (lua_isnumber(L, -1)) vx = static_cast<float>(lua_tonumber(L, -1));
+        else {
+            lua_pop(L, 1);
+            lua_rawgeti(L, argStart, 1);
+            if (lua_isnumber(L, -1)) vx = static_cast<float>(lua_tonumber(L, -1));
+        }
+        lua_pop(L, 1);
+
+        lua_getfield(L, argStart, "y");
+        if (lua_isnumber(L, -1)) vy = static_cast<float>(lua_tonumber(L, -1));
+        else {
+            lua_pop(L, 1);
+            lua_rawgeti(L, argStart, 2);
+            if (lua_isnumber(L, -1)) vy = static_cast<float>(lua_tonumber(L, -1));
+        }
+        lua_pop(L, 1);
+
+        lua_getfield(L, argStart, "z");
+        if (lua_isnumber(L, -1)) vz = static_cast<float>(lua_tonumber(L, -1));
+        else {
+            lua_pop(L, 1);
+            lua_rawgeti(L, argStart, 3);
+            if (lua_isnumber(L, -1)) vz = static_cast<float>(lua_tonumber(L, -1));
+        }
+        lua_pop(L, 1);
+    } else if (top >= argStart + 2) {
+        vx = static_cast<float>(lua_tonumber(L, argStart));
+        vy = static_cast<float>(lua_tonumber(L, argStart + 1));
+        vz = static_cast<float>(lua_tonumber(L, argStart + 2));
+    } else {
+        lua_pushboolean(L, false);
+        return 1;
+    }
+
+    float rb[29] = { 0 };
+    if (!NativeCarX::GetCarRigidBody(car, rb)) {
+        lua_pushboolean(L, false);
+        return 1;
+    }
+    rb[23] = vx;
+    rb[24] = vy;
+    rb[25] = vz;
+    bool ok = NativeCarX::SetCarRigidBody(car, rb);
+    if (car == NativeCarX::GetPlayerCarPtr()) {
+        UnityBridge::RequestTeleportPlayerRigidBody(rb, 1);
+    }
+    lua_pushboolean(L, ok);
+    return 1;
+}
+
+int LuaCarX::GetAngularVelocity(lua_State* L) {
+    void* car = nullptr;
+    if (lua_islightuserdata(L, 1)) {
+        car = lua_touserdata(L, 1);
+    } else {
+        car = NativeCarX::GetPlayerCarPtr();
+    }
+    float angVel[3] = { 0.0f, 0.0f, 0.0f };
+    if (car && NativeCarX::GetCarAngularVelocity(car, angVel)) {
+        lua_newtable(L);
+        lua_pushnumber(L, angVel[0]); lua_setfield(L, -2, "x");
+        lua_pushnumber(L, angVel[1]); lua_setfield(L, -2, "y");
+        lua_pushnumber(L, angVel[2]); lua_setfield(L, -2, "z");
+        float len = sqrtf(angVel[0]*angVel[0] + angVel[1]*angVel[1] + angVel[2]*angVel[2]);
+        lua_pushnumber(L, len); lua_setfield(L, -2, "length");
+        lua_pushnumber(L, angVel[1] * 57.2957795f); lua_setfield(L, -2, "yaw_rate_deg");
+        return 1;
+    }
+    lua_pushnil(L);
+    return 1;
+}
+
+int LuaCarX::SetAngularVelocity(lua_State* L) {
+    int top = lua_gettop(L);
+    void* car = nullptr;
+    int argStart = 1;
+    if (lua_islightuserdata(L, 1)) {
+        car = lua_touserdata(L, 1);
+        argStart = 2;
+    } else {
+        car = NativeCarX::GetPlayerCarPtr();
+    }
+    if (!car) {
+        lua_pushboolean(L, false);
+        return 1;
+    }
+    float wx = 0.0f, wy = 0.0f, wz = 0.0f;
+    if (lua_istable(L, argStart)) {
+        lua_getfield(L, argStart, "x");
+        if (lua_isnumber(L, -1)) wx = static_cast<float>(lua_tonumber(L, -1));
+        else {
+            lua_pop(L, 1);
+            lua_rawgeti(L, argStart, 1);
+            if (lua_isnumber(L, -1)) wx = static_cast<float>(lua_tonumber(L, -1));
+        }
+        lua_pop(L, 1);
+
+        lua_getfield(L, argStart, "y");
+        if (lua_isnumber(L, -1)) wy = static_cast<float>(lua_tonumber(L, -1));
+        else {
+            lua_pop(L, 1);
+            lua_rawgeti(L, argStart, 2);
+            if (lua_isnumber(L, -1)) wy = static_cast<float>(lua_tonumber(L, -1));
+        }
+        lua_pop(L, 1);
+
+        lua_getfield(L, argStart, "z");
+        if (lua_isnumber(L, -1)) wz = static_cast<float>(lua_tonumber(L, -1));
+        else {
+            lua_pop(L, 1);
+            lua_rawgeti(L, argStart, 3);
+            if (lua_isnumber(L, -1)) wz = static_cast<float>(lua_tonumber(L, -1));
+        }
+        lua_pop(L, 1);
+    } else if (top >= argStart + 2) {
+        wx = static_cast<float>(lua_tonumber(L, argStart));
+        wy = static_cast<float>(lua_tonumber(L, argStart + 1));
+        wz = static_cast<float>(lua_tonumber(L, argStart + 2));
+    } else {
+        lua_pushboolean(L, false);
+        return 1;
+    }
+
+    float rb[29] = { 0 };
+    if (!NativeCarX::GetCarRigidBody(car, rb)) {
+        lua_pushboolean(L, false);
+        return 1;
+    }
+    rb[26] = wx;
+    rb[27] = wy;
+    rb[28] = wz;
+    bool ok = NativeCarX::SetCarRigidBody(car, rb);
+    if (car == NativeCarX::GetPlayerCarPtr()) {
+        UnityBridge::RequestTeleportPlayerRigidBody(rb, 1);
+    }
+    lua_pushboolean(L, ok);
+    return 1;
+}
+
+int LuaCarX::ResetCar(lua_State* L) {
+    void* car = nullptr;
+    if (lua_islightuserdata(L, 1)) {
+        car = lua_touserdata(L, 1);
+    } else {
+        car = NativeCarX::GetPlayerCarPtr();
+    }
+    if (!car) {
+        lua_pushboolean(L, false);
+        return 1;
+    }
+    float rb[29] = { 0 };
+    if (!NativeCarX::GetCarRigidBody(car, rb)) {
+        lua_pushboolean(L, false);
+        return 1;
+    }
+    // Zero out velocities
+    rb[23] = 0.0f; rb[24] = 0.0f; rb[25] = 0.0f;
+    rb[26] = 0.0f; rb[27] = 0.0f; rb[28] = 0.0f;
+
+    // Upright orientation: keep yaw heading, eliminate roll & pitch
+    float fx = rb[8], fz = rb[10];
+    float fLen = sqrtf(fx * fx + fz * fz);
+    if (fLen > 1e-4f) {
+        fx /= fLen; fz /= fLen;
+        float rx = fz, rz = -fx;
+        rb[0] = rx; rb[1] = 0.0f; rb[2] = rz;
+        rb[4] = 0.0f; rb[5] = 1.0f; rb[6] = 0.0f;
+        rb[8] = fx; rb[9] = 0.0f; rb[10] = fz;
+    }
+    // Lift slightly (0.35m) so wheels clear ground collision
+    rb[21] += 0.35f;
+
+    bool ok = NativeCarX::SetCarRigidBody(car, rb);
+    if (car == NativeCarX::GetPlayerCarPtr()) {
+        UnityBridge::RequestTeleportPlayerRigidBody(rb, 0);
+    }
+    lua_pushboolean(L, ok);
+    return 1;
+}
+
+int LuaCarX::GetDriftInfo(lua_State* L) {
+    void* car = nullptr;
+    if (lua_islightuserdata(L, 1)) {
+        car = lua_touserdata(L, 1);
+    } else {
+        car = NativeCarX::GetPlayerCarPtr();
+    }
+    if (!car) {
+        lua_pushnil(L);
+        return 1;
+    }
+    CarTelemetry tele{};
+    if (car == NativeCarX::GetPlayerCarPtr()) {
+        tele = NativeCarX::GetPlayerCarTelemetry();
+    } else {
+        auto all = NativeCarX::GetAllCarsTelemetry();
+        for (const auto& c : all) {
+            if (c.carPtr == car) { tele = c; break; }
+        }
+    }
+    const float* m = tele.transformMatrix.data();
+    float rLen = sqrtf(m[0]*m[0] + m[1]*m[1] + m[2]*m[2]);
+    float fLen = sqrtf(m[8]*m[8] + m[9]*m[9] + m[10]*m[10]);
+    float rx = (rLen > 1e-4f) ? (m[0] / rLen) : 1.0f;
+    float ry = (rLen > 1e-4f) ? (m[1] / rLen) : 0.0f;
+    float rz = (rLen > 1e-4f) ? (m[2] / rLen) : 0.0f;
+
+    float fx = (fLen > 1e-4f) ? (m[8] / fLen) : 0.0f;
+    float fy = (fLen > 1e-4f) ? (m[9] / fLen) : 0.0f;
+    float fz = (fLen > 1e-4f) ? (m[10] / fLen) : 1.0f;
+
+    float vel[3] = { 0 };
+    NativeCarX::GetCarVelocity(car, vel);
+
+    float angVel[3] = { 0 };
+    NativeCarX::GetCarAngularVelocity(car, angVel);
+
+    float vFwd = vel[0] * fx + vel[1] * fy + vel[2] * fz;
+    float vSide = vel[0] * rx + vel[1] * ry + vel[2] * rz;
+    float vPlanar = sqrtf(vFwd * vFwd + vSide * vSide);
+    float speedKmh = vPlanar * 3.6f;
+
+    float driftAngleDeg = (vPlanar > 0.4f) ? (atan2f(vSide, vFwd) * 57.2957795f) : 0.0f;
+    float absAngleDeg = fabsf(driftAngleDeg);
+    bool isDrifting = (absAngleDeg >= 8.0f && speedKmh >= 12.0f);
+
+    lua_newtable(L);
+    lua_pushnumber(L, driftAngleDeg); lua_setfield(L, -2, "angle");
+    lua_pushnumber(L, absAngleDeg); lua_setfield(L, -2, "abs_angle");
+    lua_pushnumber(L, speedKmh); lua_setfield(L, -2, "speed_kmh");
+    lua_pushnumber(L, vFwd); lua_setfield(L, -2, "forward_speed");
+    lua_pushnumber(L, vSide); lua_setfield(L, -2, "lateral_speed");
+    lua_pushboolean(L, isDrifting); lua_setfield(L, -2, "is_drifting");
+    lua_pushnumber(L, angVel[1] * 57.2957795f); lua_setfield(L, -2, "yaw_rate_deg");
+
+    lua_newtable(L);
+    lua_pushnumber(L, vel[0]); lua_setfield(L, -2, "x");
+    lua_pushnumber(L, vel[1]); lua_setfield(L, -2, "y");
+    lua_pushnumber(L, vel[2]); lua_setfield(L, -2, "z");
+    lua_setfield(L, -2, "velocity");
+
+    lua_newtable(L);
+    lua_pushnumber(L, angVel[0]); lua_setfield(L, -2, "x");
+    lua_pushnumber(L, angVel[1]); lua_setfield(L, -2, "y");
+    lua_pushnumber(L, angVel[2]); lua_setfield(L, -2, "z");
+    lua_setfield(L, -2, "angular_velocity");
+
+    lua_newtable(L);
+    lua_pushnumber(L, fx); lua_setfield(L, -2, "x");
+    lua_pushnumber(L, fy); lua_setfield(L, -2, "y");
+    lua_pushnumber(L, fz); lua_setfield(L, -2, "z");
+    lua_setfield(L, -2, "heading");
+
+    lua_newtable(L);
+    lua_pushnumber(L, rx); lua_setfield(L, -2, "x");
+    lua_pushnumber(L, ry); lua_setfield(L, -2, "y");
+    lua_pushnumber(L, rz); lua_setfield(L, -2, "z");
+    lua_setfield(L, -2, "right");
+
+    return 1;
+}
+
+int LuaCarX::GetCamera(lua_State* L) {
+    UnityVector3 camPos{};
+    UnityVector4 camRot{ 0.0f, 0.0f, 0.0f, 1.0f };
+    if (!UnityBridge::GetMainCameraPose(camPos, camRot)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    UnityVector3 right{ 1, 0, 0 }, up{ 0, 1, 0 }, fwd{ 0, 0, 1 };
+    UnityBridge::QuatToAxes(camRot, right, up, fwd);
+
+    lua_newtable(L);
+    lua_pushnumber(L, camPos.x); lua_setfield(L, -2, "x");
+    lua_pushnumber(L, camPos.y); lua_setfield(L, -2, "y");
+    lua_pushnumber(L, camPos.z); lua_setfield(L, -2, "z");
+
+    lua_pushnumber(L, camRot.x); lua_setfield(L, -2, "qx");
+    lua_pushnumber(L, camRot.y); lua_setfield(L, -2, "qy");
+    lua_pushnumber(L, camRot.z); lua_setfield(L, -2, "qz");
+    lua_pushnumber(L, camRot.w); lua_setfield(L, -2, "qw");
+
+    lua_newtable(L);
+    lua_pushnumber(L, fwd.x); lua_setfield(L, -2, "x");
+    lua_pushnumber(L, fwd.y); lua_setfield(L, -2, "y");
+    lua_pushnumber(L, fwd.z); lua_setfield(L, -2, "z");
+    lua_setfield(L, -2, "fwd");
+
+    lua_newtable(L);
+    lua_pushnumber(L, right.x); lua_setfield(L, -2, "x");
+    lua_pushnumber(L, right.y); lua_setfield(L, -2, "y");
+    lua_pushnumber(L, right.z); lua_setfield(L, -2, "z");
+    lua_setfield(L, -2, "right");
+
+    lua_newtable(L);
+    lua_pushnumber(L, up.x); lua_setfield(L, -2, "x");
+    lua_pushnumber(L, up.y); lua_setfield(L, -2, "y");
+    lua_pushnumber(L, up.z); lua_setfield(L, -2, "z");
+    lua_setfield(L, -2, "up");
+
+    return 1;
+}
+
+int LuaCarX::Raycast(lua_State* L) {
+    UnityVector3 orig{ 0.0f, 0.0f, 0.0f };
+    UnityVector3 dir{ 0.0f, -1.0f, 0.0f };
+    float maxDist = 100.0f;
+    int layerMask = -1;
+
+    int top = lua_gettop(L);
+    if (lua_istable(L, 1) && lua_istable(L, 2)) {
+        lua_getfield(L, 1, "x"); if (lua_isnumber(L, -1)) orig.x = (float)lua_tonumber(L, -1); lua_pop(L, 1);
+        lua_getfield(L, 1, "y"); if (lua_isnumber(L, -1)) orig.y = (float)lua_tonumber(L, -1); lua_pop(L, 1);
+        lua_getfield(L, 1, "z"); if (lua_isnumber(L, -1)) orig.z = (float)lua_tonumber(L, -1); lua_pop(L, 1);
+
+        lua_getfield(L, 2, "x"); if (lua_isnumber(L, -1)) dir.x = (float)lua_tonumber(L, -1); lua_pop(L, 1);
+        lua_getfield(L, 2, "y"); if (lua_isnumber(L, -1)) dir.y = (float)lua_tonumber(L, -1); lua_pop(L, 1);
+        lua_getfield(L, 2, "z"); if (lua_isnumber(L, -1)) dir.z = (float)lua_tonumber(L, -1); lua_pop(L, 1);
+
+        if (top >= 3 && lua_isnumber(L, 3)) maxDist = (float)lua_tonumber(L, 3);
+        if (top >= 4 && lua_isnumber(L, 4)) layerMask = (int)lua_tointeger(L, 4);
+    } else if (top >= 6) {
+        orig.x = (float)luaL_checknumber(L, 1);
+        orig.y = (float)luaL_checknumber(L, 2);
+        orig.z = (float)luaL_checknumber(L, 3);
+        dir.x  = (float)luaL_checknumber(L, 4);
+        dir.y  = (float)luaL_checknumber(L, 5);
+        dir.z  = (float)luaL_checknumber(L, 6);
+        if (top >= 7 && lua_isnumber(L, 7)) maxDist = (float)lua_tonumber(L, 7);
+        if (top >= 8 && lua_isnumber(L, 8)) layerMask = (int)lua_tointeger(L, 8);
+    } else {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    UnityRaycastHit hit{};
+    bool hasHit = UnityBridge::RaycastWorld(orig, dir, maxDist, hit, layerMask);
+
+    lua_newtable(L);
+    lua_pushboolean(L, hasHit);
+    lua_setfield(L, -2, "hit");
+
+    if (hasHit) {
+        lua_pushnumber(L, hit.point.x); lua_setfield(L, -2, "x");
+        lua_pushnumber(L, hit.point.y); lua_setfield(L, -2, "y");
+        lua_pushnumber(L, hit.point.z); lua_setfield(L, -2, "z");
+
+        lua_pushnumber(L, hit.normal.x); lua_setfield(L, -2, "nx");
+        lua_pushnumber(L, hit.normal.y); lua_setfield(L, -2, "ny");
+        lua_pushnumber(L, hit.normal.z); lua_setfield(L, -2, "nz");
+
+        lua_pushnumber(L, hit.distance); lua_setfield(L, -2, "distance");
+        lua_pushinteger(L, hit.colliderId); lua_setfield(L, -2, "collider_id");
+    }
+    return 1;
+}
+
+int LuaCarX::GetProximity(lua_State* L) {
+    int target = static_cast<int>(luaL_optinteger(L, 1, CarFX::kTargetBody));
+    CarFX::SpatialProximityInput sp = CarFX::GetSpatialProximity(target);
+
+    auto pushVec4 = [&](const char* k, const float v[4], const char* wKey) {
+        lua_newtable(L);
+        lua_pushnumber(L, v[0]); lua_setfield(L, -2, "x");
+        lua_pushnumber(L, v[1]); lua_setfield(L, -2, "y");
+        lua_pushnumber(L, v[2]); lua_setfield(L, -2, "z");
+        lua_pushnumber(L, v[3]); lua_setfield(L, -2, wKey ? wKey : "w");
+        lua_setfield(L, -2, k);
+    };
+
+    lua_newtable(L);
+    pushVec4("car_pos", sp.carPos, "half_w");
+    pushVec4("car_right", sp.carRight, "half_l");
+    pushVec4("car_up", sp.carUp, "height");
+    pushVec4("car_fwd", sp.carFwd, "valid");
+    pushVec4("cam_pos", sp.camPos, "valid");
+    pushVec4("near_car_pos", sp.nearCarPos, "gap");
+    pushVec4("near_car_closest", sp.nearCarClosest, "half_h");
+
+    lua_pushnumber(L, sp.wallDirDist[0]); lua_setfield(L, -2, "wall_front");
+    lua_pushnumber(L, sp.wallDirDist[1]); lua_setfield(L, -2, "wall_rear");
+    lua_pushnumber(L, sp.wallDirDist[2]); lua_setfield(L, -2, "wall_left");
+    lua_pushnumber(L, sp.wallDirDist[3]); lua_setfield(L, -2, "wall_right");
+    lua_pushnumber(L, sp.wallDoorLeftHit[3]); lua_setfield(L, -2, "wall_door_left");
+    lua_pushnumber(L, sp.wallDoorRightHit[3]); lua_setfield(L, -2, "wall_door_right");
+    lua_pushnumber(L, sp.wallFrontLeftHit[3]); lua_setfield(L, -2, "wall_front_left");
+    lua_pushnumber(L, sp.wallFrontRightHit[3]); lua_setfield(L, -2, "wall_front_right");
+    lua_pushnumber(L, sp.wallRearLeftHit[3]); lua_setfield(L, -2, "wall_rear_left");
+    lua_pushnumber(L, sp.wallRearRightHit[3]); lua_setfield(L, -2, "wall_rear_right");
+    pushVec4("wall_nearest", sp.wallNearestHit, "gap");
+    pushVec4("wall_front_hit", sp.wallFrontHit, "gap");
+    pushVec4("wall_rear_hit", sp.wallRearHit, "gap");
+    pushVec4("wall_left_hit", sp.wallLeftHit, "gap");
+    pushVec4("wall_right_hit", sp.wallRightHit, "gap");
+    pushVec4("wall_door_left_hit", sp.wallDoorLeftHit, "gap");
+    pushVec4("wall_door_right_hit", sp.wallDoorRightHit, "gap");
+    pushVec4("wall_front_left_hit", sp.wallFrontLeftHit, "gap");
+    pushVec4("wall_front_right_hit", sp.wallFrontRightHit, "gap");
+    pushVec4("wall_rear_left_hit", sp.wallRearLeftHit, "gap");
+    pushVec4("wall_rear_right_hit", sp.wallRearRightHit, "gap");
+    lua_pushnumber(L, sp.driftState[0]); lua_setfield(L, -2, "drift_deg");
+    lua_pushnumber(L, sp.driftState[1]); lua_setfield(L, -2, "drift_signed_deg");
+    lua_pushnumber(L, sp.driftState[2]); lua_setfield(L, -2, "drift_norm65");
+    lua_pushnumber(L, sp.driftState[3]); lua_setfield(L, -2, "speed_kmh");
     return 1;
 }
 
@@ -625,6 +1137,18 @@ static const luaL_Reg carx_funcs[] = {
     { "clear_car_ghost_modes", LuaCarX::ClearCarGhostModes },
     { "get_rigid_body", LuaCarX::GetRigidBody },
     { "teleport_rigid_body", LuaCarX::TeleportRigidBody },
+    { "teleport_player", LuaCarX::TeleportRigidBody },
+    { "teleport", LuaCarX::TeleportRigidBody },
+    { "get_velocity", LuaCarX::GetVelocity },
+    { "set_velocity", LuaCarX::SetVelocity },
+    { "get_angular_velocity", LuaCarX::GetAngularVelocity },
+    { "set_angular_velocity", LuaCarX::SetAngularVelocity },
+    { "get_drift_info", LuaCarX::GetDriftInfo },
+    { "get_drift", LuaCarX::GetDriftInfo },
+    { "get_camera", LuaCarX::GetCamera },
+    { "raycast", LuaCarX::Raycast },
+    { "reset_car", LuaCarX::ResetCar },
+    { "get_proximity", LuaCarX::GetProximity },
     { "get_time", LuaCarX::GetTime },
     { "get_delta_time", LuaCarX::GetDeltaTime },
     { nullptr, nullptr }

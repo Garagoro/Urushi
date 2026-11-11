@@ -319,6 +319,120 @@ int LuaImGui::SetOptions(lua_State* L) {
     return 0;
 }
 
+int LuaImGui::GetDisplaySize(lua_State* L) {
+    ImVec2 sz = ImGui::GetIO().DisplaySize;
+    lua_pushnumber(L, sz.x);
+    lua_pushnumber(L, sz.y);
+    return 2;
+}
+
+int LuaImGui::DrawLine(lua_State* L) {
+    float x1 = static_cast<float>(luaL_checknumber(L, 1));
+    float y1 = static_cast<float>(luaL_checknumber(L, 2));
+    float x2 = static_cast<float>(luaL_checknumber(L, 3));
+    float y2 = static_cast<float>(luaL_checknumber(L, 4));
+    float r = static_cast<float>(luaL_checknumber(L, 5));
+    float g = static_cast<float>(luaL_checknumber(L, 6));
+    float b = static_cast<float>(luaL_checknumber(L, 7));
+    float a = static_cast<float>(luaL_optnumber(L, 8, 1.0f));
+    float thickness = static_cast<float>(luaL_optnumber(L, 9, 1.0f));
+
+    ImU32 col = ImColor(r, g, b, a);
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    if (dl) dl->AddLine(ImVec2(x1, y1), ImVec2(x2, y2), col, thickness);
+    return 0;
+}
+
+int LuaImGui::DrawRect(lua_State* L) {
+    float x1 = static_cast<float>(luaL_checknumber(L, 1));
+    float y1 = static_cast<float>(luaL_checknumber(L, 2));
+    float x2 = static_cast<float>(luaL_checknumber(L, 3));
+    float y2 = static_cast<float>(luaL_checknumber(L, 4));
+    float r = static_cast<float>(luaL_checknumber(L, 5));
+    float g = static_cast<float>(luaL_checknumber(L, 6));
+    float b = static_cast<float>(luaL_checknumber(L, 7));
+    float a = static_cast<float>(luaL_optnumber(L, 8, 1.0f));
+    float rounding = static_cast<float>(luaL_optnumber(L, 9, 0.0f));
+    float thickness = static_cast<float>(luaL_optnumber(L, 10, 1.0f));
+
+    ImU32 col = ImColor(r, g, b, a);
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    if (dl) dl->AddRect(ImVec2(x1, y1), ImVec2(x2, y2), col, rounding, 0, thickness);
+    return 0;
+}
+
+int LuaImGui::DrawRectFilled(lua_State* L) {
+    float x1 = static_cast<float>(luaL_checknumber(L, 1));
+    float y1 = static_cast<float>(luaL_checknumber(L, 2));
+    float x2 = static_cast<float>(luaL_checknumber(L, 3));
+    float y2 = static_cast<float>(luaL_checknumber(L, 4));
+    float r = static_cast<float>(luaL_checknumber(L, 5));
+    float g = static_cast<float>(luaL_checknumber(L, 6));
+    float b = static_cast<float>(luaL_checknumber(L, 7));
+    float a = static_cast<float>(luaL_optnumber(L, 8, 1.0f));
+    float rounding = static_cast<float>(luaL_optnumber(L, 9, 0.0f));
+
+    ImU32 col = ImColor(r, g, b, a);
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    if (dl) dl->AddRectFilled(ImVec2(x1, y1), ImVec2(x2, y2), col, rounding);
+    return 0;
+}
+
+int LuaImGui::DrawCircle(lua_State* L) {
+    float cx = static_cast<float>(luaL_checknumber(L, 1));
+    float cy = static_cast<float>(luaL_checknumber(L, 2));
+    float radius = static_cast<float>(luaL_checknumber(L, 3));
+    float r = static_cast<float>(luaL_checknumber(L, 4));
+    float g = static_cast<float>(luaL_checknumber(L, 5));
+    float b = static_cast<float>(luaL_checknumber(L, 6));
+    float a = static_cast<float>(luaL_optnumber(L, 7, 1.0f));
+    int segs = static_cast<int>(luaL_optinteger(L, 8, 0));
+    float thickness = static_cast<float>(luaL_optnumber(L, 9, 1.0f));
+
+    ImU32 col = ImColor(r, g, b, a);
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    if (dl) dl->AddCircle(ImVec2(cx, cy), radius, col, segs, thickness);
+    return 0;
+}
+
+int LuaImGui::DrawCircleFilled(lua_State* L) {
+    float cx = static_cast<float>(luaL_checknumber(L, 1));
+    float cy = static_cast<float>(luaL_checknumber(L, 2));
+    float radius = static_cast<float>(luaL_checknumber(L, 3));
+    float r = static_cast<float>(luaL_checknumber(L, 4));
+    float g = static_cast<float>(luaL_checknumber(L, 5));
+    float b = static_cast<float>(luaL_checknumber(L, 6));
+    float a = static_cast<float>(luaL_optnumber(L, 7, 1.0f));
+    int segs = static_cast<int>(luaL_optinteger(L, 8, 0));
+
+    ImU32 col = ImColor(r, g, b, a);
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    if (dl) dl->AddCircleFilled(ImVec2(cx, cy), radius, col, segs);
+    return 0;
+}
+
+int LuaImGui::DrawText2D(lua_State* L) {
+    float x = static_cast<float>(luaL_checknumber(L, 1));
+    float y = static_cast<float>(luaL_checknumber(L, 2));
+    const char* text = luaL_checkstring(L, 3);
+    float r = static_cast<float>(luaL_optnumber(L, 4, 1.0f));
+    float g = static_cast<float>(luaL_optnumber(L, 5, 1.0f));
+    float b = static_cast<float>(luaL_optnumber(L, 6, 1.0f));
+    float a = static_cast<float>(luaL_optnumber(L, 7, 1.0f));
+    float fontSize = static_cast<float>(luaL_optnumber(L, 8, 0.0f));
+
+    ImU32 col = ImColor(r, g, b, a);
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    if (dl) {
+        if (fontSize > 1.0f) {
+            dl->AddText(ImGui::GetFont(), fontSize, ImVec2(x, y), col, text);
+        } else {
+            dl->AddText(ImVec2(x, y), col, text);
+        }
+    }
+    return 0;
+}
+
 static const luaL_Reg imgui_funcs[] = {
     { "begin_window", LuaImGui::BeginWindow },
     { "end_window", LuaImGui::EndWindow },
@@ -353,6 +467,13 @@ static const luaL_Reg imgui_funcs[] = {
     { "set_value", LuaImGui::SetValue },
     { "get_value", LuaImGui::GetValue },
     { "set_options", LuaImGui::SetOptions },
+    { "get_display_size", LuaImGui::GetDisplaySize },
+    { "draw_line", LuaImGui::DrawLine },
+    { "draw_rect", LuaImGui::DrawRect },
+    { "draw_rect_filled", LuaImGui::DrawRectFilled },
+    { "draw_circle", LuaImGui::DrawCircle },
+    { "draw_circle_filled", LuaImGui::DrawCircleFilled },
+    { "draw_text", LuaImGui::DrawText2D },
     { nullptr, nullptr }
 };
 
