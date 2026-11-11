@@ -22,6 +22,7 @@ Debug/
 scratch/
 *.log
 *.cxr2
+scripts/*.json
 dist/*.pdb
 
 # IDE & OS
