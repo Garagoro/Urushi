@@ -345,7 +345,9 @@ HRESULT WINAPI D3D11Hook::Hooked_Present(IDXGISwapChain* pSwapChain, UINT SyncIn
                 IMGUI_CHECKVERSION();
                 ImGui::CreateContext();
                 ImGuiIO& io = ImGui::GetIO();
-                io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+                // No ImGui keyboard/gamepad navigation: arrow keys / WASD drive the CAR. With nav enabled the arrows switched
+                // ImGui into nav mode (mouse hover disabled) and WantCaptureKeyboard swallowed every key while the menu was open.
+                io.ConfigFlags &= ~(ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad);
                 io.IniFilename = nullptr;
 
                 // Disable assert dialogs and popups that could crash the game
@@ -511,7 +513,7 @@ LRESULT WINAPI D3D11Hook::Hooked_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
     // Toggle menu on F4 or Insert (F4 arrives as WM_SYSKEYDOWN when Alt is held; Alt+F4 must still close the game)
     if (uMsg == WM_KEYDOWN) {
         if (wParam == VK_F4 || wParam == VK_INSERT) {
-            if (!isRepeat) ToggleMenu();
+            if (!isRepeat && !(wParam == VK_INSERT && typingInUi)) ToggleMenu();   // Insert is an editing key inside text fields
             return 0;
         }
     }
@@ -526,7 +528,10 @@ LRESULT WINAPI D3D11Hook::Hooked_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
         if (io.WantCaptureMouse && (uMsg >= WM_MOUSEFIRST && uMsg <= WM_MOUSELAST)) {
             return true;
         }
-        if (io.WantCaptureKeyboard && (uMsg >= WM_KEYFIRST && uMsg <= WM_KEYLAST)) {
+        // Keyboard goes to the game unless the user is typing into a text field. Key-ups are never swallowed,
+        // otherwise a key pressed before the field got focus would stay "stuck" in the game.
+        if (io.WantTextInput && (uMsg >= WM_KEYFIRST && uMsg <= WM_KEYLAST) &&
+            uMsg != WM_KEYUP && uMsg != WM_SYSKEYUP) {
             return true;
         }
     }
