@@ -1,5 +1,8 @@
 # URUSHI (`CarX2ScriptHook`)
 
+[![Discord](https://img.shields.io/badge/Discord-URUSHI-5865F2?logo=discord&logoColor=white)](https://discord.gg/jS6cc49EbT)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+
 [English](#features-v020) · [Русский](#-urushi-ru)
 
 Open-source **C++ / Lua 5.4 / DirectX 11** modding & telemetry framework for **CarX Drift Racing Online 2**.
