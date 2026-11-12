@@ -369,6 +369,7 @@ static void DrawModuleIcon(ImDrawList* dl, ImVec2 center, const std::string& ico
 static void RenderDock(bool menuOpen) {
     float dt = ImGui::GetIO().DeltaTime;
     if (dt <= 0.0f || dt > 0.25f) dt = 0.016f;
+    if (!menuOpen) { s_dockEdit = false; s_dragId.clear(); }   // closing the menu leaves reorder mode
     const float targetAlpha = menuOpen ? 1.0f : 0.0f;
     s_dockAlpha += (targetAlpha - s_dockAlpha) * (1.0f - std::exp(-20.0f * dt));
     if (!menuOpen && s_dockAlpha < 0.02f) {
