@@ -47,4 +47,4 @@ the SHA-256 checks only guarantee that files match the catalog; trust comes from
 
 ## Code
 `core/cloud_scripts.{h,cpp}` (catalog parser, installer, path/ID validation), `core/bindings/lua_cloud.cpp` (Lua module `cloud`),
-`scripts/main.lua` (loading + isolation), `scripts/system_mod.lua` (Library window: script toggles + cloud library).
+`scripts/main.lua` (loading + isolation), `scripts/system_mod.lua` (Library window: Downloaded tab = toggles, Cloud tab = catalog).

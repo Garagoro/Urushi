@@ -99,10 +99,14 @@ end
 
 local function render_scripts_card()
     if not urushi_scripts then return end
-    ui.card(T("Скрипты", "Scripts"), T("Включение и отключение модулей", "Enable or disable modules"), function()
+    ui.card(T("Скачанные", "Downloaded"), T("Включение и отключение скриптов (имя файла)", "Enable or disable scripts (file name)"), function()
         for _, e in ipairs(urushi_scripts.list) do
-            local title = e.user and (e.id .. ".lua") or T(e.ru, e.en)
-            if e.cloud then title = title .. "  (cloud v" .. tostring(e.version) .. ")" end
+            local title
+            if e.cloud then
+                title = e.cloud_id .. "/" .. ((e.entry and e.entry ~= "") and e.entry or "(shaders)") .. "  v" .. tostring(e.version)
+            else
+                title = e.id .. ".lua"
+            end
             if e.isolated then title = title .. "  [" .. T("изолирован", "isolated") .. "]" end
             local ch, val = ui.toggle(title .. "##scr_" .. e.id, e.enabled)
             if ch then
@@ -151,8 +155,7 @@ local function render_library_card()
 
         for _, it in ipairs(st.items) do
             ui.separator()
-            local nm = T((it.name_ru ~= "" and it.name_ru or it.name), it.name)
-            ui.text(nm .. "  v" .. it.version, "accent")
+            ui.text(it.id .. "  v" .. it.version, "accent")
             if it.author ~= "" then ui.text_dim(it.author) end
             local desc = T((it.description_ru ~= "" and it.description_ru or it.description), it.description)
             if desc ~= "" then ui.text_wrapped(desc, "muted") end
@@ -198,9 +201,11 @@ end
 apply_saved_prefs()
 
 -- Separate "Library" window: script toggles (installed / built-in / user) + the cloud script library
+local library_tab = 1
 local function render_library_window()
-    render_scripts_card()
-    render_library_card()
+    local ch, idx = ui.segmented("lib_tab_seg", library_tab, T({ "Скачанные", "Облачные" }, { "Downloaded", "Cloud" }))
+    if ch then library_tab = idx end
+    if library_tab == 1 then render_scripts_card() else render_library_card() end
 end
 
 local function render_system_window()

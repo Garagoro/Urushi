@@ -147,7 +147,7 @@ if cloud and cloud.installed then
     for _, c in ipairs(cloud.installed()) do
         local key = "cloud:" .. c.id
         local e = {
-            id = key, cloud = true, isolated = true, cloud_id = c.id, version = c.version, shader_only = (c.entry == ""),
+            id = key, cloud = true, isolated = true, cloud_id = c.id, version = c.version, entry = c.entry, shader_only = (c.entry == ""),
             en = c.name, ru = (c.name_ru ~= "" and c.name_ru or c.name),
             enabled = enabled_flag(key, true),
         }
