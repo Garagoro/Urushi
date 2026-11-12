@@ -946,11 +946,24 @@ const luaL_Reg kUiFuncs[] = {
 
 } // namespace
 
+// ui.* widgets are ImGui calls: only valid on the render thread inside a frame. From anywhere else (an on_main_update
+// callback on the Unity thread, or before ImGui exists) they are ignored instead of crashing the game.
+static int GuardedUiCall(lua_State* L) {
+    if (!D3D11Hook::IsInImGuiFrame()) return 0;
+    lua_CFunction f = lua_tocfunction(L, lua_upvalueindex(1));
+    return f ? f(L) : 0;
+}
+
 void LuaUrushi::Register(lua_State* L) {
     luaL_newlib(L, kUrushiFuncs);
     lua_setglobal(L, "urushi");
 
-    luaL_newlib(L, kUiFuncs);
+    lua_newtable(L);
+    for (const luaL_Reg* f = kUiFuncs; f->name; ++f) {
+        lua_pushcfunction(L, f->func);
+        lua_pushcclosure(L, GuardedUiCall, 1);
+        lua_setfield(L, -2, f->name);
+    }
     lua_setglobal(L, "ui");
 
     luaL_newlib(L, kInputFuncs);

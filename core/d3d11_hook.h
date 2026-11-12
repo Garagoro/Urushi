@@ -1,5 +1,6 @@
 #pragma once
 #include <windows.h>
+#include <atomic>
 #include <d3d11.h>
 #include <dxgi.h>
 
@@ -27,6 +28,11 @@ public:
     static ID3D11DeviceContext* GetContext();
     static HWND GetGameWindow();
 
+    // ImGui is not thread-safe and only exists after the first Present. Lua callbacks run on the Unity main thread,
+    // so scripts must never touch ImGui directly outside the render frame:
+    static bool IsInImGuiFrame();   // true only on the render thread, between NewFrame and Render
+    static bool AnyItemActive();    // value cached by the render thread at the end of the last frame (safe from any thread)
+
 private:
     static void HookContextVTable(ID3D11DeviceContext* ctx);
     static HRESULT WINAPI Hooked_Present(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags);
@@ -47,6 +53,9 @@ private:
     static bool s_imguiInitialized;
     static bool s_menuOpen;
     static bool s_initialized;
+    static std::atomic<bool> s_inFrame;
+    static std::atomic<bool> s_anyItemActive;
+    static std::atomic<DWORD> s_frameThread;
 
     static void ApplyTheme();
 };

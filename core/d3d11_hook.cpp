@@ -116,6 +116,18 @@ HWND D3D11Hook::s_hwnd = nullptr;
 bool D3D11Hook::s_imguiInitialized = false;
 bool D3D11Hook::s_menuOpen = true;
 bool D3D11Hook::s_initialized = false;
+std::atomic<bool> D3D11Hook::s_inFrame{ false };
+std::atomic<bool> D3D11Hook::s_anyItemActive{ false };
+std::atomic<DWORD> D3D11Hook::s_frameThread{ 0 };
+
+bool D3D11Hook::IsInImGuiFrame() {
+    return s_inFrame.load(std::memory_order_acquire) &&
+           s_frameThread.load(std::memory_order_acquire) == GetCurrentThreadId();
+}
+
+bool D3D11Hook::AnyItemActive() {
+    return s_anyItemActive.load(std::memory_order_acquire);
+}
 
 ImFont* AppFonts::Regular = nullptr;
 ImFont* AppFonts::Large = nullptr;
@@ -433,6 +445,8 @@ HRESULT WINAPI D3D11Hook::Hooked_Present(IDXGISwapChain* pSwapChain, UINT SyncIn
             DevPipe::BeforeNewFrame();
             UrushiUI::PrepareFrame();
             ImGui::NewFrame();
+            s_frameThread.store(GetCurrentThreadId(), std::memory_order_release);
+            s_inFrame.store(true, std::memory_order_release);
 
             if (full) {
                 // 1. Let Lua Engine render imperative UI (HUD, graphs)
@@ -448,6 +462,8 @@ HRESULT WINAPI D3D11Hook::Hooked_Present(IDXGISwapChain* pSwapChain, UINT SyncIn
             // Crash prompt / Safe mode window (native, no Lua involved)
             SafeMode::RenderUI(s_menuOpen);
 
+            s_anyItemActive.store(ImGui::IsAnyItemActive(), std::memory_order_release);
+            s_inFrame.store(false, std::memory_order_release);
             ImGui::Render();
             if (!DevPipe::ShouldSuppressVisibleDraw()) {
                 s_context->OMSetRenderTargets(1, &s_renderTargetView, nullptr);
@@ -457,6 +473,7 @@ HRESULT WINAPI D3D11Hook::Hooked_Present(IDXGISwapChain* pSwapChain, UINT SyncIn
         }
     }
     catch (const std::exception& e) {
+        s_inFrame.store(false, std::memory_order_release);
         Logger::Error("Exception in Hooked_Present: " + std::string(e.what()));
     }
     catch (...) {

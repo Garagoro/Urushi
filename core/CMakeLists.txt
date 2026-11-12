@@ -74,3 +74,9 @@ set_target_properties(urushi PROPERTIES
     PREFIX ""
     SUFFIX ".dll"
 )
+
+# Linker map next to urushi.dll (does not change the generated code): lets tools/resolve_crash.py turn the
+# "urushi_*.dll+0xOFFSET" frames of a crash report into function names. Keep the .map of every DLL you ship.
+if(MSVC)
+    target_link_options(urushi PRIVATE /MAP)
+endif()

@@ -3,6 +3,7 @@
 #include "../ui_schema.h"
 #include <imgui.h>
 #include <vector>
+#include <cstring>
 #include <string>
 
 int LuaImGui::BeginWindow(lua_State* L) {
@@ -238,7 +239,7 @@ int LuaImGui::ToggleMenu(lua_State* L) {
 }
 
 int LuaImGui::IsAnyItemActive(lua_State* L) {
-    lua_pushboolean(L, ImGui::IsAnyItemActive());
+    lua_pushboolean(L, D3D11Hook::AnyItemActive());   // cached by the render thread: safe from Lua callbacks on any thread
     return 1;
 }
 
@@ -488,8 +489,28 @@ static const luaL_Reg gui_funcs[] = {
     { nullptr, nullptr }
 };
 
+// Direct ImGui calls are only valid on the render thread inside a frame. Called from anywhere else (e.g. an
+// on_main_update callback on the Unity thread, or before ImGui exists) they are silently ignored instead of crashing.
+static int GuardedImGuiCall(lua_State* L) {
+    if (!D3D11Hook::IsInImGuiFrame()) return 0;
+    lua_CFunction f = lua_tocfunction(L, lua_upvalueindex(1));
+    return f ? f(L) : 0;
+}
+
+static bool NeedsImGuiFrame(const char* name) {
+    static const char* const kFree[] = { "is_menu_open", "set_menu_open", "toggle_menu", "is_any_item_active",
+                                         "register_panel", "set_value", "get_value", "set_options", nullptr };
+    for (const char* const* p = kFree; *p; ++p) if (strcmp(*p, name) == 0) return false;
+    return true;
+}
+
 void LuaImGui::Register(lua_State* L) {
-    luaL_newlib(L, imgui_funcs);
+    lua_newtable(L);
+    for (const luaL_Reg* f = imgui_funcs; f->name; ++f) {
+        lua_pushcfunction(L, f->func);
+        if (NeedsImGuiFrame(f->name)) lua_pushcclosure(L, GuardedImGuiCall, 1);
+        lua_setfield(L, -2, f->name);
+    }
     lua_setglobal(L, "imgui");
 
     luaL_newlib(L, gui_funcs);
