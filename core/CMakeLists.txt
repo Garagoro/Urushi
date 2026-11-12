@@ -14,9 +14,12 @@ add_library(urushi SHARED
     dllmain.cpp
     logger.h logger.cpp
     settings.h settings.cpp
+    cloud_scripts.h cloud_scripts.cpp
     crash_handler.h crash_handler.cpp
     safe_mode.h safe_mode.cpp
     lua_sandbox.h lua_sandbox.cpp
+    lua_hardening.h lua_hardening.cpp
+    ptr_registry.h
     input_manager.h input_manager.cpp
     hook_manager.h hook_manager.cpp
     native_carx.h native_carx.cpp
@@ -43,6 +46,7 @@ add_library(urushi SHARED
     bindings/lua_updater.h bindings/lua_updater.cpp
     bindings/lua_optimizer.h bindings/lua_optimizer.cpp
     bindings/lua_urushi.h bindings/lua_urushi.cpp
+    bindings/lua_cloud.h bindings/lua_cloud.cpp
     ${IMGUI_SOURCES}
 )
 

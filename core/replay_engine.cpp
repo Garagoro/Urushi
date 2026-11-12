@@ -9,6 +9,26 @@
 #include <shlwapi.h>
 
 std::recursive_mutex ReplayEngine::s_mutex;
+// Replay names come from Lua: reduce them to a plain "<name>.cxr2" inside the replays folder
+// (no directories, no "..", no stream/device tricks, never an executable-looking extension).
+static std::string SanitizeReplayFileName(const std::string& in) {
+    size_t cut = in.find_last_of("/\\");
+    std::string name = (cut == std::string::npos) ? in : in.substr(cut + 1);
+    std::string out;
+    for (unsigned char c : name) {
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' ||
+            c == '.' || c == ' ' || c == '(' || c == ')') out += static_cast<char>(c);
+    }
+    while (!out.empty() && (out[0] == '.' || out[0] == ' ')) out.erase(0, 1);
+    while (!out.empty() && (out.back() == '.' || out.back() == ' ')) out.pop_back();
+    if (out.size() > 80) out.resize(80);
+    if (out.empty()) return {};
+    const std::string ext = ".cxr2";
+    bool hasExt = out.size() > ext.size() && _stricmp(out.c_str() + out.size() - ext.size(), ext.c_str()) == 0;
+    if (!hasExt) out += ext;
+    return out;
+}
+
 std::wstring ReplayEngine::s_replaysDir;
 
 bool ReplayEngine::s_isRecording = false;
@@ -199,8 +219,11 @@ bool ReplayEngine::StopRecording(const std::string& customFilename) {
         std::ostringstream ss;
         ss << "replay_" << std::put_time(&t, "%Y%m%d_%H%M%S") << ".cxr2";
         filename = ss.str();
-    } else if (filename.find(".cxr2") == std::string::npos) {
-        filename += ".cxr2";
+    }
+    filename = SanitizeReplayFileName(filename);
+    if (filename.empty()) {
+        Logger::Error("Rejected replay file name");
+        return false;
     }
 
     std::wstring fullPath = s_replaysDir + L"\\" + Logger::ToWide(filename);
@@ -282,7 +305,12 @@ uint32_t ReplayEngine::GetCurrentRecordTrackCount() {
 bool ReplayEngine::LoadReplay(const std::string& filename) {
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
 
-    std::wstring fullPath = s_replaysDir + L"\\" + Logger::ToWide(filename);
+    const std::string safeName = SanitizeReplayFileName(filename);
+    if (safeName.empty()) {
+        Logger::Error("Rejected replay file name");
+        return false;
+    }
+    std::wstring fullPath = s_replaysDir + L"\\" + Logger::ToWide(safeName);
     std::ifstream in(fullPath, std::ios::binary);
     if (!in.is_open()) {
         Logger::Error("Failed to open replay file: " + filename);

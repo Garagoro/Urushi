@@ -1,4 +1,5 @@
 #include "lua_replay.h"
+#include "../ptr_registry.h"
 #include "../replay_engine.h"
 #include "../native_carx.h"
 #include "../unity_bridge.h"
@@ -40,7 +41,7 @@ int LuaReplay::StartRecordMulti(lua_State* L) {
                 RecordTarget target;
                 lua_getfield(L, -1, "ptr");
                 if (lua_islightuserdata(L, -1)) {
-                    target.carPtr = lua_touserdata(L, -1);
+                    target.carPtr = PtrRegistry::Arg(L, -1);
                 }
                 lua_pop(L, 1);
 

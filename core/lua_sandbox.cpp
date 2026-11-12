@@ -39,6 +39,17 @@ void Install(lua_State* L) {
     lua_sethook(L, CountHook, LUA_MASKCOUNT, 2000);
 }
 
+int LoadFileText(lua_State* L, const char* path, int envIdx) {
+    if (envIdx != 0) envIdx = lua_absindex(L, envIdx);
+    const int st = luaL_loadfilex(L, path, "t");
+    if (st != LUA_OK) return st;
+    if (envIdx != 0 && lua_istable(L, envIdx)) {
+        lua_pushvalue(L, envIdx);
+        if (!lua_setupvalue(L, -2, 1)) lua_pop(L, 1);   // first upvalue of a main chunk is _ENV
+    }
+    return LUA_OK;
+}
+
 int PCall(lua_State* L, int nargs, int nresults, const char* label, DWORD budgetMs) {
     // Nested calls keep the outermost (earliest) deadline.
     const ULONGLONG prevDeadline = g_deadline.load(std::memory_order_relaxed);

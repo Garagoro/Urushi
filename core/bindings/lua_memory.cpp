@@ -1,5 +1,6 @@
 #include "lua_memory.h"
 #include "../unity_bridge.h"
+#include "../ptr_registry.h"
 #include <windows.h>
 #include <psapi.h>
 #include <vector>
@@ -77,7 +78,7 @@ int LuaMemory::ReadPtr(lua_State* L) {
     uintptr_t addr = GetAddr(L, 1);
     void* val = nullptr;
     if (SafeRead(reinterpret_cast<void*>(addr), &val, sizeof(val))) {
-        lua_pushlightuserdata(L, val);
+        lua_pushinteger(L, static_cast<lua_Integer>(reinterpret_cast<uintptr_t>(val)));
         return 1;
     }
     lua_pushnil(L);
@@ -144,7 +145,7 @@ int LuaMemory::UnityFind(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
     void* go = UnityBridge::FindGameObjectByName(name);
     if (go) {
-        lua_pushlightuserdata(L, go);
+        PtrRegistry::Push(L, go);
         return 1;
     }
     lua_pushnil(L);
@@ -158,16 +159,16 @@ int LuaMemory::UnityFindPlayerCarModel(lua_State* L) {
         lua_pushnil(L);
         return 1;
     }
-    lua_pushlightuserdata(L, modelGo);
+    PtrRegistry::Push(L, modelGo);
     if (rootTf) {
-        lua_pushlightuserdata(L, rootTf);
+        PtrRegistry::Push(L, rootTf);
         return 2;
     }
     return 1;
 }
 
 int LuaMemory::UnityGetName(lua_State* L) {
-    void* go = reinterpret_cast<void*>(GetAddr(L, 1));
+    void* go = PtrRegistry::Arg(L, 1);
     if (!go) {
         lua_pushnil(L);
         return 1;
@@ -182,10 +183,10 @@ int LuaMemory::UnityGetName(lua_State* L) {
 }
 
 int LuaMemory::UnityGetTransform(lua_State* L) {
-    void* go = reinterpret_cast<void*>(GetAddr(L, 1));
+    void* go = PtrRegistry::Arg(L, 1);
     void* tf = UnityBridge::GetTransformOfGameObject(go);
     if (tf) {
-        lua_pushlightuserdata(L, tf);
+        PtrRegistry::Push(L, tf);
         return 1;
     }
     lua_pushnil(L);
@@ -202,18 +203,18 @@ int LuaMemory::UnityGetAllObjects(lua_State* L) {
     for (const auto& obj : objects) {
         lua_newtable(L);
 
-        lua_pushlightuserdata(L, obj.go);
+        PtrRegistry::Push(L, obj.go);
         lua_setfield(L, -2, "ptr");
 
         lua_pushstring(L, obj.name.empty() ? "Unnamed" : obj.name.c_str());
         lua_setfield(L, -2, "name");
 
         if (obj.transform) {
-            lua_pushlightuserdata(L, obj.transform);
+            PtrRegistry::Push(L, obj.transform);
             lua_setfield(L, -2, "transform");
         }
         if (obj.parentTransform) {
-            lua_pushlightuserdata(L, obj.parentTransform);
+            PtrRegistry::Push(L, obj.parentTransform);
             lua_setfield(L, -2, "parent_transform");
         }
         if (obj.hasPos) {
@@ -231,10 +232,10 @@ int LuaMemory::UnityGetAllObjects(lua_State* L) {
 }
 
 int LuaMemory::UnityClone(lua_State* L) {
-    void* go = reinterpret_cast<void*>(GetAddr(L, 1));
+    void* go = PtrRegistry::Arg(L, 1);
     void* cloned = UnityBridge::CloneGameObjectDirect(go);
     if (cloned) {
-        lua_pushlightuserdata(L, cloned);
+        PtrRegistry::Push(L, cloned);
         return 1;
     }
     lua_pushnil(L);
@@ -242,28 +243,28 @@ int LuaMemory::UnityClone(lua_State* L) {
 }
 
 int LuaMemory::UnityDestroy(lua_State* L) {
-    void* obj = reinterpret_cast<void*>(GetAddr(L, 1));
+    void* obj = PtrRegistry::Arg(L, 1);
     float delay = static_cast<float>(luaL_optnumber(L, 2, 0.0));
     lua_pushboolean(L, UnityBridge::DestroyObjectDirect(obj, delay));
     return 1;
 }
 
 int LuaMemory::UnitySetActive(lua_State* L) {
-    void* go = reinterpret_cast<void*>(GetAddr(L, 1));
+    void* go = PtrRegistry::Arg(L, 1);
     bool active = lua_toboolean(L, 2) != 0;
     lua_pushboolean(L, UnityBridge::SetActiveDirect(go, active));
     return 1;
 }
 
 int LuaMemory::UnitySetLayer(lua_State* L) {
-    void* go = reinterpret_cast<void*>(GetAddr(L, 1));
+    void* go = PtrRegistry::Arg(L, 1);
     int layer = static_cast<int>(luaL_checkinteger(L, 2));
     lua_pushboolean(L, UnityBridge::SetLayerDirect(go, layer));
     return 1;
 }
 
 int LuaMemory::UnitySetPosition(lua_State* L) {
-    void* tf = reinterpret_cast<void*>(GetAddr(L, 1));
+    void* tf = PtrRegistry::Arg(L, 1);
     UnityVector3 pos{
         static_cast<float>(lua_tonumber(L, 2)),
         static_cast<float>(lua_tonumber(L, 3)),
@@ -274,7 +275,7 @@ int LuaMemory::UnitySetPosition(lua_State* L) {
 }
 
 int LuaMemory::UnitySetRotation(lua_State* L) {
-    void* tf = reinterpret_cast<void*>(GetAddr(L, 1));
+    void* tf = PtrRegistry::Arg(L, 1);
     UnityVector4 rot{
         static_cast<float>(lua_tonumber(L, 2)),
         static_cast<float>(lua_tonumber(L, 3)),
@@ -286,7 +287,7 @@ int LuaMemory::UnitySetRotation(lua_State* L) {
 }
 
 int LuaMemory::UnityGetPosition(lua_State* L) {
-    void* tf = reinterpret_cast<void*>(GetAddr(L, 1));
+    void* tf = PtrRegistry::Arg(L, 1);
     if (!tf) {
         lua_pushnil(L);
         return 1;
@@ -310,7 +311,7 @@ int LuaMemory::UnityGetPosition(lua_State* L) {
 }
 
 int LuaMemory::UnityGetRotation(lua_State* L) {
-    void* tf = reinterpret_cast<void*>(GetAddr(L, 1));
+    void* tf = PtrRegistry::Arg(L, 1);
     if (!tf || !UnityBridge::IsOnMainThread()) {
         lua_pushnil(L);
         return 1;

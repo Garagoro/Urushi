@@ -2,7 +2,8 @@
 -- Centralized Keybind & Gamepad Management for CarX2 URUSHI
 keybinds = keybinds or {}
 
-local DATA_FILE = "scripts/keybinds.json"
+local DATA_FILE = "urushi_data/keybinds.json"          -- scripts may only write inside urushi_data/
+local LEGACY_FILE = "scripts/keybinds.json"            -- read-only fallback for older installs
 
 local DEFAULT_BINDS = {
     menu_toggle    = { source = "keyboard", code = 0x73, mod = 0, name = "F4" },       -- F4
@@ -185,7 +186,7 @@ function keybinds.load()
         }
     end
 
-    local f = io.open(DATA_FILE, "r")
+    local f = io.open(DATA_FILE, "r") or io.open(LEGACY_FILE, "r")
     if f then
         local content = f:read("*a")
         f:close()

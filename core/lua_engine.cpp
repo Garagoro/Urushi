@@ -12,7 +12,10 @@
 #include "bindings/lua_updater.h"
 #include "bindings/lua_optimizer.h"
 #include "bindings/lua_urushi.h"
+#include "bindings/lua_cloud.h"
 #include "lua_sandbox.h"
+#include "lua_hardening.h"
+#include "ptr_registry.h"
 #include "safe_mode.h"
 #include <chrono>
 #include <algorithm>
@@ -50,7 +53,7 @@ bool LuaEngine::Init(const std::wstring& scriptsDir) {
         return false;
     }
 
-    luaL_openlibs(s_L);
+    LuaHardening::OpenSafeLibs(s_L);   // no os.execute / io.popen / package / debug / bytecode, restricted io.open
     LuaSandbox::Install(s_L);
 
     // Register our custom modules
@@ -63,6 +66,7 @@ bool LuaEngine::Init(const std::wstring& scriptsDir) {
     LuaUpdater::Register(s_L);
     LuaOptimizer::Register(s_L);
     LuaUrushi::Register(s_L);
+    LuaCloud::Register(s_L);
     RegisterEventsModule(s_L);
     RegisterLogModule(s_L);
 
@@ -76,7 +80,7 @@ bool LuaEngine::Init(const std::wstring& scriptsDir) {
     std::wstring mainPath = s_scriptsDir + L"\\main.lua";
     std::string mainNarrow = Logger::ToNarrow(mainPath);
 
-    int mainStatus = luaL_loadfile(s_L, mainNarrow.c_str());
+    int mainStatus = luaL_loadfilex(s_L, mainNarrow.c_str(), "t");
     if (mainStatus == LUA_OK) {
         mainStatus = LuaSandbox::PCall(s_L, 0, LUA_MULTRET, "main.lua", LuaSandbox::kBudgetLoadMs);
     }
@@ -118,6 +122,7 @@ void LuaEngine::Shutdown() {
     s_keyCallbacks.clear();
     s_cbFailCount.clear();
     s_lastErrLog.clear();
+    PtrRegistry::Clear();
 
     s_initialized = false;
     Logger::Info("Lua engine shut down.");

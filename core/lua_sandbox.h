@@ -19,6 +19,10 @@ constexpr DWORD kBudgetEvalMs     = 5000;  // dev console
 // Install the instruction-count hook on a freshly created state.
 void Install(lua_State* L);
 
+// Load a Lua source file (text chunks only: pre-compiled bytecode is rejected). If envIdx refers to a table, the chunk
+// runs with that table as its _ENV (isolated globals for untrusted scripts). On success the function is on the stack.
+int LoadFileText(lua_State* L, const char* path, int envIdx = 0);
+
 // Same contract as lua_pcall (function + args already on the stack, no message handler).
 // On failure the error message (with traceback) is left on top of the stack.
 int PCall(lua_State* L, int nargs, int nresults, const char* label, DWORD budgetMs = kBudgetCallbackMs);

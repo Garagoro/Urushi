@@ -360,7 +360,7 @@ std::string WideToUtf8(const std::wstring& w) {
     return s;
 }
 
-std::wstring ResolvePathW(const std::string& pathUtf8) {
+std::wstring ResolvePathRawW(const std::string& pathUtf8) {
     std::wstring w = Utf8ToWide(pathUtf8);
     if (w.empty()) return {};
     // Absolute if drive letter or UNC
@@ -375,6 +375,22 @@ std::wstring ResolvePathW(const std::string& pathUtf8) {
         return s_shadersDir + L"\\" + w;
     }
     return w;
+}
+
+// Paths come from Lua (carfx.load / carfx.set_tex): only files inside the game shaders folder are reachable,
+// so a script can neither probe nor compile/read arbitrary files.
+std::wstring ResolvePathW(const std::string& pathUtf8) {
+    std::wstring resolved = ResolvePathRawW(pathUtf8);
+    if (resolved.empty() || s_shadersDir.empty()) return {};
+    wchar_t full[MAX_PATH * 2] = {};
+    wchar_t base[MAX_PATH * 2] = {};
+    const DWORD n1 = GetFullPathNameW(resolved.c_str(), MAX_PATH * 2, full, nullptr);
+    const DWORD n2 = GetFullPathNameW(s_shadersDir.c_str(), MAX_PATH * 2, base, nullptr);
+    if (n1 == 0 || n1 >= MAX_PATH * 2 || n2 == 0 || n2 >= MAX_PATH * 2) return {};
+    std::wstring f(full), b(base);
+    if (!b.empty() && b.back() != L'\\') b += L'\\';
+    if (f.size() <= b.size() || _wcsnicmp(f.c_str(), b.c_str(), b.size()) != 0) return {};
+    return f;
 }
 
 std::wstring DirectoryOf(const std::wstring& filePath) {

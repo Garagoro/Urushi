@@ -102,6 +102,8 @@ local function render_scripts_card()
     ui.card(T("Скрипты", "Scripts"), T("Включение и отключение модулей", "Enable or disable modules"), function()
         for _, e in ipairs(urushi_scripts.list) do
             local title = e.user and (e.id .. ".lua") or T(e.ru, e.en)
+            if e.cloud then title = title .. "  (cloud v" .. tostring(e.version) .. ")" end
+            if e.isolated then title = title .. "  [" .. T("изолирован", "isolated") .. "]" end
             local ch, val = ui.toggle(title .. "##scr_" .. e.id, e.enabled)
             if ch then
                 e.enabled = val
@@ -122,6 +124,60 @@ local function render_scripts_card()
         if ui.button(T("Перезагрузить скрипты##scr_reload", "Reload scripts##scr_reload"), ui.avail_width(), 30,
                      urushi_scripts.dirty and "primary" or nil) then
             urushi.reload_scripts()
+        end
+    end)
+end
+
+local function render_library_card()
+    if not cloud then return end
+    ui.card(T("Библиотека скриптов", "Script Library"),
+            T("Проверенные скрипты (ветка verified)", "Reviewed scripts (verified branch)"), function()
+        local st = cloud.status()
+        local w = ui.avail_width()
+        if st.state == "fetching" then
+            ui.text(T("Загрузка списка...", "Loading list..."), "accent")
+        elseif ui.button(T("Обновить список##lib_refresh", "Refresh list##lib_refresh"), w, 28) then
+            cloud.refresh()
+        end
+        if st.state == "idle" then
+            ui.text_dim(T("Ничего не скачивается автоматически. Нажмите «Обновить список».",
+                          "Nothing is downloaded automatically. Press \"Refresh list\"."))
+        elseif st.state == "error" then
+            ui.text_wrapped(T("Ошибка: ", "Error: ") .. tostring(st.error), "red")
+        elseif st.state == "ready" and #st.items == 0 then
+            ui.text_dim(T("В каталоге пока нет скриптов.", "The catalog is empty."))
+        end
+
+        for _, it in ipairs(st.items) do
+            ui.separator()
+            local nm = T((it.name_ru ~= "" and it.name_ru or it.name), it.name)
+            ui.text(nm .. "  v" .. it.version, "accent")
+            if it.author ~= "" then ui.text_dim(it.author) end
+            local desc = T((it.description_ru ~= "" and it.description_ru or it.description), it.description)
+            if desc ~= "" then ui.text_wrapped(desc, "muted") end
+
+            if it.state == "installing" then
+                ui.text(T("Установка...", "Installing..."), "accent")
+            elseif not it.installed then
+                if ui.button(T("Установить##lib_i_", "Install##lib_i_") .. it.id, w, 28, "primary") then cloud.install(it.id) end
+            else
+                if it.update then
+                    if ui.button(T("Обновить до v", "Update to v") .. it.version .. "##lib_u_" .. it.id, w, 28, "primary") then
+                        cloud.install(it.id)
+                    end
+                else
+                    ui.badge(T("Установлено", "Installed") .. " v" .. it.installed_version, "green")
+                end
+                if ui.button(T("Удалить##lib_r_", "Remove##lib_r_") .. it.id, w, 26, "ghost") then
+                    local ok, err = cloud.remove(it.id)
+                    if ok then urushi_scripts.dirty = true end
+                end
+                if urushi_scripts.cloud_loaded[it.id] ~= it.installed_version then
+                    ui.text(T("Нажмите «Перезагрузить скрипты», чтобы применить.", "Press \"Reload scripts\" to apply."), "yellow")
+                    urushi_scripts.dirty = true
+                end
+            end
+            if it.state == "error" then ui.text_wrapped(T("Ошибка: ", "Error: ") .. it.error, "red") end
         end
     end)
 end
@@ -231,6 +287,7 @@ local function render_system_window()
 
     render_stability_card()
     render_scripts_card()
+    render_library_card()
 
     ui.card(T("Горячие клавиши и управление", "Keybinds & Controls"), nil, function()
         local gp_conn = input and input.is_gamepad_connected and input.is_gamepad_connected()

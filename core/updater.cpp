@@ -550,6 +550,8 @@ void CheckWorker(bool userInitiated) {
 
             if (e.path.compare(0, 8, "scripts/") == 0 || e.path.compare(0, 8, "shaders/") == 0) {
                 if (e.path == "scripts/runner_state.json") continue;
+                // scripts/cloud/ is owned by the cloud script library (verified branch), never by the updater
+                if (e.path.compare(0, 14, "scripts/cloud/") == 0) continue;
                 std::wstring dest = ResolveSafeLocalPath(exeDir, e.path);
                 if (dest.empty()) continue;
                 if (!LocalFileMatchesGitBlob(dest, e)) {

@@ -1,7 +1,8 @@
 # URUSHI — Architecture & Code Map
 
 Reference for humans **and AI assistants**: read this first instead of grepping the whole tree.
-Companion docs: [LUA_API.md](LUA_API.md) (everything callable from Lua), [SHADERS.md](SHADERS.md) (CarFX HLSL).
+Companion docs: [LUA_API.md](LUA_API.md) (everything callable from Lua), [SHADERS.md](SHADERS.md) (CarFX HLSL),
+[SECURITY.md](SECURITY.md) (what scripts can/cannot do — **read before touching Lua bindings**), [CLOUD_SCRIPTS.md](CLOUD_SCRIPTS.md).
 
 Target: **CarX Drift Racing Online 2** (Unity 6000.3.19f1, IL2CPP, DX11, x64 Windows). URUSHI is injected as a proxy
 `version.dll` and runs *inside the game process*. Everything is native C++ plus an embedded Lua 5.4 VM.
@@ -21,7 +22,8 @@ Target: **CarX Drift Racing Online 2** (Unity 6000.3.19f1, IL2CPP, DX11, x64 Win
 | Overlay | `core/d3d11_hook.*` | Hooks `IDXGISwapChain::Present/ResizeBuffers`, `DrawIndexed(Instanced)`; WndProc subclass; ImGui init & frame loop |
 | UI | `core/urushi_ui.*` | Lacquered ImGui theme, dock/window manager, widgets (`BeginCard`, `Toggle`, `Segmented`, …) |
 | Declarative UI | `core/ui_schema.*` | Lua tables → ImGui panels (`on_action` / `on_change`) |
-| Lua | `core/lua_engine.*`, `core/lua_sandbox.*`, `core/bindings/lua_*.cpp` | VM lifecycle, callbacks, sandbox; one binding file per Lua module |
+| Lua | `core/lua_engine.*`, `core/lua_sandbox.*`, `core/lua_hardening.*`, `core/ptr_registry.h`, `core/bindings/lua_*.cpp` | VM lifecycle, callbacks, time-budget sandbox, **hardened stdlib** (no exec/net/bytecode, restricted `io.open`), pointer provenance, one binding file per Lua module |
+| Cloud scripts | `core/cloud_scripts.*`, `core/bindings/lua_cloud.cpp`, `tools/cloud_catalog.py` | Script library from the `verified` branch (catalog + SHA-256 verified install into `scripts/cloud/`) — see [CLOUD_SCRIPTS.md](CLOUD_SCRIPTS.md) |
 | Game access | `core/native_carx.*` | Hooks in `NativeCarX.dll` (car create/destroy, render matrices, tyres, telemetry) |
 | Unity access | `core/unity_bridge.*` (4.7k lines) | Hooks `ExecutePlayerLoop` in `UnityPlayer.dll` (**hard-coded offsets**), transforms, raycasts, spawn/teleport, ghost cars, main-thread task queue |
 | ECS / DOTS | `core/ecs_collision.*` | Selective ghosting (anti wrong-way), DOTS raycast/spherecast |
@@ -80,7 +82,7 @@ StartFeatures()  ("phase B" — everything that touches the game or runs scripts
 | **Render thread** (whoever calls `Present`) | `Hooked_Present`: `InputManager::Update`, `CarFX::OnNewFrame`, ImGui frame, `LuaEngine::OnRender` (→ `on_update`, `on_fixed_update`, `on_render`), `UiSchema::RenderAll`, `Updater::RenderUI`, `SafeMode::RenderUI`; also **applies pending Lua reloads** | May differ from the Unity main thread |
 | **Window thread** | `Hooked_WndProc`: key events → `InputManager`, `LuaEngine::OnKeyEvent` (`events.on_key`), menu toggle (F4/Insert) | Ignores auto-repeat; no script hotkeys while ImGui wants text input |
 | **FileWatcher** | polls `scripts/*.lua` mtimes every 500 ms | Only *schedules* a reload (debounced 300 ms) |
-| **DevPipe** | named pipe server | Commands are executed on the render thread in `BeforeNewFrame` |
+| **DevPipe** | named pipe server (**off by default**, `[dev] pipe=1`) | Commands are executed on the render thread in `BeforeNewFrame` |
 | **Updater worker** | GitHub HTTP, download, stage files | |
 | **SafeMode StartThread** | `StartFeatures()` when leaving Safe mode | |
 | D3D draw hooks | `CarFX::TryHandleDraw` per draw call | Hot path — keep cheap; re-entrancy guarded by `t_inDrawHook` |
@@ -96,6 +98,9 @@ because panels call into Lua. `InputManager` and `NativeCarX` have their own mut
 * **One Lua state**, created in `LuaEngine::Init`, closed in `LuaEngine::Shutdown`. All access must hold `LuaEngine::Mutex()`.
 * **Never close/re-create the state from inside Lua or from another thread.** Use `LuaEngine::RequestReload()` (exposed as
   `urushi.reload_scripts()`); the render thread performs the reload at the start of `OnRender`. FileWatcher does the same.
+* **The VM is hardened** (`LuaHardening::OpenSafeLibs` instead of `luaL_openlibs`): no `os.execute/io.popen/package/require/dofile/loadfile/debug/string.dump`,
+  text-only `load`, `io.open` only in `urushi_data/` (+ read-only `scripts/`) for `.json .txt .cfg .csv`. Do not widen this; see [SECURITY.md](SECURITY.md).
+* **Native pointers**: push with `PtrRegistry::Push`, read with `PtrRegistry::Arg` — never `lua_touserdata` on script input.
 * **Every C++→Lua call goes through `LuaSandbox::PCall(L, nargs, nres, label, budgetMs)`** (never raw `lua_pcall`):
   wall-clock budget (callbacks/UI 250 ms, script load 8 s, `main.lua` 60 s, eval 5 s) enforced by an instruction-count hook —
   an endless loop becomes the error "script timeout" even if the script wraps it in `pcall`; errors carry a traceback; `label`
@@ -109,7 +114,7 @@ because panels call into Lua. `InputManager` and `NativeCarX` have their own mut
 
 ### Lua globals (registered in `LuaEngine::Init`)
 `carx` (cars, telemetry, tyres, physics, raycast, camera — `bindings/lua_carx.cpp`), `steer`, `carfx`, `replay`, `memory`,
-`updater`, `optimizer`, `urushi` + `ui` + `input` (`bindings/lua_urushi.cpp`), `imgui` (`lua_imgui.cpp`), `events`, `log`.
+`updater`, `cloud`, `optimizer`, `urushi` + `ui` + `input` (`bindings/lua_urushi.cpp`), `imgui` (`lua_imgui.cpp`), `events`, `log`.
 Stability-related `urushi.*`: `get_setting/set_setting(section,key,value)`, `list_scripts()`, `load_script(name)` (sandboxed),
 `reload_scripts()`, `get_last_crash()`, `open_crash_dir()`, `is_safe_mode()`.
 
@@ -118,12 +123,18 @@ Stability-related `urushi.*`: `get_setting/set_setting(section,key,value)`, `lis
 ## 5. Scripts: loading and the script list
 
 `scripts/main.lua` is the only entry point:
-1. `dofile` core modules **always**: `i18n.lua`, `keybinds.lua`.
+1. Loads core modules **always** (via `urushi.load_script`; `dofile` no longer exists): `i18n.lua`, `keybinds.lua`.
 2. Builds the global `urushi_scripts = { list = {...}, dirty = false }`.
 3. For each **built-in** module (`telemetry_hud, ghost_test, teleport_mod, replay_mod, carfx_mod, steer_assist_mod, tires_mod,
    perf_optimizer`) → `urushi.load_script(id)` if enabled (default **on**), errors captured in `entry.status/err`.
-4. Any other `scripts/*.lua` (not reserved) is a **user script**: listed, default **off**.
-5. Loads `system_mod.lua` (System window: language/theme/scale, updater, **Stability**, **Scripts**, keybinds) and `runner.lua`.
+4. Any other `scripts/*.lua` (not reserved) is a **user script**: listed, default **off**, runs **isolated** (own `_ENV`, see below).
+5. Installed cloud scripts (`cloud.installed()`) are loaded isolated too (`cloud.load(id, env)`).
+6. Loads `system_mod.lua` (System window: language/theme/scale, updater, **Stability**, **Scripts**, **Script Library**, keybinds). `runner.lua` only if `[dev] runner=1`.
+
+**Trust tiers**: built-ins are *trusted* (shared real globals). User and cloud scripts are *isolated*: `make_env()` in `main.lua` gives them private
+copies of the API tables without `urushi.set_setting/get_setting/load_script/reload_scripts/list_scripts/open_crash_dir`, without `updater`/`cloud`,
+with `getmetatable` hiding the string metatable, a `load` bound to the private env, and an `io.open` redirected to `urushi_data/<script>/`.
+`include(rel)` loads sibling files of a cloud script.
 
 Enabled flags: `urushi_settings.ini` → `[scripts]` `<id>=0|1`. Toggling in *System → Scripts* sets `urushi_scripts.dirty`; the
 "Reload scripts" button applies it.
@@ -143,7 +154,7 @@ schema table (declarative, `ui_schema`). It uses `T(ru, en)` from `i18n.lua` for
 | `perf_optimizer.lua` | multiplayer physics LOD | `car_sim_optimizer` |
 | `keybinds.lua` | bindings (persist `scripts/keybinds.json`) | `input_manager` |
 | `system_mod.lua` | settings, updater, stability, script list | `urushi_ui`, `updater`, `settings` |
-| `runner.lua` | dev IPC helper for tests | `dev_pipe` |
+| `runner.lua` | dev IPC helper for tests (**opt-in**, `[dev] runner=1`) | `dev_pipe` |
 
 ---
 
@@ -192,5 +203,6 @@ hot-swap DLL). Crash analysis: `urushi_crash/*.txt` first, then `.dmp` (`tools/a
   GraphicsBuffers while CarFX still referenced them (fixed in `c1b419e`) — clear texture/buffer references on scene changes.
 * `Updater` overwrites everything under `scripts/` and `shaders/` from `main` (except `scripts/runner_state.json`); it never
   deletes extra local files. Do not keep personal data in `scripts/` files that exist in the repo.
+* `tools/urushi_dev_mcp.py` needs `[dev] pipe=1` (and `[dev] runner=1` for runner tasks) in `urushi_settings.ini`.
 * Don't call `lua_pcall` directly, don't hold the Lua lock while waiting on other threads, don't reload Lua synchronously.
 * Language/accent are not persisted; only the settings listed in §6 are.

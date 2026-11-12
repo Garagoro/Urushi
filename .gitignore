@@ -37,3 +37,5 @@ Thumbs.db
 urushi_crash/
 urushi_settings.ini
 urushi.prev.log
+urushi_data/
+scripts/cloud/

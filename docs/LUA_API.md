@@ -134,6 +134,12 @@ urushi.register_window({
 
 ---
 
+> **Security (see [SECURITY.md](SECURITY.md)):** the Lua VM has no `os.execute`, `io.popen`, `package`/`require`, `dofile`/`loadfile`, `debug` (only `debug.traceback`),
+> `string.dump` or bytecode loading; `os` is `time/clock/date/difftime`; `io` is `open/type` and `io.open` only reaches `urushi_data/` (`.json .txt .cfg .csv`).
+> User and cloud scripts additionally run in an isolated environment: `urushi.set_setting/get_setting/list_scripts/load_script/reload_scripts/open_crash_dir`,
+> `updater` and `cloud` are not available to them, and `io.open("x.json")` maps to `urushi_data/<script>/x.json`.
+> Native objects (cars, GameObjects, Transforms) are opaque handles; only handles returned by the API are accepted.
+
 ### Settings, Scripts & Stability (`urushi.*`)
 
 | Function | Description |

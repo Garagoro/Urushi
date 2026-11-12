@@ -4,7 +4,8 @@ local T = i18n.t
 local VK_SAVE = 0xDB -- '['
 local VK_TP   = 0xDD -- ']'
 
-local DATA_FILE = "scripts/teleports_data.json"
+local DATA_FILE = "urushi_data/teleports_data.json"      -- scripts may only write inside urushi_data/
+local LEGACY_FILE = "scripts/teleports_data.json"        -- read-only fallback for older installs
 
 local KNOWN_TRACKS = {
     { key = "fuji", name = "Fuji Speedway" },
@@ -236,7 +237,7 @@ local function json_decode(str)
 end
 
 local function load_from_disk()
-    local f = io.open(DATA_FILE, "r")
+    local f = io.open(DATA_FILE, "r") or io.open(LEGACY_FILE, "r")
     if not f then return end
     local content = f:read("*a")
     f:close()

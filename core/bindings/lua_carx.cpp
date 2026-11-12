@@ -1,4 +1,5 @@
 #include "lua_carx.h"
+#include "../ptr_registry.h"
 #include "../native_carx.h"
 #include "../car_sim_optimizer.h"
 #include "../unity_bridge.h"
@@ -24,7 +25,7 @@ static void PushMatrixField(lua_State* L, const char* fieldName, const std::arra
 static void PushCarTelemetry(lua_State* L, const CarTelemetry& car) {
     lua_newtable(L);
 
-    lua_pushlightuserdata(L, car.carPtr);
+    PtrRegistry::Push(L, car.carPtr);
     lua_setfield(L, -2, "ptr");
 
     lua_pushboolean(L, car.isLocalPlayer);
@@ -150,7 +151,7 @@ int LuaCarX::GetPlayerList(lua_State* L) {
         lua_newtable(L);
         lua_pushinteger(L, static_cast<lua_Integer>(i + 1));
         lua_setfield(L, -2, "index");
-        lua_pushlightuserdata(L, list[i].carPtr);
+        PtrRegistry::Push(L, list[i].carPtr);
         lua_setfield(L, -2, "ptr");
         lua_pushstring(L, list[i].unityName.c_str());
         lua_setfield(L, -2, "unity_name");
@@ -196,7 +197,7 @@ int LuaCarX::SetCarRenderMatrix(lua_State* L) {
         return 1;
     }
 
-    void* carPtr = lua_touserdata(L, 1);
+    void* carPtr = PtrRegistry::Arg(L, 1);
     float matrix[16];
     for (int i = 0; i < 16; ++i) {
         lua_rawgeti(L, 2, i + 1);
@@ -214,7 +215,7 @@ int LuaCarX::SetCarActive(lua_State* L) {
         lua_pushboolean(L, false);
         return 1;
     }
-    void* carPtr = lua_touserdata(L, 1);
+    void* carPtr = PtrRegistry::Arg(L, 1);
     bool active = lua_toboolean(L, 2) != 0;
     NativeCarX::SetCarActive(carPtr, active);
     lua_pushboolean(L, true);
@@ -226,7 +227,7 @@ int LuaCarX::SetCarRPM(lua_State* L) {
         lua_pushboolean(L, false);
         return 1;
     }
-    void* carPtr = lua_touserdata(L, 1);
+    void* carPtr = PtrRegistry::Arg(L, 1);
     float rpm = static_cast<float>(lua_tonumber(L, 2));
     NativeCarX::SetCarRPM(carPtr, rpm);
     lua_pushboolean(L, true);
@@ -238,7 +239,7 @@ int LuaCarX::SetCarGear(lua_State* L) {
         lua_pushboolean(L, false);
         return 1;
     }
-    void* carPtr = lua_touserdata(L, 1);
+    void* carPtr = PtrRegistry::Arg(L, 1);
     int gear = static_cast<int>(lua_tointeger(L, 2));
     NativeCarX::SetCarGear(carPtr, gear);
     lua_pushboolean(L, true);
@@ -251,7 +252,7 @@ int LuaCarX::SpawnCar(lua_State* L) {
         lua_pushnil(L);
         return 1;
     }
-    lua_pushlightuserdata(L, car);
+    PtrRegistry::Push(L, car);
     return 1;
 }
 
@@ -260,7 +261,7 @@ int LuaCarX::DestroyCar(lua_State* L) {
         lua_pushboolean(L, false);
         return 1;
     }
-    void* carPtr = lua_touserdata(L, 1);
+    void* carPtr = PtrRegistry::Arg(L, 1);
     bool ok = NativeCarX::DestroyCar(carPtr);
     lua_pushboolean(L, ok);
     return 1;
@@ -269,7 +270,7 @@ int LuaCarX::DestroyCar(lua_State* L) {
 int LuaCarX::SpawnGhost(lua_State* L) {
     void* ghost = UnityBridge::SpawnGhostVisual();
     if (ghost) {
-        lua_pushlightuserdata(L, ghost);
+        PtrRegistry::Push(L, ghost);
         return 1;
     }
     if (UnityBridge::HasGhostVisual()) {
@@ -298,7 +299,7 @@ int LuaCarX::GetGhost(lua_State* L) {
         lua_pushnil(L);
         return 1;
     }
-    lua_pushlightuserdata(L, ghost);
+    PtrRegistry::Push(L, ghost);
     return 1;
 }
 
@@ -394,13 +395,13 @@ int LuaCarX::SetCarGhostMode(lua_State* L) {
     uintptr_t carPtr = 0;
 
     if (lua_islightuserdata(L, 1)) {
-        carPtr = reinterpret_cast<uintptr_t>(lua_touserdata(L, 1));
+        carPtr = reinterpret_cast<uintptr_t>(PtrRegistry::Arg(L, 1));
         unityName = UnityBridge::LookupCarUnityName(reinterpret_cast<void*>(carPtr));
     } else if (lua_isstring(L, 1)) {
         unityName = lua_tostring(L, 1);
     } else if (lua_istable(L, 1)) {
         lua_getfield(L, 1, "ptr");
-        if (lua_islightuserdata(L, -1)) carPtr = reinterpret_cast<uintptr_t>(lua_touserdata(L, -1));
+        if (lua_islightuserdata(L, -1)) carPtr = reinterpret_cast<uintptr_t>(PtrRegistry::Arg(L, -1));
         lua_pop(L, 1);
 
         lua_getfield(L, 1, "unity_name");
@@ -671,7 +672,7 @@ int LuaCarX::TeleportRigidBody(lua_State* L) {
 int LuaCarX::GetVelocity(lua_State* L) {
     void* car = nullptr;
     if (lua_islightuserdata(L, 1)) {
-        car = lua_touserdata(L, 1);
+        car = PtrRegistry::Arg(L, 1);
     } else {
         car = NativeCarX::GetPlayerCarPtr();
     }
@@ -695,7 +696,7 @@ int LuaCarX::SetVelocity(lua_State* L) {
     void* car = nullptr;
     int argStart = 1;
     if (lua_islightuserdata(L, 1)) {
-        car = lua_touserdata(L, 1);
+        car = PtrRegistry::Arg(L, 1);
         argStart = 2;
     } else {
         car = NativeCarX::GetPlayerCarPtr();
@@ -760,7 +761,7 @@ int LuaCarX::SetVelocity(lua_State* L) {
 int LuaCarX::GetAngularVelocity(lua_State* L) {
     void* car = nullptr;
     if (lua_islightuserdata(L, 1)) {
-        car = lua_touserdata(L, 1);
+        car = PtrRegistry::Arg(L, 1);
     } else {
         car = NativeCarX::GetPlayerCarPtr();
     }
@@ -784,7 +785,7 @@ int LuaCarX::SetAngularVelocity(lua_State* L) {
     void* car = nullptr;
     int argStart = 1;
     if (lua_islightuserdata(L, 1)) {
-        car = lua_touserdata(L, 1);
+        car = PtrRegistry::Arg(L, 1);
         argStart = 2;
     } else {
         car = NativeCarX::GetPlayerCarPtr();
@@ -849,7 +850,7 @@ int LuaCarX::SetAngularVelocity(lua_State* L) {
 int LuaCarX::ResetCar(lua_State* L) {
     void* car = nullptr;
     if (lua_islightuserdata(L, 1)) {
-        car = lua_touserdata(L, 1);
+        car = PtrRegistry::Arg(L, 1);
     } else {
         car = NativeCarX::GetPlayerCarPtr();
     }
@@ -890,7 +891,7 @@ int LuaCarX::ResetCar(lua_State* L) {
 int LuaCarX::GetDriftInfo(lua_State* L) {
     void* car = nullptr;
     if (lua_islightuserdata(L, 1)) {
-        car = lua_touserdata(L, 1);
+        car = PtrRegistry::Arg(L, 1);
     } else {
         car = NativeCarX::GetPlayerCarPtr();
     }
@@ -1156,7 +1157,7 @@ int LuaCarX::GetNoTireWear(lua_State* L) {
 int LuaCarX::RepairCar(lua_State* L) {
     void* car = nullptr;
     if (lua_islightuserdata(L, 1)) {
-        car = lua_touserdata(L, 1);
+        car = PtrRegistry::Arg(L, 1);
     }
     NativeCarX::ResetCarDamage(car);
     NativeCarX::ResetTireWear(car);
@@ -1168,7 +1169,7 @@ int LuaCarX::RepairCar(lua_State* L) {
 int LuaCarX::ResetTireWear(lua_State* L) {
     void* car = nullptr;
     if (lua_islightuserdata(L, 1)) {
-        car = lua_touserdata(L, 1);
+        car = PtrRegistry::Arg(L, 1);
     }
     NativeCarX::ResetTireWear(car);
     lua_pushboolean(L, true);

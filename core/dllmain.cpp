@@ -16,6 +16,7 @@
 #include "settings.h"
 #include "crash_handler.h"
 #include "safe_mode.h"
+#include "cloud_scripts.h"
 
 #pragma comment(lib, "shlwapi.lib")
 
@@ -71,6 +72,7 @@ extern "C" __declspec(dllexport) void ScriptHook_Unload() {
         FileWatcher::Stop();
         DevPipe::Shutdown();
         Updater::Shutdown();
+        CloudScripts::Shutdown();
         LuaEngine::Shutdown();
         CarSimOptimizer::Shutdown();
     }
@@ -108,6 +110,7 @@ static void StartFeatures() {
             Logger::Warn("CarSimOptimizer failed initial hook, will retry...");
         }
 
+        CloudScripts::Init(g_exeDir);   // before Lua: main.lua loads installed cloud scripts
         ReplayEngine::Init(replaysDir);
         LuaEngine::Init(scriptsDir);
 
@@ -116,8 +119,13 @@ static void StartFeatures() {
             LuaEngine::OnScriptModified(filename);
         });
 
-        // Start named pipe server for dev MCP (backbuffer shots, UI inspection, reload)
-        DevPipe::Init(g_exeDir);
+        // Dev pipe (screenshots, Lua eval, reload) is a remote-control channel for local tools: OFF unless
+        // urushi_settings.ini has [dev] pipe=1 (needed by tools/urushi_dev_mcp.py)
+        if (Settings::GetBool("dev", "pipe", false)) {
+            DevPipe::Init(g_exeDir);
+        } else {
+            Logger::Info("DevPipe disabled ([dev] pipe=0).");
+        }
 
         // Start async auto-update check against GitHub repository (Garagoro/Urushi)
         Updater::Init(g_exeDir, g_module);
