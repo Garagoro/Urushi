@@ -139,6 +139,7 @@ urushi.register_window({
 > User and cloud scripts additionally run in an isolated environment: `urushi.set_setting/get_setting/list_scripts/load_script/reload_scripts/open_crash_dir`,
 > `updater` and `cloud` are not available to them, and `io.open("x.json")` maps to `urushi_data/<script>/x.json`.
 > Native objects (cars, GameObjects, Transforms) are opaque handles; only handles returned by the API are accepted.
+> Fair play: isolated scripts cannot change vehicle physics (`carx.set_velocity`, `set_angular_velocity`, `set_tyre_config`, `reset_tyre_defaults`, `set_no_tire_wear`, `reset_tire_wear`, `optimizer.set_config/reset_defaults`, `steer_assist.set_config/set_recommended/set_vanilla`); they raise an error. Reading stays available.
 
 ### Config (`config`, `scripts/config.lua`)
 

@@ -21,6 +21,7 @@ cannot download anything, cannot create runnable files, and cannot reach other p
 | Aim native calls at forged pointers (memory write primitive) | Cars/Unity objects are light userdata that C++ handed out; every native function validates them against `PtrRegistry` (`core/ptr_registry.h`). `memory.read_ptr` returns a plain integer |
 | Write replay files outside `replays/` or with a runnable extension | Replay names are reduced to `<plain name>.cxr2` (`SanitizeReplayFileName`) |
 | Read / compile arbitrary files through CarFX | `carfx.load` / `carfx.set_tex` only accept files inside `shaders/`; HLSL `#include` is confined to `shaders/` too |
+| Change vehicle physics (unfair mods) | Isolated scripts cannot call `carx.set_velocity/set_angular_velocity/set_tyre_config/reset_tyre_defaults/set_no_tire_wear/reset_tire_wear`, `optimizer.set_config/reset_defaults`, `steer_assist.set_config/set_recommended/set_vanilla` (they raise an error; reading is fine). Teleport and damage toggles stay allowed. Developer override: `[dev] allow_script_physics=1` |
 | Hijack other scripts | Isolated scripts run in their own environment with private copies of the API tables; the string metatable is hidden; `load` is bound to the private environment |
 
 ### Trust tiers (`scripts/main.lua`)

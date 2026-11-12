@@ -33,6 +33,16 @@ local LUA_LIBS = { "string", "table", "math", "utf8", "coroutine", "os", "debug"
 local API_MODULES = { "carx", "steer_assist", "carfx", "replay", "memory", "unity", "optimizer", "ui", "input", "imgui", "gui",
                       "events", "log", "i18n", "keybinds" }
 
+-- Fair play: isolated scripts (user / cloud) may READ everything but may not CHANGE vehicle physics.
+-- Built-in modules (tires, steering assist, FPS optimizer) are unaffected. Teleport and damage toggles stay available.
+local PHYSICS_BLOCKED = {
+    carx = { "set_velocity", "set_angular_velocity", "set_tyre_config", "reset_tyre_defaults",
+             "set_no_tire_wear", "reset_tire_wear" },
+    optimizer = { "set_config", "reset_defaults" },
+    steer_assist = { "set_config", "set_recommended", "set_vanilla" },
+}
+local ALLOW_SCRIPT_PHYSICS = (urushi.get_setting("dev", "allow_script_physics", "0") == "1")   -- developer override
+
 local function make_env(script_id, cloud_id)
     local env = {}
     for _, n in ipairs(LUA_FUNCS) do env[n] = _G[n] end
@@ -45,6 +55,18 @@ local function make_env(script_id, cloud_id)
         if not PRIVILEGED[k] then pub[k] = v end
     end
     env.urushi = pub
+    if not ALLOW_SCRIPT_PHYSICS then
+        for module, names in pairs(PHYSICS_BLOCKED) do
+            local m = env[module]
+            if m then
+                for _, fname in ipairs(names) do
+                    m[fname] = function()
+                        error(module .. "." .. fname .. " is blocked: scripts may not change vehicle physics", 2)
+                    end
+                end
+            end
+        end
+    end
     env._G = env
     if config and config.for_script then env.config = config.for_script(script_id) end   -- own section "script:<id>"
     if cloud_id then
