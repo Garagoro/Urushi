@@ -118,9 +118,13 @@ bool s_singleTabMode = false;
 // ---- dock order (user drag & drop), stored in urushi_dock.ini next to urushi_settings.ini ----
 constexpr int kDockMaxVisible = 12;   // more entries than this -> the list scrolls
 bool s_dockEdit = false;
-bool s_dockOrderDirty = false;
 bool s_dockOrderLoaded = false;
 std::vector<std::string> s_dockOrder;
+// drag & drop state (rows slide while one is carried by the cursor)
+std::string s_dragId;                       // id of the row being carried ("" = none)
+ImVec2 s_dragPos(0.0f, 0.0f);               // smoothed top-left of the carried row (screen px)
+ImVec2 s_dragGrab(0.0f, 0.0f);              // cursor offset inside the carried row
+std::unordered_map<std::string, ImVec2> s_rowOff;   // per-row visual offset from its natural slot
 
 std::wstring DockOrderPath() {
     const std::wstring dir = Settings::GameDir();
@@ -463,8 +467,10 @@ static void RenderDock(bool menuOpen) {
         dl->AddLine(ImVec2(hPos.x, hPos.y + 29.0f * S), ImVec2(hPos.x + innerW, hPos.y + 29.0f * S), kColHairline);
         ImGui::Dummy(ImVec2(innerW, 4.0f * S));
 
-        // 2. Clean panel switcher buttons (no scroll container, no extra footer clutter)
+        // 2. Rows. Hit-testing uses the natural layout; visuals are drawn at animated offsets, so rows
+        //    slide out of the way while one is carried by the cursor and settle into the nearest slot on release.
         const float listW = scrolling ? innerW - 8.0f * S : innerW;   // leave room for the scrollbar
+        const float step = btnH + btnGap;
         if (scrolling) {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
             ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, 4.0f * S);
@@ -472,88 +478,166 @@ static void RenderDock(bool menuOpen) {
             ImGui::BeginChild("##dockscroll", ImVec2(innerW, listH), false, ImGuiWindowFlags_NoBackground);
             dl = ImGui::GetWindowDrawList();
         }
-        int swapTarget = -1, swapFrom = -1;
-        for (size_t i = 0; i < s_windows.size(); ++i) {
-            WindowState& w = s_windows[i];
-            ImVec2 rPos = ImGui::GetCursorScreenPos();
+        const ImVec2 listTop = ImGui::GetCursorScreenPos();            // natural position of row 0 (scroll included)
+        const int rowCount = static_cast<int>(s_windows.size());
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
 
-            ImGui::PushID(w.id.c_str());
-            bool clicked = ImGui::InvisibleButton("##dockbtn", ImVec2(listW, btnH));
-            bool hovered = ImGui::IsItemHovered();
-            ImGuiID animKey = ImGui::GetItemID();
-            ImGui::PopID();
-
-            float hoverT = AnimateTowards(animKey, hovered ? 1.0f : 0.0f, 20.0f);
+        auto drawRow = [&](ImDrawList* d, ImVec2 rPos, const WindowState& w, float hoverT, float lift) {
             ImU32 bgCol = w.open
                 ? LerpCol(IM_COL32(255, 255, 255, 18), IM_COL32(255, 255, 255, 26), hoverT)
                 : LerpCol(IM_COL32(255, 255, 255, 0),  IM_COL32(255, 255, 255, 14), hoverT);
-            if ((bgCol >> IM_COL32_A_SHIFT) > 0) {
-                dl->AddRectFilled(rPos, ImVec2(rPos.x + listW, rPos.y + btnH), bgCol, 8.0f * S);
+            if (lift > 0.0f) {
+                // carried row: shadow + solid card + accent outline
+                const ImVec2 a0(rPos.x - 2.0f * S, rPos.y - 2.0f * S), a1(rPos.x + listW + 2.0f * S, rPos.y + btnH + 2.0f * S);
+                d->AddRectFilled(ImVec2(a0.x, a0.y + 5.0f * S), ImVec2(a1.x, a1.y + 5.0f * S), IM_COL32(0, 0, 0, static_cast<int>(90 * lift)), 10.0f * S);
+                d->AddRectFilled(a0, a1, IM_COL32(30, 30, 38, 250), 10.0f * S);
+                d->AddRect(a0, a1, UrushiUI::GetAccentU32(), 10.0f * S, 0, 1.2f * S);
+            } else if ((bgCol >> IM_COL32_A_SHIFT) > 0) {
+                d->AddRectFilled(rPos, ImVec2(rPos.x + listW, rPos.y + btnH), bgCol, 8.0f * S);
             }
-
             if (w.open) {
-                dl->AddRectFilled(
-                    ImVec2(rPos.x + 2.0f * S, rPos.y + 7.0f * S),
-                    ImVec2(rPos.x + 4.5f * S, rPos.y + btnH - 7.0f * S),
-                    UrushiUI::GetAccentU32(), 2.0f * S);
+                d->AddRectFilled(ImVec2(rPos.x + 2.0f * S, rPos.y + 7.0f * S),
+                                 ImVec2(rPos.x + 4.5f * S, rPos.y + btnH - 7.0f * S), UrushiUI::GetAccentU32(), 2.0f * S);
             }
+            const ImU32 fgCol = (w.open || lift > 0.0f) ? kColTextPrimary : LerpCol(kColTextSecondary, kColTextPrimary, hoverT);
+            DrawModuleIcon(d, ImVec2(rPos.x + 18.0f * S, rPos.y + btnH * 0.5f), w.icon, fgCol, S);
 
-            ImU32 fgCol = w.open ? kColTextPrimary : LerpCol(kColTextSecondary, kColTextPrimary, hoverT);
-            DrawModuleIcon(dl, ImVec2(rPos.x + 18.0f * S, rPos.y + btnH * 0.5f), w.icon, fgCol, S);
-
-            float rightX = rPos.x + listW - 10.0f * S;
+            const float rightX = rPos.x + listW - 10.0f * S;
             float titleClipMaxX = rightX - 10.0f * S;
             if (w.pinned) titleClipMaxX -= 28.0f * S;
-
-            ImVec2 txtSz = ImGui::CalcTextSize(w.title.c_str());
-            dl->PushClipRect(ImVec2(rPos.x + 33.0f * S, rPos.y), ImVec2(std::max(rPos.x + 40.0f * S, titleClipMaxX), rPos.y + btnH), true);
-            dl->AddText(ImVec2(rPos.x + 35.0f * S, rPos.y + (btnH - txtSz.y) * 0.5f), fgCol, w.title.c_str());
-            dl->PopClipRect();
-
-            ImU32 dotCol = w.open ? UrushiUI::GetAccentU32() : IM_COL32(255, 255, 255, 32);
-            dl->AddCircleFilled(ImVec2(rightX - 3.0f * S, rPos.y + btnH * 0.5f), 3.0f * S, dotCol);
-            if (w.pinned) {
-                if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
-                ImVec2 pinSz = ImGui::CalcTextSize("PIN");
-                dl->AddText(ImVec2(rightX - 14.0f * S - pinSz.x, rPos.y + (btnH - pinSz.y) * 0.5f), kColTextMuted, "PIN");
-                if (AppFonts::Small) ImGui::PopFont();
-            }
+            const ImVec2 txtSz = ImGui::CalcTextSize(w.title.c_str());
+            d->PushClipRect(ImVec2(rPos.x + 33.0f * S, rPos.y - 4.0f * S), ImVec2(std::max(rPos.x + 40.0f * S, titleClipMaxX), rPos.y + btnH + 4.0f * S), true);
+            d->AddText(ImVec2(rPos.x + 35.0f * S, rPos.y + (btnH - txtSz.y) * 0.5f), fgCol, w.title.c_str());
+            d->PopClipRect();
 
             if (s_dockEdit) {
-                // grip bars on the right: this row can be dragged
-                for (int k = 0; k < 3; ++k) {
-                    const float y = rPos.y + btnH * 0.5f + (k - 1) * 4.5f * S;
-                    dl->AddLine(ImVec2(rightX - 8.0f * S, y), ImVec2(rightX + 2.0f * S, y), kColTextMuted, 1.4f * S);
+                for (int k = 0; k < 3; ++k) {   // grip bars: the row can be picked up
+                    const float y = rPos.y + btnH * 0.5f + (k - 1) * 4.0f * S;
+                    d->AddLine(ImVec2(rightX - 8.0f * S, y), ImVec2(rightX + 2.0f * S, y),
+                               lift > 0.0f ? UrushiUI::GetAccentU32() : kColTextMuted, 1.4f * S);
                 }
-                if (ImGui::IsItemActive() && !ImGui::IsItemHovered()) {
-                    const int n = static_cast<int>(i) + (ImGui::GetMouseDragDelta(0).y < 0.0f ? -1 : 1);
-                    if (n >= 0 && n < static_cast<int>(s_windows.size())) { swapFrom = static_cast<int>(i); swapTarget = n; }
+            } else {
+                const ImU32 dotCol = w.open ? UrushiUI::GetAccentU32() : IM_COL32(255, 255, 255, 32);
+                d->AddCircleFilled(ImVec2(rightX - 3.0f * S, rPos.y + btnH * 0.5f), 3.0f * S, dotCol);
+                if (w.pinned) {
+                    if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
+                    const ImVec2 pinSz = ImGui::CalcTextSize("PIN");
+                    d->AddText(ImVec2(rightX - 14.0f * S - pinSz.x, rPos.y + (btnH - pinSz.y) * 0.5f), kColTextMuted, "PIN");
+                    if (AppFonts::Small) ImGui::PopFont();
                 }
-            } else if (clicked) {
+            }
+        };
+
+        // carried row: where it is in the list, and where it would land
+        int dragIdx = -1;
+        if (!s_dragId.empty()) {
+            for (int i = 0; i < rowCount; ++i) if (s_windows[i].id == s_dragId) dragIdx = i;
+            if (dragIdx < 0 || !s_dockEdit) { s_dragId.clear(); dragIdx = -1; }
+        }
+        int insertIdx = dragIdx;
+        if (dragIdx >= 0) {
+            const float k = 1.0f - std::exp(-30.0f * dt);   // magnet: the row chases the cursor
+            s_dragPos.x += (mouse.x - s_dragGrab.x - s_dragPos.x) * k;
+            s_dragPos.y += (mouse.y - s_dragGrab.y - s_dragPos.y) * k;
+            insertIdx = std::clamp(static_cast<int>(std::floor((s_dragPos.y - listTop.y) / step + 0.5f)), 0, rowCount - 1);
+            if (scrolling) {   // edge auto-scroll while carrying
+                const float top = ImGui::GetWindowPos().y, bot = top + listH;
+                if (mouse.y < top + 26.0f * S) ImGui::SetScrollY(ImGui::GetScrollY() - 420.0f * S * dt);
+                else if (mouse.y > bot - 26.0f * S) ImGui::SetScrollY(ImGui::GetScrollY() + 420.0f * S * dt);
+            }
+        }
+
+        const float animK = 1.0f - std::exp(-18.0f * dt);
+        for (int i = 0; i < rowCount; ++i) {
+            WindowState& w = s_windows[i];
+            const ImVec2 nat = ImGui::GetCursorScreenPos();
+
+            ImGui::PushID(w.id.c_str());
+            const bool clicked = ImGui::InvisibleButton("##dockbtn", ImVec2(listW, btnH));
+            const bool hovered = ImGui::IsItemHovered();
+            const bool active = ImGui::IsItemActive();
+            const ImGuiID animKey = ImGui::GetItemID();
+            ImGui::PopID();
+
+            ImVec2& off = s_rowOff[w.id];
+            if (s_dockEdit && s_dragId.empty() && active && ImGui::IsMouseDragging(0, 4.0f * S)) {
+                const ImVec2 cp = ImGui::GetIO().MouseClickedPos[0];
+                s_dragId = w.id;
+                s_dragPos = ImVec2(nat.x + off.x, nat.y + off.y);
+                s_dragGrab = ImVec2(cp.x - s_dragPos.x, cp.y - s_dragPos.y);
+                dragIdx = i;
+                insertIdx = i;
+            }
+
+            ImVec2 tgt(0.0f, 0.0f);
+            if (dragIdx >= 0 && i != dragIdx) {
+                int disp = (i > dragIdx) ? i - 1 : i;   // index with the carried row taken out
+                if (disp >= insertIdx) ++disp;          // ...and a gap opened at the landing slot
+                tgt.y = static_cast<float>(disp - i) * step;
+            }
+            off.x += (tgt.x - off.x) * animK;
+            off.y += (tgt.y - off.y) * animK;
+            if (std::fabs(off.x - tgt.x) < 0.2f) off.x = tgt.x;
+            if (std::fabs(off.y - tgt.y) < 0.2f) off.y = tgt.y;
+
+            const float hoverT = AnimateTowards(animKey, (hovered && dragIdx < 0) ? 1.0f : 0.0f, 20.0f);
+            if (i == dragIdx) {
+                // landing slot marker (the card itself is drawn on top of everything below)
+                const ImVec2 sp(nat.x, listTop.y + static_cast<float>(insertIdx) * step);
+                dl->AddRectFilled(sp, ImVec2(sp.x + listW, sp.y + btnH), IM_COL32(255, 255, 255, 10), 8.0f * S);
+                dl->AddRect(sp, ImVec2(sp.x + listW, sp.y + btnH), UrushiUI::GetAccentU32(), 8.0f * S, 0, 1.0f * S);
+            } else {
+                drawRow(dl, ImVec2(nat.x + off.x, nat.y + off.y), w, hoverT, 0.0f);
+            }
+
+            if (!s_dockEdit && clicked) {
                 w.open = !w.open;
                 if (w.open) w.openAnim = 0.0f;
             }
         }
-        if (swapTarget >= 0) {
-            std::swap(s_windows[swapFrom], s_windows[swapTarget]);
-            ImGui::ResetMouseDragDelta(0);
-            s_dockOrderDirty = true;
+
+        if (dragIdx >= 0) {
+            // the carried card floats above everything (may leave the dock)
+            drawRow(ImGui::GetForegroundDrawList(), s_dragPos, s_windows[dragIdx], 1.0f, 1.0f);
+
+            if (!ImGui::IsMouseDown(0)) {
+                // release: commit the nearest slot; every row keeps its current screen position and glides into place
+                const int from = dragIdx, to = insertIdx;
+                std::vector<int> newIndex(rowCount);
+                for (int i = 0; i < rowCount; ++i) {
+                    int ni = i;
+                    if (i == from) ni = to;
+                    else if (from < to && i > from && i <= to) ni = i - 1;
+                    else if (from > to && i >= to && i < from) ni = i + 1;
+                    newIndex[i] = ni;
+                }
+                for (int i = 0; i < rowCount; ++i) {
+                    ImVec2& o = s_rowOff[s_windows[i].id];
+                    if (i == from) {
+                        o = ImVec2(s_dragPos.x - listTop.x, s_dragPos.y - (listTop.y + static_cast<float>(to) * step));
+                    } else {
+                        o.y += static_cast<float>(i - newIndex[i]) * step;
+                    }
+                }
+                WindowState moved = std::move(s_windows[from]);
+                s_windows.erase(s_windows.begin() + from);
+                s_windows.insert(s_windows.begin() + to, std::move(moved));
+                s_dragId.clear();
+
+                s_dockOrder.clear();
+                for (const auto& w2 : s_windows) s_dockOrder.push_back(w2.id);
+                const std::wstring path = DockOrderPath();
+                if (!path.empty()) {
+                    WritePrivateProfileStringW(L"order", L"count", std::to_wstring(s_dockOrder.size()).c_str(), path.c_str());
+                    for (size_t k = 0; k < s_dockOrder.size(); ++k)
+                        WritePrivateProfileStringW(L"order", std::to_wstring(k).c_str(), Logger::ToWide(s_dockOrder[k]).c_str(), path.c_str());
+                }
+            }
         }
         if (scrolling) {
             ImGui::EndChild();
             ImGui::PopStyleColor();
             ImGui::PopStyleVar(2);
-        }
-        if (s_dockOrderDirty && !ImGui::IsMouseDown(0)) {   // drag finished: persist
-            s_dockOrderDirty = false;
-            s_dockOrder.clear();
-            for (const auto& w2 : s_windows) s_dockOrder.push_back(w2.id);
-            const std::wstring path = DockOrderPath();
-            if (!path.empty()) {
-                WritePrivateProfileStringW(L"order", L"count", std::to_wstring(s_dockOrder.size()).c_str(), path.c_str());
-                for (size_t k = 0; k < s_dockOrder.size(); ++k)
-                    WritePrivateProfileStringW(L"order", std::to_wstring(k).c_str(), Logger::ToWide(s_dockOrder[k]).c_str(), path.c_str());
-            }
         }
     }
     ImGui::End();
