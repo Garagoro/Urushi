@@ -1,0 +1,10 @@
+{
+  "id": "hello_world",
+  "name": "Hello World",
+  "name_ru": "Привет, мир",
+  "author": "Garagoro",
+  "version": "1.0.0",
+  "description": "Minimal example of a cloud script: a window, a sibling file via include() and a saved counter.",
+  "description_ru": "Минимальный пример cloud-скрипта: окно, подключаемый файл через include() и сохраняемый счётчик.",
+  "min_urushi": "0.2.0"
+}

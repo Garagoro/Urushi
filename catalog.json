@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "scripts": [
+    {
+      "id": "hello_world",
+      "name": "Hello World",
+      "name_ru": "Привет, мир",
+      "author": "Garagoro",
+      "version": "1.0.0",
+      "description": "Minimal example of a cloud script: a window, a sibling file via include() and a saved counter.",
+      "description_ru": "Минимальный пример cloud-скрипта: окно, подключаемый файл через include() и сохраняемый счётчик.",
+      "min_urushi": "0.2.0",
+      "files": [
+        {
+          "path": "init.lua",
+          "sha256": "621812de9063c71a520f250da5c25c55d41a757b4da1aea82f4c6860b3f1d432"
+        },
+        {
+          "path": "lib/greeting.lua",
+          "sha256": "cc8ad919d9e4a21e4791fb35ce8e032d676e0fd144693e1f034364a5f00aefe6"
+        }
+      ]
+    }
+  ]
+}
