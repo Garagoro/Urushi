@@ -1,3 +1,3 @@
-version=0.2.1
-link_time=1794447188
-notes=Renamed core DLL to urushi.dll with gamepad keybinds
+version=0.3.0
+link_time=1794503511
+notes=Safe mode, crash reports, Lua sandbox and hardening, script manager, cloud script library, JSON config, input fixes
