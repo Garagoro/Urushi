@@ -140,6 +140,23 @@ urushi.register_window({
 > `updater` and `cloud` are not available to them, and `io.open("x.json")` maps to `urushi_data/<script>/x.json`.
 > Native objects (cars, GameObjects, Transforms) are opaque handles; only handles returned by the API are accepted.
 
+### Config (`config`, `scripts/config.lua`)
+
+One JSON file, `urushi_data/config.json`, with autosave (~2 s after the last change). Intentionally minimal: presets, profiles, per-car configs or
+import/export are meant to be built on top of this module (or by replacing the file).
+
+| Function | Description |
+| :--- | :--- |
+| `config.get(section, key, default)` | Read a value; `default` if missing. |
+| `config.set(section, key, value)` | Write a value (`nil` removes it). Values are JSON types: number, string, boolean, array/object tables. |
+| `config.section(name)` | Copy of all keys of a section. |
+| `config.save()` / `config.reload()` | Write now / re-read from disk. |
+| `config.for_script(id)` | `{ get(key, default), set(key, value), save() }` bound to section `"script:<id>"`. |
+
+Isolated and cloud scripts get `config` already bound to their own section: `config.get("volume", 0.5)`, `config.set("volume", 0.8)`.
+File format: `{ "version": 1, "<section>": { "<key>": value } }`; the last good file is kept as `config.bak.json` and used if `config.json` is corrupt.
+Currently persisted by the core UI: language, accent (+custom colour), UI scale. Pending changes are flushed by *Reload scripts*; a file-watcher reload can lose the last ~2 s.
+
 ### Settings, Scripts & Stability (`urushi.*`)
 
 | Function | Description |

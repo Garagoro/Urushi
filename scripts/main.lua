@@ -14,8 +14,8 @@ local function copy(t)
     return r
 end
 
--- Core modules: always loaded (UI language, keybinds)
-for _, id in ipairs({ "i18n", "keybinds" }) do
+-- Core modules: always loaded (UI language, config, keybinds)
+for _, id in ipairs({ "i18n", "config", "keybinds" }) do
     local ok, err = urushi.load_script(id)
     if not ok then log.error("Core script '" .. id .. "' failed: " .. tostring(err)) end
 end
@@ -46,6 +46,7 @@ local function make_env(script_id, cloud_id)
     end
     env.urushi = pub
     env._G = env
+    if config and config.for_script then env.config = config.for_script(script_id) end   -- own section "script:<id>"
     if cloud_id then
         -- multi-file cloud scripts: load a sibling file from the script's own folder
         env.include = function(rel) return cloud.include(cloud_id, rel, env) end
@@ -94,7 +95,7 @@ local BUILTIN = {
 }
 
 -- Files that are part of the framework and never listed as user scripts
-local RESERVED = { main = true, i18n = true, keybinds = true, system_mod = true, runner = true }
+local RESERVED = { main = true, i18n = true, config = true, keybinds = true, system_mod = true, runner = true }
 for _, b in ipairs(BUILTIN) do RESERVED[b.id] = true end
 
 local function enabled_flag(id, default)

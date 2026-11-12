@@ -123,6 +123,7 @@ local function render_scripts_card()
         end
         if ui.button(T("Перезагрузить скрипты##scr_reload", "Reload scripts##scr_reload"), ui.avail_width(), 30,
                      urushi_scripts.dirty and "primary" or nil) then
+            if config then config.save() end   -- flush pending changes before the Lua state is recreated
             urushi.reload_scripts()
         end
     end)
@@ -182,6 +183,20 @@ local function render_library_card()
     end)
 end
 
+-- ==================== persisted UI preferences (scripts/config.lua -> urushi_data/config.json) ====================
+local function apply_saved_prefs()
+    if not config then return end
+    local lang = config.get("ui", "language")
+    if lang and urushi.set_language then urushi.set_language(lang) end
+    local accent = config.get("ui", "accent")
+    if accent and urushi.set_accent then urushi.set_accent(accent) end
+    local ca = config.get("ui", "custom_accent")
+    if type(ca) == "table" and urushi.set_custom_accent then urushi.set_custom_accent(ca[1] or 1, ca[2] or 1, ca[3] or 1) end
+    local sc = config.get("ui", "scale")
+    if sc and urushi.set_ui_scale then urushi.set_ui_scale(sc) end
+end
+apply_saved_prefs()
+
 local function render_system_window()
     local cur_lang = (urushi.get_language and urushi.get_language()) or "ru"
     local lang_idx = (cur_lang == "en") and 2 or 1
@@ -191,6 +206,7 @@ local function render_system_window()
         local l_ch, new_lang_idx = ui.segmented("sys_lang_seg", lang_idx, { "Русский", "English" })
         if l_ch and urushi.set_language then
             urushi.set_language(new_lang_idx == 2 and "en" or "ru")
+            if config then config.set("ui", "language", new_lang_idx == 2 and "en" or "ru") end
             if i18n and i18n.sync_titles then
                 i18n.sync_titles()
             end
@@ -208,6 +224,7 @@ local function render_system_window()
         if a_ch and ACCENT_KEYS[new_idx] then
             urushi.set_accent(ACCENT_KEYS[new_idx])
             cur_name = ACCENT_KEYS[new_idx]
+            if config then config.set("ui", "accent", cur_name) end
         end
 
         if cur_name == "custom" and ui.color_edit3 and urushi.get_custom_accent and urushi.set_custom_accent then
@@ -215,6 +232,7 @@ local function render_system_window()
             local cch, nr, ng, nb = ui.color_edit3(T("Свой цвет##sys_custom_acc", "Custom Color##sys_custom_acc"), cr, cg, cb)
             if cch then
                 urushi.set_custom_accent(nr, ng, nb)
+                if config then config.set("ui", "custom_accent", { nr, ng, nb }) end
             end
         end
 
@@ -226,6 +244,7 @@ local function render_system_window()
         local s_ch, new_sc_idx = ui.segmented("sys_scale_seg", cur_sc_idx, scale_labels)
         if s_ch and SCALE_VALUES[new_sc_idx] ~= nil and urushi.set_ui_scale then
             urushi.set_ui_scale(SCALE_VALUES[new_sc_idx])
+            if config then config.set("ui", "scale", SCALE_VALUES[new_sc_idx]) end
         end
 
         local eff_pct = math.floor((urushi.get_ui_scale and urushi.get_ui_scale() or 1.0) * 100 + 0.5)

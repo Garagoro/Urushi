@@ -123,7 +123,7 @@ Stability-related `urushi.*`: `get_setting/set_setting(section,key,value)`, `lis
 ## 5. Scripts: loading and the script list
 
 `scripts/main.lua` is the only entry point:
-1. Loads core modules **always** (via `urushi.load_script`; `dofile` no longer exists): `i18n.lua`, `keybinds.lua`.
+1. Loads core modules **always** (via `urushi.load_script`; `dofile` no longer exists): `i18n.lua`, `config.lua`, `keybinds.lua`.
 2. Builds the global `urushi_scripts = { list = {...}, dirty = false }`.
 3. For each **built-in** module (`telemetry_hud, ghost_test, teleport_mod, replay_mod, carfx_mod, steer_assist_mod, tires_mod,
    perf_optimizer`) → `urushi.load_script(id)` if enabled (default **on**), errors captured in `entry.status/err`.
@@ -152,7 +152,8 @@ schema table (declarative, `ui_schema`). It uses `T(ru, en)` from `i18n.lua` for
 | `steer_assist_mod.lua` | 155° steering fix UI | `steer_assist` |
 | `tires_mod.lua` | tyre wear/temp/pressure, damage toggle | `native_carx` TyreConfig, `car_sim_optimizer` |
 | `perf_optimizer.lua` | multiplayer physics LOD | `car_sim_optimizer` |
-| `keybinds.lua` | bindings (persist `scripts/keybinds.json`) | `input_manager` |
+| `config.lua` | the single JSON config (`urushi_data/config.json`) with autosave; `config.get/set/for_script` | — (pure Lua) |
+| `keybinds.lua` | bindings (persist `urushi_data/keybinds.json`) | `input_manager` |
 | `system_mod.lua` | settings, updater, stability, script list | `urushi_ui`, `updater`, `settings` |
 | `runner.lua` | dev IPC helper for tests (**opt-in**, `[dev] runner=1`) | `dev_pipe` |
 
@@ -205,4 +206,4 @@ hot-swap DLL). Crash analysis: `urushi_crash/*.txt` first, then `.dmp` (`tools/a
   deletes extra local files. Do not keep personal data in `scripts/` files that exist in the repo.
 * `tools/urushi_dev_mcp.py` needs `[dev] pipe=1` (and `[dev] runner=1` for runner tasks) in `urushi_settings.ini`.
 * Don't call `lua_pcall` directly, don't hold the Lua lock while waiting on other threads, don't reload Lua synchronously.
-* Language/accent are not persisted; only the settings listed in §6 are.
+* UI language/accent/scale persist through `scripts/config.lua` (`urushi_data/config.json`); other modules do not store settings yet (use `config.get/set`).
