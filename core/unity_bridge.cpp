@@ -497,6 +497,23 @@ static void* SafeIdToObjectSEH(uintptr_t unityBase, int32_t id) {
     }
 }
 
+// Which internals group a material belongs to (0 = not an internal: body, glass, shadow proxy).
+static uint32_t InternalsPartOfMaterial(const char* name) {
+    char l[64] = {};
+    size_t n = 0;
+    for (; name[n] && n + 1 < sizeof(l); ++n) l[n] = static_cast<char>(tolower(static_cast<unsigned char>(name[n])));
+    auto has = [&](const char* s) { return strstr(l, s) != nullptr; };
+    if (has("car_body") || has("car_glass") || has("shadowcaster")) return 0;
+    if (has("rim") || has("yolo") || has("defaultdiffuse") || has("wheel_motion")) return CarFX::kPartWheels;
+    if (has("brakerotor") || has("caliper")) return CarFX::kPartBrakes;
+    if (has("suspension")) return CarFX::kPartSuspension;
+    if (has("engine") || has("j2z") || has("rs20") || has("aircleaner") || has("chrome") || has("plastic") ||
+        has("logos") || has("flclst") || has("turbo") || has("exhaust") || has("radiator") || has("intake") || has("bell")) {
+        return CarFX::kPartEngine;
+    }
+    return CarFX::kPartInterior;
+}
+
 static bool SafeReadMatNameSEH(uintptr_t unityBase, int32_t matId, char* outName, size_t maxLen) {
     if (!unityBase || matId == 0 || !outName || maxLen == 0) return false;
     outName[0] = '\0';
@@ -1078,16 +1095,14 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
         if (CarFX::IsTargetActive(CarFX::kTargetInternals)) {
             std::vector<CarRendererRef> rs;
             CollectCarRenderersOnMainThread(rootGo, rs);
-            static const char* const kSkip[] = { "car_body", "car_glass", "shadowcaster", "rim", "yolo", "defaultDiffuse",
-                                                 "BrakeRotor", "Caliper", "wheel_motion" };
+            const uint32_t partMask = CarFX::GetInternalsPartMask();
             for (const CarRendererRef& r : rs) {
                 for (uint32_t si = 0; si < r.matCount; ++si) {
                     const int32_t mid = r.matIds[si];
                     char mn[64] = {};
                     if (!mid || !SafeReadMatNameSEH(unityBase, mid, mn, sizeof(mn))) continue;
-                    bool skip = false;
-                    for (const char* k : kSkip) { if (strstr(mn, k)) { skip = true; break; } }
-                    if (skip) continue;
+                    const uint32_t part = InternalsPartOfMaterial(mn);
+                    if (part == 0 || !(partMask & part)) continue;   // body / glass / shadow proxies, or a group switched off
                     void* natMat = SafeIdToObjectSEH(unityBase, mid);
                     void* alb = SafeGetMatTextureSEH(unityBase, natMat, 380);
                     if (alb && !IsDefaultNativeTex(alb, s_natWhite, s_natBlack, s_natNormal)) {

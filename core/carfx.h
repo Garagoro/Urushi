@@ -166,6 +166,17 @@ bool IsTargetActive(int target);
 bool ShouldBypassDepthPrePass(int target = kTargetBody);
 bool ShouldHideCarInternals(int target = kTargetBody);
 void SetStealthDepthWrite(bool on);
+// Which groups of non-body parts the internals target applies to. The body is never split (bumpers, doors... stay "the body").
+enum InternalsPart : uint32_t {
+    kPartEngine     = 1u << 0,   // engine, turbo, intake, exhaust, gearbox bell, radiator...
+    kPartSuspension = 1u << 1,   // arms, springs, shocks, subframes
+    kPartBrakes     = 1u << 2,   // discs and calipers
+    kPartWheels     = 1u << 3,   // rims, tyres, hub caps
+    kPartInterior   = 1u << 4,   // everything else that is not body / glass (seats, dashboard, cage, driver...)
+    kPartsDefault   = kPartEngine | kPartSuspension | kPartBrakes | kPartInterior
+};
+void SetInternalsPartMask(uint32_t mask);
+uint32_t GetInternalsPartMask();
 // Native texture pointers (albedo) of the player car internals; draws using any of them go to kTargetInternals.
 void SetInternalsTextures(const std::vector<void*>& nativePtrs);   // body replace draws also write depth (body is drawn before the internals)
 void SetOverrideMode(int target, int overrideMode);

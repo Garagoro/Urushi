@@ -25,6 +25,19 @@ end
 
 refresh_shader_list()
 
+-- internals parts selection (the body is never split): restored from the config, saved on every change
+local PARTS = {
+    { "engine",     "Двигатель",  "Engine" },
+    { "suspension", "Подвеска",   "Suspension" },
+    { "brakes",     "Тормоза",    "Brakes" },
+    { "wheels",     "Колёса",     "Wheels" },
+    { "interior",   "Салон и прочее", "Interior & other" },
+}
+if carfx and carfx.set_parts and config then
+    local saved = config.get("carfx", "parts")
+    if type(saved) == "table" then carfx.set_parts(saved) end
+end
+
 events.on_key(function(vk, is_down)
     if not keybinds and vk == VK_F9 and is_down then
         if imgui and imgui.is_any_item_active and imgui.is_any_item_active() then return end
@@ -105,6 +118,18 @@ local function render_carfx_window()
                     local ok, err = carfx.load(names[idx], 1)
                     state.status_msg = ok and "" or tostring(err)
                     state.status_tone = ok and "muted" or "red"
+                end
+            end
+        end
+        if carfx.get_parts then
+            ui.spacing(4)
+            ui.text_dim(T("К каким частям применять (кузов всегда целиком)", "Apply to (the body always stays whole)"))
+            local parts = carfx.get_parts()
+            for _, pr in ipairs(PARTS) do
+                local ch2, v2 = ui.toggle(T(pr[2], pr[3]) .. "##cfx_part_" .. pr[1], parts[pr[1]] == true)
+                if ch2 then
+                    carfx.set_parts({ [pr[1]] = v2 })
+                    if config then config.set("carfx", "parts", carfx.get_parts()) end
                 end
             end
         end

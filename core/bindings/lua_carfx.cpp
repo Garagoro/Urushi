@@ -21,6 +21,8 @@ static const luaL_Reg kCarfxFuncs[] = {
     { "list_shaders",   LuaCarFX::ListShaders },
     { "get_status",     LuaCarFX::GetStatus },
     { "get_spatial",    LuaCarFX::GetSpatial },
+    { "get_parts",      LuaCarFX::GetParts },
+    { "set_parts",      LuaCarFX::SetParts },
     { nullptr, nullptr }
 };
 
@@ -177,6 +179,44 @@ int LuaCarFX::GetGameInput(lua_State* L) {
     int target = static_cast<int>(luaL_optinteger(L, 2, CarFX::kTargetBody));
     lua_pushnumber(L, CarFX::GetGameInput(idx, target));
     return 1;
+}
+
+namespace {
+struct PartName { const char* id; uint32_t bit; };
+const PartName kParts[] = {
+    { "engine",     CarFX::kPartEngine },
+    { "suspension", CarFX::kPartSuspension },
+    { "brakes",     CarFX::kPartBrakes },
+    { "wheels",     CarFX::kPartWheels },
+    { "interior",   CarFX::kPartInterior },
+};
+} // namespace
+
+// carfx.get_parts() -> { engine = true, suspension = true, brakes = true, wheels = false, interior = true }
+// The body is not a part: it always stays one piece (target 0).
+int LuaCarFX::GetParts(lua_State* L) {
+    const uint32_t mask = CarFX::GetInternalsPartMask();
+    lua_newtable(L);
+    for (const PartName& p : kParts) {
+        lua_pushboolean(L, (mask & p.bit) ? 1 : 0);
+        lua_setfield(L, -2, p.id);
+    }
+    return 1;
+}
+
+// carfx.set_parts{ engine = true, wheels = true, ... } - only the listed groups change; returns the resulting table.
+int LuaCarFX::SetParts(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    uint32_t mask = CarFX::GetInternalsPartMask();
+    for (const PartName& p : kParts) {
+        lua_getfield(L, 1, p.id);
+        if (!lua_isnil(L, -1)) {
+            if (lua_toboolean(L, -1)) mask |= p.bit; else mask &= ~p.bit;
+        }
+        lua_pop(L, 1);
+    }
+    CarFX::SetInternalsPartMask(mask);
+    return GetParts(L);
 }
 
 int LuaCarFX::ListShaders(lua_State* L) {

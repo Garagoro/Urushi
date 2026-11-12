@@ -218,6 +218,10 @@ Provides modern, cohesive ImGui components with automatic layout and accent colo
 * `carfx.get_active_shader()`: Returns current shader name.
 * `carfx.set_param(param_index, x, y, z, w)`: Overrides `p0..p7` parameters directly from Lua.
 * `carfx.reload_shaders()`: Hot-reloads all shaders from disk.
+* `carfx.load(file, target)` / `carfx.unload(target)`: `target` 0 = body (always one piece: bumpers, doors... are not split), 1 = internals (see below).
+* `carfx.get_parts()` -> `{ engine, suspension, brakes, wheels, interior }` booleans: which groups of non-body parts the **internals** target (1) applies to.
+  Defaults: everything on except `wheels`. `carfx.set_parts{ wheels = true }` changes only the listed groups and returns the new table.
+  `interior` means every other non-body, non-glass part (seats, dashboard, cage, driver...).
 
 ---
 

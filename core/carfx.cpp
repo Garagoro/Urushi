@@ -1585,6 +1585,10 @@ bool ShouldBypassDepthPrePass(int target) {
            s_targets[target].usesScene.load(std::memory_order_acquire);
 }
 
+static std::atomic<uint32_t> s_internalsPartMask{ kPartsDefault };
+void SetInternalsPartMask(uint32_t mask) { s_internalsPartMask.store(mask & 0x1Fu, std::memory_order_relaxed); }
+uint32_t GetInternalsPartMask() { return s_internalsPartMask.load(std::memory_order_relaxed); }
+
 void SetInternalsTextures(const std::vector<void*>& nativePtrs) {
     if (!s_initialized.load(std::memory_order_acquire)) return;
     std::vector<uintptr_t> raw;

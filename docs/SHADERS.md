@@ -237,4 +237,5 @@ CarFX has a second slot for the **non-body parts of the player car**. Load any s
   Parts whose material only has a default (white/black) texture cannot be told apart and keep their normal look.
 * Telemetry / spatial data (`g_fxGame`, `g_fxCar*`, `g_fxCam*`) are the player car's.
 * `g_fxLivery` is not bound for this target (no livery on internals).
+* Parts: pick which groups it applies to in the CarFX window or with `carfx.set_parts{...}` (engine, suspension, brakes, wheels, interior). The body is never split.
 * Sample: `shaders/internals_neon.hlsl`.
