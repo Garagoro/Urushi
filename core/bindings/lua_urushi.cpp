@@ -5,6 +5,12 @@
 #include "../native_carx.h"
 #include "../car_sim_optimizer.h"
 #include "../logger.h"
+#include "../lua_sandbox.h"
+#include "../settings.h"
+#include "../crash_handler.h"
+#include "../lua_engine.h"
+#include "../safe_mode.h"
+#include <shellapi.h>
 
 #include <imgui.h>
 #include <string>
@@ -257,7 +263,7 @@ int Lua_UiCard(lua_State* L) {
     UrushiUI::BeginCard(title, subtitle);
     if (fnIdx != 0) {
         lua_pushvalue(L, fnIdx);
-        if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+        if (LuaSandbox::PCall(L, 0, 0, "ui_card") != LUA_OK) {
             const char* err = lua_tostring(L, -1);
             Logger::Error("ui.card callback error: " + std::string(err ? err : "unknown"));
             lua_pop(L, 1);
@@ -786,6 +792,92 @@ static const luaL_Reg kInputFuncs[] = {
     { nullptr, nullptr }
 };
 
+
+// ==================== stability / settings / script manager ====================
+
+int Lua_UrushiGetSetting(lua_State* L) {
+    const char* section = luaL_checkstring(L, 1);
+    const char* key = luaL_checkstring(L, 2);
+    const char* def = luaL_optstring(L, 3, "");
+    lua_pushstring(L, Settings::GetString(section, key, def).c_str());
+    return 1;
+}
+
+int Lua_UrushiSetSetting(lua_State* L) {
+    const char* section = luaL_checkstring(L, 1);
+    const char* key = luaL_checkstring(L, 2);
+    std::string value;
+    if (lua_isboolean(L, 3)) value = lua_toboolean(L, 3) ? "1" : "0";
+    else value = luaL_checkstring(L, 3);
+    Settings::SetString(section, key, value);
+    return 0;
+}
+
+int Lua_UrushiListScripts(lua_State* L) {
+    lua_newtable(L);
+    std::wstring pattern = LuaEngine::GetScriptsDirectory() + L"\\*.lua";
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(pattern.c_str(), &fd);
+    int idx = 1;
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            std::string name = Logger::ToNarrow(fd.cFileName);
+            if (name.size() > 4) name.resize(name.size() - 4); // strip ".lua"
+            lua_pushstring(L, name.c_str());
+            lua_rawseti(L, -2, idx++);
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    return 1;
+}
+
+int Lua_UrushiLoadScript(lua_State* L) {
+    // Loads scripts/<name>.lua inside the sandbox (own time budget). Returns true | false, error
+    std::string name = luaL_checkstring(L, 1);
+    if (name.empty() || name.find_first_of("/\\:") != std::string::npos || name.find("..") != std::string::npos) {
+        lua_pushboolean(L, 0);
+        lua_pushstring(L, "invalid script name");
+        return 2;
+    }
+    const std::string path = Logger::ToNarrow(LuaEngine::GetScriptsDirectory()) + "\\" + name + ".lua";
+    int st = luaL_loadfile(L, path.c_str());
+    if (st == LUA_OK) st = LuaSandbox::PCall(L, 0, 0, "load_script", 8000);
+    if (st == LUA_OK) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    lua_pushboolean(L, 0);
+    lua_insert(L, -2);
+    return 2;
+}
+
+int Lua_UrushiReloadScripts(lua_State*) {
+    LuaEngine::RequestReload();
+    return 0;
+}
+
+int Lua_UrushiGetLastCrash(lua_State* L) {
+    const auto& pc = CrashHandler::GetPreviousCrash();
+    lua_newtable(L);
+    lua_pushboolean(L, pc.crashed); lua_setfield(L, -2, "crashed");
+    lua_pushboolean(L, pc.inUrushi); lua_setfield(L, -2, "in_urushi");
+    lua_pushstring(L, pc.summary.c_str()); lua_setfield(L, -2, "summary");
+    lua_pushstring(L, pc.report.c_str()); lua_setfield(L, -2, "report");
+    return 1;
+}
+
+int Lua_UrushiOpenCrashDir(lua_State*) {
+    const std::wstring dir = CrashHandler::GetCrashDir();
+    ShellExecuteW(nullptr, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    return 0;
+}
+
+int Lua_UrushiIsSafeMode(lua_State* L) {
+    lua_pushboolean(L, !SafeMode::IsFull());
+    return 1;
+}
+
 const luaL_Reg kUrushiFuncs[] = {
     { "register_window", Lua_UrushiRegisterWindow },
     { "set_window_open", Lua_UrushiSetWindowOpen },
@@ -809,6 +901,14 @@ const luaL_Reg kUrushiFuncs[] = {
     { "get_ui_scale",    Lua_UrushiGetUiScale },
     { "get_user_scale",  Lua_UrushiGetUserScale },
     { "get_auto_scale",  Lua_UrushiGetAutoScale },
+    { "get_setting",     Lua_UrushiGetSetting },
+    { "set_setting",     Lua_UrushiSetSetting },
+    { "list_scripts",    Lua_UrushiListScripts },
+    { "reload_scripts",  Lua_UrushiReloadScripts },
+    { "load_script",     Lua_UrushiLoadScript },
+    { "get_last_crash",  Lua_UrushiGetLastCrash },
+    { "open_crash_dir",  Lua_UrushiOpenCrashDir },
+    { "is_safe_mode",    Lua_UrushiIsSafeMode },
     { nullptr, nullptr }
 };
 

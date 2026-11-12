@@ -1,6 +1,7 @@
 #include "ui_schema.h"
 #include "urushi_ui.h"
 #include "lua_engine.h"
+#include "lua_sandbox.h"
 #include "logger.h"
 
 #include <imgui.h>
@@ -300,7 +301,7 @@ void UiSchema::DispatchAction(ScriptPanel& panel, const std::string& actionId) {
     lua_pushstring(L, actionId.c_str());
     PushPanelValuesToLua(L, panel);
 
-    if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+    if (LuaSandbox::PCall(L, 2, 0, "ui_on_action") != LUA_OK) {
         const char* err = lua_tostring(L, -1);
         Logger::Error("Lua on_action error: " + std::string(err ? err : "unknown"));
         lua_pop(L, 1);
@@ -336,7 +337,7 @@ void UiSchema::DispatchChange(ScriptPanel& panel, const std::string& paramId) {
     // Push all values
     PushPanelValuesToLua(L, panel);
 
-    if (lua_pcall(L, 3, 0, 0) != LUA_OK) {
+    if (LuaSandbox::PCall(L, 3, 0, "ui_on_change") != LUA_OK) {
         const char* err = lua_tostring(L, -1);
         Logger::Error("Lua on_change error: " + std::string(err ? err : "unknown"));
         lua_pop(L, 1);

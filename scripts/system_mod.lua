@@ -56,6 +56,76 @@ local function render_fps_net_window()
     })
 end
 
+local CRASH_POLICIES = { "ask", "safe", "normal" }
+
+local function render_stability_card()
+    ui.card(T("Стабильность", "Stability"), T("Safe mode и отчёты о крашах", "Safe mode & crash reports"), function()
+        ui.text_dim(T("Что делать после краша", "After a crash"))
+        local pol = urushi.get_setting("stability", "crash_policy", "ask")
+        local idx = (pol == "safe") and 2 or ((pol == "normal") and 3 or 1)
+        local labels = T({ "Спрашивать", "Safe mode", "Обычный" }, { "Ask", "Safe mode", "Normal" })
+        local ch, new_idx = ui.segmented("sys_crash_policy", idx, labels)
+        if ch and CRASH_POLICIES[new_idx] then
+            urushi.set_setting("stability", "crash_policy", CRASH_POLICIES[new_idx])
+        end
+
+        ui.spacing(4)
+        local fs = urushi.get_setting("stability", "force_safe_next", "0") == "1"
+        local c2, v2 = ui.toggle(T("Следующий запуск в Safe mode##sys_safe_next", "Next launch in Safe mode##sys_safe_next"), fs)
+        if c2 then urushi.set_setting("stability", "force_safe_next", v2) end
+        ui.text_dim(T("Safe mode отключает все функции, мод остаётся загруженным.",
+                      "Safe mode disables every feature; the mod stays loaded."))
+
+        local crash = urushi.get_last_crash()
+        if crash and crash.crashed then
+            ui.spacing(4)
+            ui.badge(T("Прошлая сессия: краш", "Last session: crash"), "red")
+            if crash.summary and crash.summary ~= "" then ui.text_wrapped(crash.summary, "muted") end
+            ui.text_dim(crash.in_urushi and T("Падение в коде URUSHI", "Crash inside URUSHI code")
+                                         or T("Падение вне кода URUSHI", "Crash outside URUSHI code"))
+        end
+
+        ui.spacing(4)
+        if ui.button(T("Открыть папку отчётов##sys_crash_dir", "Open crash reports folder##sys_crash_dir"), ui.avail_width(), 28, "ghost") then
+            urushi.open_crash_dir()
+        end
+    end)
+end
+
+local function first_line(s)
+    s = tostring(s or "")
+    return (s:match("^[^\n]*")) or s
+end
+
+local function render_scripts_card()
+    if not urushi_scripts then return end
+    ui.card(T("Скрипты", "Scripts"), T("Включение и отключение модулей", "Enable or disable modules"), function()
+        for _, e in ipairs(urushi_scripts.list) do
+            local title = e.user and (e.id .. ".lua") or T(e.ru, e.en)
+            local ch, val = ui.toggle(title .. "##scr_" .. e.id, e.enabled)
+            if ch then
+                e.enabled = val
+                urushi.set_setting("scripts", e.id, val)
+                urushi_scripts.dirty = true
+            end
+            if e.status == "error" then
+                ui.text_wrapped(T("Ошибка: ", "Error: ") .. first_line(e.err), "red")
+            elseif e.user and not e.enabled then
+                ui.text_dim(T("Пользовательский скрипт (выключен)", "User script (off)"))
+            end
+        end
+
+        ui.spacing(4)
+        if urushi_scripts.dirty then
+            ui.text(T("Изменения применятся после перезагрузки скриптов.", "Changes apply after reloading scripts."), "yellow")
+        end
+        if ui.button(T("Перезагрузить скрипты##scr_reload", "Reload scripts##scr_reload"), ui.avail_width(), 30,
+                     urushi_scripts.dirty and "primary" or nil) then
+            urushi.reload_scripts()
+        end
+    end)
+end
+
 local function render_system_window()
     local cur_lang = (urushi.get_language and urushi.get_language()) or "ru"
     local lang_idx = (cur_lang == "en") and 2 or 1
@@ -158,6 +228,9 @@ local function render_system_window()
             end
         end)
     end
+
+    render_stability_card()
+    render_scripts_card()
 
     ui.card(T("Горячие клавиши и управление", "Keybinds & Controls"), nil, function()
         local gp_conn = input and input.is_gamepad_connected and input.is_gamepad_connected()

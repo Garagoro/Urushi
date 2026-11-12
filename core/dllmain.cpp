@@ -13,12 +13,16 @@
 #include "lua_engine.h"
 #include "dev_pipe.h"
 #include "updater.h"
+#include "settings.h"
+#include "crash_handler.h"
+#include "safe_mode.h"
 
 #pragma comment(lib, "shlwapi.lib")
 
 #include <atomic>
 
 static HMODULE g_module = nullptr;
+static std::wstring g_exeDir;
 static HANDLE g_initThread = nullptr;
 static std::atomic<bool> g_initialized{ false };
 static std::atomic<bool> g_unloaded{ false };
@@ -45,8 +49,9 @@ extern "C" __declspec(dllexport) void ScriptHook_Unload() {
     }
 
     Logger::Info("ScriptHook_Unload invoked. Draining active hooks...");
-    const bool needCarFxDrain = CarFX::ShouldBypassDepthPrePass() || CarFX::ShouldHideCarInternals();
-    const bool needOptDrain = CarSimOptimizer::GetConfig().enabled;
+    const bool featuresUp = SafeMode::FeaturesStarted();
+    const bool needCarFxDrain = featuresUp && (CarFX::ShouldBypassDepthPrePass() || CarFX::ShouldHideCarInternals());
+    const bool needOptDrain = featuresUp && CarSimOptimizer::GetConfig().enabled;
     if (needCarFxDrain) {
         CarFX::SetEnabled(false);
     }
@@ -62,44 +67,30 @@ extern "C" __declspec(dllexport) void ScriptHook_Unload() {
     HookManager::WaitForInFlight(2500);
     Sleep(50);
 
-    FileWatcher::Stop();
-    DevPipe::Shutdown();
-    Updater::Shutdown();
-    LuaEngine::Shutdown();
-    CarSimOptimizer::Shutdown();
+    if (featuresUp) {
+        FileWatcher::Stop();
+        DevPipe::Shutdown();
+        Updater::Shutdown();
+        LuaEngine::Shutdown();
+        CarSimOptimizer::Shutdown();
+    }
     D3D11Hook::Shutdown();
-    UnityBridge::Shutdown();
-    SteerAssist::Shutdown();
-    NativeCarX::Shutdown();
+    if (featuresUp) {
+        UnityBridge::Shutdown();
+        SteerAssist::Shutdown();
+        NativeCarX::Shutdown();
+    }
     HookManager::Shutdown();
+    CrashHandler::Shutdown();
     Logger::Shutdown();
 }
 
-static DWORD WINAPI InitThread(LPVOID) {
+// "Phase B": everything that touches the game or runs scripts. Skipped entirely in Safe mode and
+// started later from the Safe mode window (worker thread) if the user leaves Safe mode.
+static void StartFeatures() {
     try {
-        std::wstring exeDir = GetExecutableDirectory();
-        std::wstring logPath = exeDir + L"\\urushi.log";
-        std::wstring replaysDir = exeDir + L"\\replays";
-        std::wstring scriptsDir = exeDir + L"\\scripts";
-
-        Logger::Init(logPath);
-        Logger::Info("URUSHI v1.0.0 initializing...");
-
-        // Wait until NativeCarX.dll is loaded
-        int retries = 0;
-        while (!GetModuleHandleW(L"NativeCarX.dll") && !g_unloaded.load(std::memory_order_acquire) && retries < 200) {
-            Sleep(100);
-            retries++;
-        }
-        if (g_unloaded.load(std::memory_order_acquire)) {
-            Logger::Shutdown();
-            return 0;
-        }
-
-        if (!HookManager::Init()) {
-            Logger::Error("Failed to initialize HookManager!");
-            return 1;
-        }
+        const std::wstring replaysDir = g_exeDir + L"\\replays";
+        const std::wstring scriptsDir = g_exeDir + L"\\scripts";
 
         if (!NativeCarX::Init()) {
             Logger::Warn("NativeCarX failed initial hook, will continue...");
@@ -117,11 +108,6 @@ static DWORD WINAPI InitThread(LPVOID) {
             Logger::Warn("CarSimOptimizer failed initial hook, will retry...");
         }
 
-        if (!D3D11Hook::Init()) {
-            Logger::Error("Failed to hook D3D11!");
-            return 1;
-        }
-
         ReplayEngine::Init(replaysDir);
         LuaEngine::Init(scriptsDir);
 
@@ -131,10 +117,59 @@ static DWORD WINAPI InitThread(LPVOID) {
         });
 
         // Start named pipe server for dev MCP (backbuffer shots, UI inspection, reload)
-        DevPipe::Init(exeDir);
+        DevPipe::Init(g_exeDir);
 
         // Start async auto-update check against GitHub repository (Garagoro/Urushi)
-        Updater::Init(exeDir, g_module);
+        Updater::Init(g_exeDir, g_module);
+    }
+    catch (const std::exception& ex) {
+        Logger::Error(std::string("Exception while starting features: ") + ex.what());
+    }
+    catch (...) {
+        Logger::Error("Unknown exception while starting features!");
+    }
+}
+
+static DWORD WINAPI InitThread(LPVOID) {
+    try {
+        g_exeDir = GetExecutableDirectory();
+        std::wstring logPath = g_exeDir + L"\\urushi.log";
+
+        Settings::Init(g_exeDir);
+        Logger::Init(logPath);
+        Logger::Info("URUSHI v1.0.0 initializing...");
+        CrashHandler::Init(g_exeDir, g_module);
+
+        // Wait until NativeCarX.dll is loaded
+        int retries = 0;
+        while (!GetModuleHandleW(L"NativeCarX.dll") && !g_unloaded.load(std::memory_order_acquire) && retries < 200) {
+            Sleep(100);
+            retries++;
+        }
+        if (g_unloaded.load(std::memory_order_acquire)) {
+            CrashHandler::Shutdown();
+            Logger::Shutdown();
+            return 0;
+        }
+
+        if (!HookManager::Init()) {
+            Logger::Error("Failed to initialize HookManager!");
+            return 1;
+        }
+
+        // The overlay (D3D11 + ImGui) is always installed: it hosts the Safe mode UI and the menu.
+        if (!D3D11Hook::Init()) {
+            Logger::Error("Failed to hook D3D11!");
+            return 1;
+        }
+
+        SafeMode::SetStartFeaturesCallback(&StartFeatures);
+        if (SafeMode::Decide()) {
+            StartFeatures();
+            SafeMode::MarkFull();
+        } else {
+            Logger::Warn("URUSHI is running WITHOUT features (Safe mode / waiting for the user's choice).");
+        }
 
         g_initialized = true;
         Logger::Info("URUSHI fully initialized and ready. Press F4 to toggle menu.");

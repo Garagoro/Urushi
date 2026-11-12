@@ -18,6 +18,7 @@ public:
 
     // Hot-reload & Dev Eval
     static void Reload();
+    static void RequestReload(); // safe from inside Lua / any thread: reload happens on the next render frame
     static void OnScriptModified(const std::string& filename);
     static bool Eval(const std::string& code, std::string& outOutput, std::string& outError);
 
@@ -38,7 +39,7 @@ private:
     static float s_fixedAccum;
     static void RegisterEventsModule(lua_State* L);
     static void RegisterLogModule(lua_State* L);
-    static void CallLuaCallbacks(const std::vector<int>& callbackRefs, int argCount = 0);
+    static void CallLuaCallbacks(std::vector<int>& callbackRefs, int argCount, const char* label);
 
     static int Lua_OnMainUpdate(lua_State* L);
     static int Lua_OnUpdate(lua_State* L);

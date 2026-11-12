@@ -12,7 +12,10 @@
 #include "bindings/lua_updater.h"
 #include "bindings/lua_optimizer.h"
 #include "bindings/lua_urushi.h"
+#include "lua_sandbox.h"
+#include "safe_mode.h"
 #include <chrono>
+#include <algorithm>
 #include <unordered_map>
 
 std::recursive_mutex LuaEngine::s_mutex;
@@ -27,6 +30,10 @@ std::vector<int> LuaEngine::s_updateCallbacks;
 std::vector<int> LuaEngine::s_fixedUpdateCallbacks;
 std::vector<int> LuaEngine::s_renderCallbacks;
 std::vector<int> LuaEngine::s_keyCallbacks;
+
+static constexpr int kMaxConsecutiveFailures = 25;
+static std::unordered_map<int, int> s_cbFailCount;
+static std::unordered_map<int, ULONGLONG> s_lastErrLog;
 
 static auto g_lastUpdateTime = std::chrono::steady_clock::now();
 
@@ -44,6 +51,7 @@ bool LuaEngine::Init(const std::wstring& scriptsDir) {
     }
 
     luaL_openlibs(s_L);
+    LuaSandbox::Install(s_L);
 
     // Register our custom modules
     LuaCarX::Register(s_L);
@@ -68,7 +76,11 @@ bool LuaEngine::Init(const std::wstring& scriptsDir) {
     std::wstring mainPath = s_scriptsDir + L"\\main.lua";
     std::string mainNarrow = Logger::ToNarrow(mainPath);
 
-    if (luaL_dofile(s_L, mainNarrow.c_str()) != LUA_OK) {
+    int mainStatus = luaL_loadfile(s_L, mainNarrow.c_str());
+    if (mainStatus == LUA_OK) {
+        mainStatus = LuaSandbox::PCall(s_L, 0, LUA_MULTRET, "main.lua", LuaSandbox::kBudgetLoadMs);
+    }
+    if (mainStatus != LUA_OK) {
         const char* err = lua_tostring(s_L, -1);
         Logger::Error("Error loading main.lua: " + std::string(err ? err : "unknown"));
         lua_pop(s_L, 1);
@@ -104,6 +116,8 @@ void LuaEngine::Shutdown() {
     s_fixedUpdateCallbacks.clear();
     s_renderCallbacks.clear();
     s_keyCallbacks.clear();
+    s_cbFailCount.clear();
+    s_lastErrLog.clear();
 
     s_initialized = false;
     Logger::Info("Lua engine shut down.");
@@ -117,6 +131,10 @@ void LuaEngine::Reload() {
     Init(dir);
 }
 
+void LuaEngine::RequestReload() {
+    s_reloadAt.store(GetTickCount64() + 1, std::memory_order_release);
+}
+
 void LuaEngine::OnScriptModified(const std::string& filename) {
     // Called from the FileWatcher thread. Never touch the Lua state here: closing it while
     // the render thread is inside a Lua call is a crash. Defer to the render thread and
@@ -125,12 +143,11 @@ void LuaEngine::OnScriptModified(const std::string& filename) {
     s_reloadAt.store(GetTickCount64() + 300, std::memory_order_release);
 }
 
-void LuaEngine::CallLuaCallbacks(const std::vector<int>& callbackRefsIn, int argCount) {
+void LuaEngine::CallLuaCallbacks(std::vector<int>& callbackRefsIn, int argCount, const char* label) {
     if (!s_L) return;
 
     // Copy: a callback may register another callback (push_back would invalidate iteration)
     const std::vector<int> callbackRefs = callbackRefsIn;
-    static std::unordered_map<int, ULONGLONG> s_lastErrLog;
 
     for (int ref : callbackRefs) {
         lua_rawgeti(s_L, LUA_REGISTRYINDEX, ref);
@@ -139,16 +156,28 @@ void LuaEngine::CallLuaCallbacks(const std::vector<int>& callbackRefsIn, int arg
             for (int i = 0; i < argCount; ++i) {
                 lua_pushvalue(s_L, -1 - argCount);
             }
-            if (lua_pcall(s_L, argCount, 0, 0) != LUA_OK) {
+            if (LuaSandbox::PCall(s_L, argCount, 0, label) != LUA_OK) {
                 const char* err = lua_tostring(s_L, -1);
                 // A failing per-frame callback would otherwise flood the log (and disk) at FPS rate
                 const ULONGLONG now = GetTickCount64();
                 ULONGLONG& last = s_lastErrLog[ref];
                 if (now - last >= 2000) {
                     last = now;
-                    Logger::Error("Lua callback error: " + std::string(err ? err : "unknown"));
+                    Logger::Error(std::string("Lua ") + label + " callback error: " + std::string(err ? err : "unknown"));
                 }
                 lua_pop(s_L, 1);
+
+                // A callback that fails over and over is switched off instead of burning CPU/log every frame
+                if (++s_cbFailCount[ref] >= kMaxConsecutiveFailures) {
+                    Logger::Error(std::string("Lua ") + label + " callback disabled after " +
+                                  std::to_string(kMaxConsecutiveFailures) + " consecutive failures.");
+                    auto it = std::find(callbackRefsIn.begin(), callbackRefsIn.end(), ref);
+                    if (it != callbackRefsIn.end()) callbackRefsIn.erase(it);
+                    luaL_unref(s_L, LUA_REGISTRYINDEX, ref);
+                    s_cbFailCount.erase(ref);
+                }
+            } else {
+                s_cbFailCount.erase(ref);
             }
         } else {
             lua_pop(s_L, 1);
@@ -161,7 +190,7 @@ void LuaEngine::OnMainUpdate(float dt) {
     if (!s_initialized || !s_L || s_mainUpdateCallbacks.empty()) return;
 
     lua_pushnumber(s_L, dt);
-    CallLuaCallbacks(s_mainUpdateCallbacks, 1);
+    CallLuaCallbacks(s_mainUpdateCallbacks, 1, "on_main_update");
     lua_pop(s_L, 1);
 }
 
@@ -170,7 +199,7 @@ void LuaEngine::OnUpdate(float dt) {
     if (!s_initialized || !s_L || s_updateCallbacks.empty()) return;
 
     lua_pushnumber(s_L, dt);
-    CallLuaCallbacks(s_updateCallbacks, 1);
+    CallLuaCallbacks(s_updateCallbacks, 1, "on_update");
     lua_pop(s_L, 1);
 }
 
@@ -179,7 +208,7 @@ void LuaEngine::OnFixedUpdate(float dt) {
     if (!s_initialized || !s_L || s_fixedUpdateCallbacks.empty()) return;
 
     lua_pushnumber(s_L, dt);
-    CallLuaCallbacks(s_fixedUpdateCallbacks, 1);
+    CallLuaCallbacks(s_fixedUpdateCallbacks, 1, "on_fixed_update");
     lua_pop(s_L, 1);
 }
 
@@ -214,7 +243,7 @@ void LuaEngine::OnRender() {
     if (!s_initialized || !s_L) return;
 
     if (!s_renderCallbacks.empty()) {
-        CallLuaCallbacks(s_renderCallbacks, 0);
+        CallLuaCallbacks(s_renderCallbacks, 0, "on_render");
     }
     UrushiUI::Render(D3D11Hook::IsMenuOpen(), s_L);
 }
@@ -225,7 +254,7 @@ void LuaEngine::OnKeyEvent(int vkey, bool isDown) {
 
     lua_pushinteger(s_L, vkey);
     lua_pushboolean(s_L, isDown);
-    CallLuaCallbacks(s_keyCallbacks, 2);
+    CallLuaCallbacks(s_keyCallbacks, 2, "on_key");
     lua_pop(s_L, 2);
 }
 
@@ -361,7 +390,7 @@ bool LuaEngine::Eval(const std::string& code, std::string& outOutput, std::strin
         const char* err = lua_tostring(s_L, -1);
         outError = err ? err : "syntax error";
         lua_pop(s_L, 1);
-    } else if (lua_pcall(s_L, 0, LUA_MULTRET, 0) != LUA_OK) {
+    } else if (LuaSandbox::PCall(s_L, 0, LUA_MULTRET, "eval", LuaSandbox::kBudgetEvalMs) != LUA_OK) {
         const char* err = lua_tostring(s_L, -1);
         outError = err ? err : "runtime error";
         lua_pop(s_L, 1);

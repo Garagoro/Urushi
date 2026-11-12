@@ -6,6 +6,7 @@
 #include "unity_bridge.h"
 #include "updater.h"
 #include "logger.h"
+#include "lua_sandbox.h"
 
 extern "C" {
 #include <lua.h>
@@ -707,7 +708,7 @@ static void RenderFloatingWindows(bool menuOpen, lua_State* L) {
                         lua_rawgeti(L, LUA_REGISTRYINDEX, w.luaRenderRef);
                         if (lua_isfunction(L, -1)) {
                             lua_getglobal(L, "ui");
-                            if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+                            if (LuaSandbox::PCall(L, 1, 0, "window_render") != LUA_OK) {
                                 const char* err = lua_tostring(L, -1);
                                 Logger::Error("URUSHI UI render error (" + w.id + "): " + std::string(err ? err : "unknown"));
                                 lua_pop(L, 1);

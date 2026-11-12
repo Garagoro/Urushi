@@ -8,6 +8,8 @@
 #include "ui_schema.h"
 #include "urushi_ui.h"
 #include "updater.h"
+#include "safe_mode.h"
+#include "crash_handler.h"
 
 #include <shlwapi.h>
 #include <imgui.h>
@@ -29,6 +31,7 @@ static t_DrawIndexedInstanced s_diiOrig[kMaxDrawSlots] = {};
 static int s_diiCount = 0;
 
 static thread_local bool t_inDrawHook = false;
+static bool s_carfxInit = false;   // CarFX is only brought up once Safe mode is left
 
 template <int Slot>
 static void STDMETHODCALLTYPE Hooked_DrawIndexed(ID3D11DeviceContext* ctx, UINT IndexCount,
@@ -36,7 +39,7 @@ static void STDMETHODCALLTYPE Hooked_DrawIndexed(ID3D11DeviceContext* ctx, UINT 
     HookManager::ScopedHookGuard hookGuard;
     t_DrawIndexed orig = s_diOrig[Slot];
     if (!orig) return;
-    if (HookManager::IsUnloading() || t_inDrawHook || !ctx) {
+    if (HookManager::IsUnloading() || t_inDrawHook || !ctx || !SafeMode::IsFull()) {
         orig(ctx, IndexCount, StartIndexLocation, BaseVertexLocation);
         return;
     }
@@ -68,7 +71,7 @@ static void STDMETHODCALLTYPE Hooked_DrawIndexedInstanced(ID3D11DeviceContext* c
     HookManager::ScopedHookGuard hookGuard;
     t_DrawIndexedInstanced orig = s_diiOrig[Slot];
     if (!orig) return;
-    if (HookManager::IsUnloading() || t_inDrawHook || !ctx) {
+    if (HookManager::IsUnloading() || t_inDrawHook || !ctx || !SafeMode::IsFull()) {
         orig(ctx, IndexCountPerInstance, InstanceCount, StartIndexLocation, BaseVertexLocation, StartInstanceLocation);
         return;
     }
@@ -269,7 +272,10 @@ void D3D11Hook::Shutdown() {
     InputManager::Shutdown();
     DetachWndProc();
     DevPipe::ReleaseD3D11();
-    CarFX::Shutdown();
+    if (s_carfxInit) {
+        CarFX::Shutdown();
+        s_carfxInit = false;
+    }
 
     if (s_imguiInitialized) {
         UrushiUI::Shutdown();
@@ -390,20 +396,34 @@ HRESULT WINAPI D3D11Hook::Hooked_Present(IDXGISwapChain* pSwapChain, UINT SyncIn
                 ImGui_ImplWin32_Init(s_hwnd);
                 ImGui_ImplDX11_Init(s_device, s_context);
 
-                HookContextVTable(s_context);
-                CarFX::Init(s_device, s_context, GetExeShadersDirectory());
-
                 s_imguiInitialized = true;
                 Logger::Info("ImGui initialized in D3D11 context with full Cyrillic + Segoe UI typography.");
             }
         }
 
         if (s_imguiInitialized) {
-            InputManager::Update();
+            static ULONGLONG s_nextCrashTick = 0;
+            const ULONGLONG nowTick = GetTickCount64();
+            if (nowTick >= s_nextCrashTick) {
+                s_nextCrashTick = nowTick + 2000;
+                CrashHandler::Tick(); // keep our crash filter on top if somebody replaced it
+            }
 
-            if (s_context) {
+            // Everything below the dividing line is a "feature" and stays off in Safe mode
+            const bool full = SafeMode::IsFull();
+            if (full && !s_carfxInit && s_context) {
                 HookContextVTable(s_context);
-                CarFX::OnNewFrame(s_context);
+                CarFX::Init(s_device, s_context, GetExeShadersDirectory());
+                s_carfxInit = true;
+            }
+
+            if (full) {
+                InputManager::Update();
+
+                if (s_context) {
+                    HookContextVTable(s_context);
+                    CarFX::OnNewFrame(s_context);
+                }
             }
 
             ImGui_ImplDX11_NewFrame();
@@ -412,14 +432,19 @@ HRESULT WINAPI D3D11Hook::Hooked_Present(IDXGISwapChain* pSwapChain, UINT SyncIn
             UrushiUI::PrepareFrame();
             ImGui::NewFrame();
 
-            // 1. Let Lua Engine render imperative UI (HUD, graphs)
-            LuaEngine::OnRender();
+            if (full) {
+                // 1. Let Lua Engine render imperative UI (HUD, graphs)
+                LuaEngine::OnRender();
 
-            // 2. Render all declarative schema panels
-            UiSchema::RenderAll(s_menuOpen);
+                // 2. Render all declarative schema panels
+                UiSchema::RenderAll(s_menuOpen);
 
-            // 3. Render floating update notification banner if a newer build is ready
-            Updater::RenderUI(s_menuOpen);
+                // 3. Render floating update notification banner if a newer build is ready
+                Updater::RenderUI(s_menuOpen);
+            }
+
+            // Crash prompt / Safe mode window (native, no Lua involved)
+            SafeMode::RenderUI(s_menuOpen);
 
             ImGui::Render();
             if (!DevPipe::ShouldSuppressVisibleDraw()) {

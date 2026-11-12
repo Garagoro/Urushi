@@ -13,6 +13,10 @@ set(IMGUI_SOURCES
 add_library(urushi SHARED
     dllmain.cpp
     logger.h logger.cpp
+    settings.h settings.cpp
+    crash_handler.h crash_handler.cpp
+    safe_mode.h safe_mode.cpp
+    lua_sandbox.h lua_sandbox.cpp
     input_manager.h input_manager.cpp
     hook_manager.h hook_manager.cpp
     native_carx.h native_carx.cpp

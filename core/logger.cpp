@@ -11,6 +11,13 @@ bool Logger::s_hasConsole = false;
 void Logger::Init(const std::wstring& logFilePath) {
     {
         std::lock_guard<std::recursive_mutex> lock(s_mutex);
+        // Keep the previous session's log (it is truncated below) so a crash can be investigated afterwards
+        {
+            std::wstring prev = logFilePath;
+            const size_t dot = prev.rfind(L'.');
+            prev = (dot == std::wstring::npos ? prev : prev.substr(0, dot)) + L".prev.log";
+            CopyFileW(logFilePath.c_str(), prev.c_str(), FALSE);
+        }
         s_file.open(logFilePath, std::ios::out | std::ios::trunc);
 
         // Create debug console window if needed

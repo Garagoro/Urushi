@@ -32,3 +32,8 @@ dist/*.pdb
 imgui.ini
 Thumbs.db
 .DS_Store
+
+# Runtime artifacts
+urushi_crash/
+urushi_settings.ini
+urushi.prev.log
