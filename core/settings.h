@@ -6,6 +6,7 @@
 namespace Settings {
 
 void Init(const std::wstring& exeDir);
+std::wstring GameDir();   // folder that holds urushi_settings.ini
 
 std::string GetString(const std::string& section, const std::string& key, const std::string& def = "");
 void SetString(const std::string& section, const std::string& key, const std::string& value);

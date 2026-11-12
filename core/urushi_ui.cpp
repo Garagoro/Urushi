@@ -6,6 +6,7 @@
 #include "unity_bridge.h"
 #include "updater.h"
 #include "logger.h"
+#include "settings.h"
 #include "lua_sandbox.h"
 
 extern "C" {
@@ -113,6 +114,34 @@ UrushiUI::Language s_language = []() {
     return (PRIMARYLANGID(lang) == LANG_RUSSIAN) ? UrushiUI::Language::Russian : UrushiUI::Language::English;
 }();
 bool s_singleTabMode = false;
+
+// ---- dock order (user drag & drop), stored in urushi_dock.ini next to urushi_settings.ini ----
+constexpr int kDockMaxVisible = 12;   // more entries than this -> the list scrolls
+bool s_dockEdit = false;
+bool s_dockOrderDirty = false;
+bool s_dockOrderLoaded = false;
+std::vector<std::string> s_dockOrder;
+
+std::wstring DockOrderPath() {
+    const std::wstring dir = Settings::GameDir();
+    return dir.empty() ? std::wstring() : dir + L"\\urushi_dock.ini";
+}
+void LoadDockOrder() {
+    if (s_dockOrderLoaded) return;
+    const std::wstring path = DockOrderPath();
+    if (path.empty()) return;
+    s_dockOrderLoaded = true;
+    const int n = static_cast<int>(GetPrivateProfileIntW(L"order", L"count", 0, path.c_str()));
+    for (int i = 0; i < n && i < 512; ++i) {
+        wchar_t buf[256] = {};
+        GetPrivateProfileStringW(L"order", std::to_wstring(i).c_str(), L"", buf, 256, path.c_str());
+        if (buf[0]) s_dockOrder.push_back(Logger::ToNarrow(buf));
+    }
+}
+int DockRank(const std::string& id) {
+    for (size_t i = 0; i < s_dockOrder.size(); ++i) if (s_dockOrder[i] == id) return static_cast<int>(i);
+    return 1 << 20;   // not saved yet: after the ones the user ordered
+}
 float s_dockAlpha = 0.0f;
 float s_lastDockX = 0.0f, s_lastDockY = 0.0f, s_lastDockW = 0.0f, s_lastDockH = 0.0f;
 float s_lastWorkW = 0.0f, s_lastWorkH = 0.0f;
@@ -352,17 +381,15 @@ static void RenderDock(bool menuOpen) {
     const size_t modCount = s_windows.size();
     const float headerTotal = 36.0f * S;
     const float availListH = std::max(80.0f, vp->WorkSize.y - 24.0f * S - padY * 2.0f - headerTotal);
-    float btnH = 34.0f * S;
-    float btnGap = 4.0f * S;
-    float listH = (modCount > 0)
-        ? (static_cast<float>(modCount) * btnH + static_cast<float>(modCount - 1) * btnGap)
+    const float btnH = 34.0f * S;
+    const float btnGap = 4.0f * S;
+    // At most kDockMaxVisible entries are shown at once (fewer if the screen is short); the rest scrolls with the wheel.
+    size_t visibleCount = std::min<size_t>(modCount, kDockMaxVisible);
+    while (visibleCount > 3 && static_cast<float>(visibleCount) * (btnH + btnGap) - btnGap > availListH) --visibleCount;
+    const bool scrolling = modCount > visibleCount;
+    const float listH = (modCount > 0)
+        ? (static_cast<float>(visibleCount) * btnH + static_cast<float>(visibleCount - 1) * btnGap)
         : 24.0f * S;
-    if (modCount > 0 && listH > availListH) {
-        const float shrink = std::max(0.55f, availListH / listH);
-        btnH *= shrink;
-        btnGap *= shrink;
-        listH = static_cast<float>(modCount) * btnH + static_cast<float>(modCount - 1) * btnGap;
-    }
     const float dockH = std::min(vp->WorkSize.y - 24.0f * S, padY * 2.0f + headerTotal + listH);
     const float dockX = vp->WorkPos.x + 18.0f * S;
     const float dockY = vp->WorkPos.y + (vp->WorkSize.y - dockH) * 0.5f;
@@ -409,17 +436,49 @@ static void RenderDock(bool menuOpen) {
         dl->AddText(ImVec2(hPos.x + innerW - verSz.x, hPos.y + 4.0f * S), kColTextMuted, verLabel.c_str());
         if (AppFonts::Small) ImGui::PopFont();
 
+        // reorder toggle (left of the version label)
+        {
+            const float tw = 22.0f * S;
+            const ImVec2 tp(hPos.x + innerW - verSz.x - 10.0f * S - tw, hPos.y);
+            ImGui::SetCursorScreenPos(tp);
+            if (ImGui::InvisibleButton("##dockedit", ImVec2(tw, 22.0f * S))) {
+                s_dockEdit = !s_dockEdit;
+            }
+            const bool hv = ImGui::IsItemHovered();
+            if (s_dockEdit || hv) {
+                dl->AddRectFilled(tp, ImVec2(tp.x + tw, tp.y + 22.0f * S),
+                                  s_dockEdit ? UrushiUI::GetAccentU32() : IM_COL32(255, 255, 255, 20), 6.0f * S);
+            }
+            const ImU32 gc = s_dockEdit ? IM_COL32(20, 20, 24, 255) : (hv ? kColTextPrimary : kColTextMuted);
+            for (int k = 0; k < 3; ++k) {   // three bars = "reorder"
+                const float y = tp.y + (7.0f + 4.0f * k) * S;
+                dl->AddLine(ImVec2(tp.x + 5.0f * S, y), ImVec2(tp.x + tw - 5.0f * S, y), gc, 1.6f * S);
+            }
+            if (hv) ImGui::SetTooltip("%s", s_language == UrushiUI::Language::Russian
+                ? u8"Изменить порядок (перетаскивание)" : "Reorder (drag & drop)");
+            ImGui::SetCursorScreenPos(hPos);
+        }
+
         ImGui::Dummy(ImVec2(innerW, 24.0f * S));
         dl->AddLine(ImVec2(hPos.x, hPos.y + 29.0f * S), ImVec2(hPos.x + innerW, hPos.y + 29.0f * S), kColHairline);
         ImGui::Dummy(ImVec2(innerW, 4.0f * S));
 
         // 2. Clean panel switcher buttons (no scroll container, no extra footer clutter)
+        const float listW = scrolling ? innerW - 8.0f * S : innerW;   // leave room for the scrollbar
+        if (scrolling) {
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, 4.0f * S);
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+            ImGui::BeginChild("##dockscroll", ImVec2(innerW, listH), false, ImGuiWindowFlags_NoBackground);
+            dl = ImGui::GetWindowDrawList();
+        }
+        int swapTarget = -1, swapFrom = -1;
         for (size_t i = 0; i < s_windows.size(); ++i) {
             WindowState& w = s_windows[i];
             ImVec2 rPos = ImGui::GetCursorScreenPos();
 
             ImGui::PushID(w.id.c_str());
-            bool clicked = ImGui::InvisibleButton("##dockbtn", ImVec2(innerW, btnH));
+            bool clicked = ImGui::InvisibleButton("##dockbtn", ImVec2(listW, btnH));
             bool hovered = ImGui::IsItemHovered();
             ImGuiID animKey = ImGui::GetItemID();
             ImGui::PopID();
@@ -429,7 +488,7 @@ static void RenderDock(bool menuOpen) {
                 ? LerpCol(IM_COL32(255, 255, 255, 18), IM_COL32(255, 255, 255, 26), hoverT)
                 : LerpCol(IM_COL32(255, 255, 255, 0),  IM_COL32(255, 255, 255, 14), hoverT);
             if ((bgCol >> IM_COL32_A_SHIFT) > 0) {
-                dl->AddRectFilled(rPos, ImVec2(rPos.x + innerW, rPos.y + btnH), bgCol, 8.0f * S);
+                dl->AddRectFilled(rPos, ImVec2(rPos.x + listW, rPos.y + btnH), bgCol, 8.0f * S);
             }
 
             if (w.open) {
@@ -442,7 +501,7 @@ static void RenderDock(bool menuOpen) {
             ImU32 fgCol = w.open ? kColTextPrimary : LerpCol(kColTextSecondary, kColTextPrimary, hoverT);
             DrawModuleIcon(dl, ImVec2(rPos.x + 18.0f * S, rPos.y + btnH * 0.5f), w.icon, fgCol, S);
 
-            float rightX = rPos.x + innerW - 10.0f * S;
+            float rightX = rPos.x + listW - 10.0f * S;
             float titleClipMaxX = rightX - 10.0f * S;
             if (w.pinned) titleClipMaxX -= 28.0f * S;
 
@@ -460,9 +519,40 @@ static void RenderDock(bool menuOpen) {
                 if (AppFonts::Small) ImGui::PopFont();
             }
 
-            if (clicked) {
+            if (s_dockEdit) {
+                // grip bars on the right: this row can be dragged
+                for (int k = 0; k < 3; ++k) {
+                    const float y = rPos.y + btnH * 0.5f + (k - 1) * 4.5f * S;
+                    dl->AddLine(ImVec2(rightX - 8.0f * S, y), ImVec2(rightX + 2.0f * S, y), kColTextMuted, 1.4f * S);
+                }
+                if (ImGui::IsItemActive() && !ImGui::IsItemHovered()) {
+                    const int n = static_cast<int>(i) + (ImGui::GetMouseDragDelta(0).y < 0.0f ? -1 : 1);
+                    if (n >= 0 && n < static_cast<int>(s_windows.size())) { swapFrom = static_cast<int>(i); swapTarget = n; }
+                }
+            } else if (clicked) {
                 w.open = !w.open;
                 if (w.open) w.openAnim = 0.0f;
+            }
+        }
+        if (swapTarget >= 0) {
+            std::swap(s_windows[swapFrom], s_windows[swapTarget]);
+            ImGui::ResetMouseDragDelta(0);
+            s_dockOrderDirty = true;
+        }
+        if (scrolling) {
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
+            ImGui::PopStyleVar(2);
+        }
+        if (s_dockOrderDirty && !ImGui::IsMouseDown(0)) {   // drag finished: persist
+            s_dockOrderDirty = false;
+            s_dockOrder.clear();
+            for (const auto& w2 : s_windows) s_dockOrder.push_back(w2.id);
+            const std::wstring path = DockOrderPath();
+            if (!path.empty()) {
+                WritePrivateProfileStringW(L"order", L"count", std::to_wstring(s_dockOrder.size()).c_str(), path.c_str());
+                for (size_t k = 0; k < s_dockOrder.size(); ++k)
+                    WritePrivateProfileStringW(L"order", std::to_wstring(k).c_str(), Logger::ToWide(s_dockOrder[k]).c_str(), path.c_str());
             }
         }
     }
@@ -972,7 +1062,10 @@ void UrushiUI::RegisterWindow(const WindowRegistration& reg) {
         s_windows.push_back(std::move(st));
     }
 
+    LoadDockOrder();
     std::sort(s_windows.begin(), s_windows.end(), [](const WindowState& a, const WindowState& b) {
+        const int ra = DockRank(a.id), rb = DockRank(b.id);
+        if (ra != rb) return ra < rb;
         if (a.order != b.order) return a.order < b.order;
         return a.title < b.title;
     });

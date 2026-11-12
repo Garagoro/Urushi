@@ -7,9 +7,16 @@ namespace Settings {
 
 static std::wstring s_path;
 static std::mutex s_mtx;
+static std::wstring s_dir;
+
+std::wstring GameDir() {
+    std::lock_guard<std::mutex> lk(s_mtx);
+    return s_dir;
+}
 
 void Init(const std::wstring& exeDir) {
     std::lock_guard<std::mutex> lk(s_mtx);
+    s_dir = exeDir;
     s_path = exeDir + L"\\urushi_settings.ini";
 }
 
