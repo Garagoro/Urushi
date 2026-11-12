@@ -87,6 +87,9 @@ struct SpatialProximityInput {
     float wallRearLeftHit[4] = { 0.0f, 0.0f, 0.0f, 999.0f };
     float wallRearRightHit[4] = { 0.0f, 0.0f, 0.0f, 999.0f };
     float driftState[4] = { 0.0f, 0.0f, 0.0f, 0.0f };        // x: slipDeg, y: signedSlipDeg, z: norm65, w: speedKmh
+    float camRight[4] = { 1.0f, 0.0f, 0.0f, 0.0f };          // xyz: main camera right axis (world)
+    float camUp[4]    = { 0.0f, 1.0f, 0.0f, 0.0f };          // xyz: main camera up axis
+    float camFwd[4]   = { 0.0f, 0.0f, 1.0f, 0.0f };          // xyz: main camera forward axis, w: basis valid (0/1)
 };
 
 struct DiagnosticStatus {

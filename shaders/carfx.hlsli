@@ -63,6 +63,9 @@ cbuffer CarFx : register(b13) {
     float4 g_fxWallRearLeftHit;   // xyz: rear-left quarter/corner hit, w: gap (m)
     float4 g_fxWallRearRightHit;  // xyz: rear-right quarter/corner hit, w: gap (m)
     float4 g_fxDriftState;        // x: driftAbsDeg, y: driftSignedDeg, z: norm65, w: speedKmh
+    float4 g_fxCamRight;          // xyz: main camera right axis (world)
+    float4 g_fxCamUp;             // xyz: main camera up axis
+    float4 g_fxCamFwd;            // xyz: main camera forward axis, w: basis valid (0/1)
 };
 
 // Custom SRV bindings on t32..t38 (RenderCore/Standard uses up to t28)
@@ -214,6 +217,33 @@ float3 CarLocalNormal(PSIn i) {
     if (!HasCarSpatial()) return Normal(i);
     float3 n = Normal(i);
     return float3(dot(n, g_fxCarRight.xyz), dot(n, g_fxCarUp.xyz), dot(n, g_fxCarFwd.xyz));
+}
+
+// Camera projection helpers (main camera axes are pushed by the host; no matrices needed).
+bool HasCamBasis() {
+    return (g_fxCamFwd.w > 0.5) && (g_fxCamPos.w > 0.5);
+}
+
+// Focal length in pixels, solved from this pixel's own view ray (falls back to a 60 deg vertical FOV near the image centre).
+float CamFocalPx(PSIn i) {
+    float3 d = normalize(i.posRelCam);
+    float zf = max(dot(d, g_fxCamFwd.xyz), 1e-3);
+    float a = dot(d, g_fxCamRight.xyz) / zf;
+    float b = dot(d, g_fxCamUp.xyz) / zf;
+    float2 p = i.svpos.xy - 0.5 / g_fxScreen.zw;
+    float den = a * a + b * b;
+    float solved = (p.x * a - p.y * b) / max(den, 1e-6);
+    float fallback = (0.5 / g_fxScreen.w) * 1.732;
+    return lerp(fallback, solved, saturate(den * 300.0));
+}
+
+// World point -> screen pixel (xy) and distance along the camera axis (z; <= 0 means behind the camera).
+float3 CamProject(float3 worldPos, float focalPx) {
+    float3 v = worldPos - g_fxCamPos.xyz;
+    float z = dot(v, g_fxCamFwd.xyz);
+    float iz = 1.0 / max(z, 1e-3);
+    float2 c = 0.5 / g_fxScreen.zw;
+    return float3(c.x + focalPx * dot(v, g_fxCamRight.xyz) * iz, c.y - focalPx * dot(v, g_fxCamUp.xyz) * iz, z);
 }
 
 float CarWallDistFront()      { return g_fxWallDirDist.x; }

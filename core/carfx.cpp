@@ -60,6 +60,9 @@ struct FxConstants {
     float wallRearLeftHit[4];
     float wallRearRightHit[4];
     float driftState[4];
+    float camRight[4];
+    float camUp[4];
+    float camFwd[4];
 };
 static_assert(sizeof(FxConstants) % 16 == 0, "CarFx constant buffer must align to 16 bytes");
 
@@ -1951,6 +1954,9 @@ bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, Draw
         memcpy(k.wallRearLeftHit, sp.wallRearLeftHit, sizeof(k.wallRearLeftHit));
         memcpy(k.wallRearRightHit, sp.wallRearRightHit, sizeof(k.wallRearRightHit));
         memcpy(k.driftState, sp.driftState, sizeof(k.driftState));
+        memcpy(k.camRight, sp.camRight, sizeof(k.camRight));
+        memcpy(k.camUp, sp.camUp, sizeof(k.camUp));
+        memcpy(k.camFwd, sp.camFwd, sizeof(k.camFwd));
     }
 
     D3D11_MAPPED_SUBRESOURCE mapped{};

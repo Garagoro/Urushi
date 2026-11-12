@@ -1,34 +1,73 @@
-// Invisible body (predator / cloak):
-// the body is replaced by the picture BEHIND the car (road, kerbs, sky), so you see the asphalt instead of the paint.
-// `@stealth 1` makes URUSHI draw the body BEFORE the engine / chassis / interior and hide them behind it,
-// so the scene snapshot is clean and nothing of the car leaks through. Wheels, lights and glass stay visible.
-// Defaults are almost perfectly clear; raise `shimmer` / `edgeBend` / `rim` for the "predator" look.
-// @stealth 1
-// @param edgeBend   p0.x 0..60  = 5.0  : background bend at the silhouette edges (px)
-// @param shimmer    p0.y 0..1   = 0.0  : heat-haze ripple across the body
-// @param speed      p0.z 0..4   = 1.2  : ripple speed
-// @param rim        p0.w 0..2   = 0.0  : outline glow so the silhouette stays readable
-// @color rimColor   p1.xyz = 0.45 0.88 1.0 : outline color
-// @param keepLivery p1.w 0..1   = 0.0  : 1 = vinyls stay painted on the invisible body
+// Invisible body (predator / cloak) without touching the draw order.
+// The car's engine, chassis and interior are already in the scene snapshot under the body, so reading "the pixel behind"
+// would show them. Instead the body shows what is BESIDE the car: the shader projects the car's 3D box to the screen
+// and, for every body pixel, reads the pixel mirrored across the nearest left/right edge of that box. Same screen row, so
+// the horizon and road layers continue naturally, and the picture is seamless at the silhouette. Needs the camera pose
+// pushed by the host (g_fxCam*); until then the body just shows the scene as is.
+// @param margin     p0.x 0..0.5 = 0.06 : grow the car box so no body pixel samples the car itself
+// @param edgeBend   p0.y 0..60  = 4.0  : background bend at the silhouette edges (px)
+// @param shimmer    p0.z 0..1   = 0.0  : heat-haze ripple across the body
+// @param speed      p0.w 0..4   = 1.2  : ripple speed
+// @param rim        p1.x 0..2   = 0.0  : outline glow so the silhouette stays readable
+// @param keepLivery p1.y 0..1   = 0.0  : 1 = vinyls stay painted on the invisible body
+// @color rimColor   p2.xyz = 0.45 0.88 1.0 : outline color
 // @mode replace
 #include "carfx.hlsli"
 
 float4 main(PSIn i) : SV_Target {
-    float bendPx  = g_fxParam[0].x;
-    float shimmer = saturate(g_fxParam[0].y);
-    float speed   = g_fxParam[0].z;
-    float rim     = g_fxParam[0].w;
-    float3 rimCol = g_fxParam[1].xyz;
-    float keepLiv = saturate(g_fxParam[1].w);
+    float margin  = g_fxParam[0].x;
+    float bendPx  = g_fxParam[0].y;
+    float shimmer = saturate(g_fxParam[0].z);
+    float speed   = g_fxParam[0].w;
+    float rim     = g_fxParam[1].x;
+    float keepLiv = saturate(g_fxParam[1].y);
+    float3 rimCol = g_fxParam[2].xyz;
 
     float3 n = Normal(i);
     float3 v = ViewDir(i);
-    float cv = saturate(dot(n, v));
-    float edge = pow(1.0 - cv, 3.0);                  // 0 face-on .. 1 at the silhouette
+    float edge = pow(1.0 - saturate(dot(n, v)), 3.0);
     float scale = g_fxScreen.x / 2560.0;
 
-    // only the edges bend the background, the middle of the panels is pixel-perfect see-through
-    float2 off = ScreenNormal(i) * (bendPx * scale * edge);
+    float2 off = float2(0.0, 0.0);
+    bool ok = HasCamBasis() && HasCarSpatial();
+
+    float minX = 1e9, maxX = -1e9;
+    if (ok) {
+        float f = CamFocalPx(i);
+        float3 ctr = g_fxCarPos.xyz;
+        float hw = g_fxCarPos.w * (1.0 + margin) + 0.1;
+        float hl = g_fxCarRight.w * (1.0 + margin) + 0.1;
+        float ht = g_fxCarUp.w * (1.0 + margin);
+        [unroll] for (int k = 0; k < 8; ++k) {
+            float sx = (k & 1) ? 1.0 : -1.0;
+            float sz = (k & 2) ? 1.0 : -1.0;
+            float sy = (k & 4) ? ht : -0.25;
+            float3 pr = CamProject(ctr + g_fxCarRight.xyz * (sx * hw) + g_fxCarFwd.xyz * (sz * hl) + g_fxCarUp.xyz * sy, f);
+            if (pr.z < 0.05) ok = false;          // car box crosses the camera plane: no reliable projection
+            minX = min(minX, pr.x);
+            maxX = max(maxX, pr.x);
+        }
+    }
+
+    if (ok) {
+        float W = 1.0 / g_fxScreen.z;
+        float x = i.svpos.x;
+        float dl = max(x - minX, 0.0);
+        float dr = max(maxX - x, 0.0);
+        float xl = minX - dl;
+        float xr = maxX + dr;
+        bool okL = xl >= 0.0;
+        bool okR = xr <= W - 1.0;
+        float xs;
+        if (okL && okR)  xs = (dl < dr) ? xl : xr;
+        else if (okL)    xs = xl;
+        else if (okR)    xs = xr;
+        else             xs = clamp((dl < dr) ? xl : xr, 0.0, W - 1.0);
+        off.x = xs - x;
+    }
+
+    // predator touches: edge bend + optional heat haze
+    off += ScreenNormal(i) * (bendPx * scale * edge);
     if (shimmer > 0.001) {
         float t = g_fxTime.x * speed;
         float3 wp = i.posRelCam * 1.3;

@@ -3217,6 +3217,10 @@ static bool SafeGetMainCameraPoseSEH(void* fnGetCam, void* fnTfGetPos, void* fnT
     }
 }
 
+// main camera axes (world), refreshed once per frame next to the camera position; consumed by the spatial builder
+static float s_camAxes[3][3] = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
+static bool s_camAxesValid = false;
+
 static bool SafeGetMainCameraPosSEH(void* fnGetCam, void* fnTfGetPos, UnityVector3* outPos) {
     return SafeGetMainCameraPoseSEH(fnGetCam, fnTfGetPos, nullptr, outPos, nullptr);
 }
@@ -3315,6 +3319,12 @@ static void EvaluateCarSpatialTarget(
     if (hasCamPos) {
         sp.camPos[0] = camPos.x; sp.camPos[1] = camPos.y; sp.camPos[2] = camPos.z; sp.camPos[3] = 1.0f;
     }
+    for (int k = 0; k < 3; ++k) {
+        sp.camRight[k] = s_camAxes[0][k];
+        sp.camUp[k] = s_camAxes[1][k];
+        sp.camFwd[k] = s_camAxes[2][k];
+    }
+    sp.camFwd[3] = s_camAxesValid ? 1.0f : 0.0f;
 
     // 1. Volumetric perimeter proximity queries (3D SphereCasts + barrier layer + low-curb CastRays, 8 zones incl. doors)
     struct RawZoneHit {
@@ -3842,9 +3852,19 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
     dt = std::clamp(dt, 0.0005f, 0.08f);
 
     UnityVector3 camPos{};
-    bool hasCam = SafeGetMainCameraPosSEH(reinterpret_cast<void*>(pfn_GetMainCameraNative),
-                                          reinterpret_cast<void*>(pfn_Transform_get_position),
-                                          &camPos);
+    UnityVector4 camRot{ 0.0f, 0.0f, 0.0f, 1.0f };
+    bool hasCam = SafeGetMainCameraPoseSEH(reinterpret_cast<void*>(pfn_GetMainCameraNative),
+                                           reinterpret_cast<void*>(pfn_Transform_get_position),
+                                           reinterpret_cast<void*>(pfn_Transform_get_rotation),
+                                           &camPos, &camRot);
+    s_camAxesValid = hasCam && pfn_Transform_get_rotation != nullptr;
+    if (s_camAxesValid) {
+        UnityVector3 cr{}, cu{}, cf{};
+        UnityBridge::QuatToAxes(camRot, cr, cu, cf);
+        s_camAxes[0][0] = cr.x; s_camAxes[0][1] = cr.y; s_camAxes[0][2] = cr.z;
+        s_camAxes[1][0] = cu.x; s_camAxes[1][1] = cu.y; s_camAxes[1][2] = cu.z;
+        s_camAxes[2][0] = cf.x; s_camAxes[2][1] = cf.y; s_camAxes[2][2] = cf.z;
+    }
 
     void* localRootTf = nullptr;
     UnityVector3 pPos{};
