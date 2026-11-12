@@ -1,12 +1,20 @@
+<div align="center">
+
 # URUSHI
 
 [![Discord](https://img.shields.io/badge/Discord-URUSHI-5865F2?logo=discord&logoColor=white)](https://discord.gg/jS6cc49EbT)
 [![Discussions](https://img.shields.io/badge/GitHub-Discussions-orange?logo=github)](https://github.com/Garagoro/Urushi/discussions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+<br/>
+
 [English](#about-urushi) · [Русский](#о-проекте-urushi)
 
+<br/>
+
 Open-source **C++ / Lua 5.4 / DirectX 11** modding framework for **CarX Drift Racing Online 2**.
+
+</div>
 
 ---
 
