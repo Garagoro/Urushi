@@ -1,0 +1,76 @@
+name: Discord Release Notification
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Discord Release Changelog
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          RELEASE_NAME: ${{ github.event.release.name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_URL: ${{ github.event.release.html_url }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+        run: |
+          python3 -c "
+          import os, json, urllib.request
+
+          webhook_url = os.environ.get('DISCORD_WEBHOOK')
+          if not webhook_url:
+              print('DISCORD_WEBHOOK secret not found, skipping.')
+              exit(0)
+
+          tag = os.environ.get('RELEASE_TAG', '')
+          name = os.environ.get('RELEASE_NAME') or tag
+          url = os.environ.get('RELEASE_URL', '')
+          body = os.environ.get('RELEASE_BODY', '').strip()
+
+          if not body:
+              body = 'No changelog description provided.'
+
+          # Discord embed description max length is 4096 chars
+          if len(body) > 4000:
+              body = body[:3997] + '...'
+
+          embed = {
+              'title': f'🚀 New Release: {name}',
+              'url': url,
+              'color': 0x2ECC71,
+              'description': f'### 📝 What\'s Changed:\n{body}',
+              'fields': [
+                  {
+                      'name': '🏷️ Version',
+                      'value': f'`{tag}`',
+                      'inline': True
+                  }
+              ],
+              'footer': {
+                  'text': 'URUSHI • Auto-Update',
+                  'icon_url': 'https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png'
+              }
+          }
+
+          payload = {
+              'username': 'URUSHI Updates',
+              'embeds': [embed]
+          }
+
+          req = urllib.request.Request(
+              webhook_url,
+              data=json.dumps(payload).encode('utf-8'),
+              headers={
+                  'Content-Type': 'application/json',
+                  'User-Agent': 'DiscordBot (https://discord.com, 1.0.0)'
+              }
+          )
+
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  print('Discord notification sent! Status:', resp.status)
+          except Exception as e:
+              print('Failed to send notification:', e)
+          "
