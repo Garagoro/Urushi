@@ -6,7 +6,8 @@ It contains no mod code, only `community/<id>/` script folders and the generated
 ```
 catalog.json                generated: python tools/cloud_catalog.py
 community/<id>/manifest.json
-community/<id>/init.lua     entry file (default), plus any .lua/.json/.txt/.png/.hlsl files (max 32, 512 KB each)
+community/<id>/init.lua     entry file (default), plus any .lua/.json/.txt/.png/.hlsl/.hlsli files (max 32, 512 KB each)
+                            shader files are installed to shaders/cloud/<id>/ ; a package may be shader-only (no .lua)
 ```
 
 ## Rules

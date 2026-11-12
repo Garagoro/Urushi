@@ -1,0 +1,9 @@
+{
+  "id": "shader_glass",
+  "name": "Crystal Glass shader",
+  "name_ru": "Шейдер: кристальное стекло",
+  "author": "Garagoro",
+  "version": "1.0.0",
+  "description": "CarFX shader pack (no script): refractive crystal glass with dispersion and frosted roughness. Pick it in the CarFX window as cloud/shader_glass/glass.hlsl.",
+  "description_ru": "Пак шейдеров CarFX (без скрипта): преломляющее кристальное стекло с дисперсией и матовостью. Выбирается в окне CarFX как cloud/shader_glass/glass.hlsl."
+}
