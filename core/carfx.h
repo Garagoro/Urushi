@@ -165,6 +165,7 @@ bool IsTargetCompiled(int target);
 bool IsTargetActive(int target);
 bool ShouldBypassDepthPrePass(int target = kTargetBody);
 bool ShouldHideCarInternals(int target = kTargetBody);
+void SetStealthDepthWrite(bool on);   // body replace draws also write depth (body is drawn before the internals)
 void SetOverrideMode(int target, int overrideMode);
 int GetOverrideMode(int target);
 void SetOverrideStealth(int target, int overrideStealth);

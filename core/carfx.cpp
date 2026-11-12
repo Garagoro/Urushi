@@ -227,6 +227,8 @@ ID3D11SamplerState* s_samplerLinear = nullptr;
 ID3D11SamplerState* s_samplerPoint = nullptr;
 ID3D11BlendState* s_overlayBlend = nullptr;
 ID3D11DepthStencilState* s_overlayDs = nullptr;
+ID3D11DepthStencilState* s_bodyDepthDs = nullptr;
+std::atomic<bool> s_stealthDepthWrite{ false };
 
 // Scene & Depth copy cache (render thread)
 ID3D11Texture2D* s_sceneTex = nullptr;
@@ -1145,6 +1147,11 @@ bool Init(ID3D11Device* device, ID3D11DeviceContext* immediateContext, const std
     dsd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
     dsd.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
     dsd.StencilEnable = FALSE;
+    {
+        D3D11_DEPTH_STENCIL_DESC wd = dsd;
+        wd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+        s_device->CreateDepthStencilState(&wd, &s_bodyDepthDs);
+    }
     if (FAILED(s_device->CreateDepthStencilState(&dsd, &s_overlayDs))) {
         Logger::Warn("CarFX: CreateDepthStencilState failed.");
     }
@@ -1179,6 +1186,7 @@ void Shutdown() {
     ReleaseDepthCopy();
 
     if (s_overlayDs) { s_overlayDs->Release(); s_overlayDs = nullptr; }
+    if (s_bodyDepthDs) { s_bodyDepthDs->Release(); s_bodyDepthDs = nullptr; }
     if (s_overlayBlend) { s_overlayBlend->Release(); s_overlayBlend = nullptr; }
     if (s_samplerPoint) { s_samplerPoint->Release(); s_samplerPoint = nullptr; }
     if (s_samplerLinear) { s_samplerLinear->Release(); s_samplerLinear = nullptr; }
@@ -1524,6 +1532,10 @@ bool ShouldBypassDepthPrePass(int target) {
     return s_initialized.load(std::memory_order_acquire) &&
            IsTargetActiveInternal(target) &&
            s_targets[target].usesScene.load(std::memory_order_acquire);
+}
+
+void SetStealthDepthWrite(bool on) {
+    s_stealthDepthWrite.store(on, std::memory_order_relaxed);
 }
 
 bool ShouldHideCarInternals(int target) {
@@ -1982,7 +1994,9 @@ bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, Draw
     context->PSGetConstantBuffers(kCbSlot, 1, &saved.cb);
     context->PSGetShaderResources(kSceneSlot, kViewCount, saved.srvs);
     context->PSGetSamplers(14, 2, saved.samplers);
-    if (mode == kDeclModeOverlay) {
+    const bool depthWrite = (mode != kDeclModeOverlay) && s_stealthDepthWrite.load(std::memory_order_relaxed) &&
+                            s_bodyDepthDs && matchedTarget == kTargetBody && ShouldHideCarInternals(matchedTarget);
+    if (mode == kDeclModeOverlay || depthWrite) {
         saved.restoreOm = true;
         context->OMGetBlendState(&saved.blend, saved.blendFactor, &saved.sampleMask);
         context->OMGetDepthStencilState(&saved.ds, &saved.stencilRef);
@@ -2003,6 +2017,9 @@ bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, Draw
     context->PSSetConstantBuffers(kCbSlot, 1, &s_cb);
     context->PSSetShaderResources(kSceneSlot, kViewCount, views);
     context->PSSetSamplers(14, 2, samplers);
+    if (depthWrite) {
+        context->OMSetDepthStencilState(s_bodyDepthDs, saved.stencilRef);
+    }
     if (mode == kDeclModeOverlay) {
         if (s_overlayBlend) context->OMSetBlendState(s_overlayBlend, nullptr, 0xFFFFFFFFu);
         if (s_overlayDs) context->OMSetDepthStencilState(s_overlayDs, saved.stencilRef);

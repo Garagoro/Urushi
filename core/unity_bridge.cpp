@@ -7,6 +7,7 @@
 #include "hook_manager.h"
 #include "lua_engine.h"
 #include "logger.h"
+#include "settings.h"
 #include <psapi.h>
 #include <cmath>
 #include <chrono>
@@ -804,6 +805,11 @@ static int SafeCollectPartsMaterialIdsSEH(uintptr_t partsMap, int32_t* outIds, i
     }
 }
 
+// queues URUSHI itself assigns to car materials (body / parts); anything else is the game's original queue
+static bool IsMovedQueue(int32_t q) {
+    return q == 2510 || (q >= 2540 && q <= 2590);
+}
+
 static bool SafeSyncMaterialQueueAndDepthSEH(uintptr_t unityBase, int32_t matId, bool applyOverride,
                                              int32_t targetQueue, bool requireBodyName,
                                              int32_t savedOrigQueue, bool* outModified, int32_t* outOrigQueue) {
@@ -830,7 +836,7 @@ static bool SafeSyncMaterialQueueAndDepthSEH(uintptr_t unityBase, int32_t matId,
         const UnityManagedSpanWrapper depthOnlySpan{ kDepthOnlyW, 9 };
 
         if (applyOverride) {
-            const int32_t origQ = (curQ != 2510 && curQ != 2580 && curQ != 2590) ? curQ : savedOrigQueue;
+            const int32_t origQ = !IsMovedQueue(curQ) ? curQ : savedOrigQueue;
             if (outOrigQueue) *outOrigQueue = origQ;
             if (curQ != targetQueue) {
                 pfnSetRq(natMat, targetQueue);
@@ -838,9 +844,9 @@ static bool SafeSyncMaterialQueueAndDepthSEH(uintptr_t unityBase, int32_t matId,
                 if (outModified) *outModified = true;
             }
         } else {
-            const int32_t restoreQ = (savedOrigQueue > 0 && savedOrigQueue != 2510 && savedOrigQueue != 2580 && savedOrigQueue != 2590)
+            const int32_t restoreQ = (savedOrigQueue > 0 && !IsMovedQueue(savedOrigQueue))
                                      ? savedOrigQueue : 2200;
-            if (curQ == 2510 || curQ == 2580 || curQ == 2590) {
+            if (IsMovedQueue(curQ)) {
                 pfnSetRq(natMat, restoreQ);
                 pfnSetPass(natMat, &depthOnlySpan, true);
                 if (outModified) *outModified = true;
@@ -955,6 +961,8 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
 
     const bool wantTransparent = CarFX::ShouldBypassDepthPrePass();
     const bool wantStealth = CarFX::ShouldHideCarInternals();
+    const bool stealthByOrder = Settings::GetBool("carfx", "stealth_order", false);   // experimental: body-first draw order
+    CarFX::SetStealthDepthWrite(stealthByOrder && wantStealth);
     const bool modeChanged = (wantTransparent != s_prevWantTransparent);
     const bool stealthChanged = (wantStealth != s_prevWantStealth);
 
@@ -1003,8 +1011,12 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
         s_savedBodyMatQueues.clear();
         Logger::Info("CarFX restored car_body(Clone) renderQueues -> 2200 + DepthOnly ON");
     }
-    if (!wantStealth) {
-        restoreAllStealthMaterials();
+    {
+        static bool s_prevOrderMode = false;
+        if (!wantStealth || s_prevOrderMode != stealthByOrder) {
+            restoreAllStealthMaterials();
+            if (s_prevOrderMode != stealthByOrder) s_prevOrderMode = stealthByOrder;
+        }
     }
     s_prevWantTransparent = wantTransparent;
     s_prevWantStealth = wantStealth;
@@ -1058,7 +1070,8 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
 
     // Stealth places car_body at 2510 ([4] right after DrawSky) and all non-glass car parts at 2580 ([7] after car_body, before car_glass=2600),
     // so hardware Depth Test naturally hides engine/chassis behind cloaked body while keeping wheels, arms, lights & interior-through-glass visible!
-    const int32_t bodyTargetQueue = 2590;
+    const int32_t bodyTargetQueue = (wantStealth && stealthByOrder)
+        ? std::clamp(atoi(Settings::GetString("carfx", "body_queue", "2510").c_str()), 2300, 2579) : 2590;
     std::unordered_set<int32_t> bodyMatIdSet;
     if (partsMap && (wantTransparent || wantStealth || !s_savedBodyMatQueues.empty())) {
         int32_t matIds[512] = {};
@@ -1092,7 +1105,77 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
         }
     }
 
-    if (wantStealth) {
+    if (wantStealth && stealthByOrder) {
+        s_prevStealthRootGo = rootGo;
+        std::vector<CarRendererRef> renderers;
+        CollectCarRenderersOnMainThread(rootGo, renderers);
+
+        std::unordered_set<int32_t> skipMatIds = bodyMatIdSet;
+        int movedCount = 0;
+        int clonedAssetCount = 0;
+
+        for (const CarRendererRef& r : renderers) {
+            for (uint32_t slotIdx = 0; slotIdx < r.matCount; ++slotIdx) {
+                const int32_t mid = r.matIds[slotIdx];
+                if (mid == 0 || skipMatIds.count(mid)) continue;
+
+                int32_t targetMid = mid;
+                if (mid > 0) {
+                    auto itClone = s_stealthAssetToClone.find(mid);
+                    if (itClone != s_stealthAssetToClone.end()) {
+                        if (SafeCloneOrAssignRendererMatSEH(unityBase, r.instanceId, static_cast<int32_t>(slotIdx), itClone->second, nullptr)) {
+                            s_savedStealthSwaps.push_back({ r.instanceId, static_cast<int32_t>(slotIdx), mid });
+                        }
+                        continue;
+                    }
+                    int32_t curQ = 0;
+                    const int cls = SafeClassifyMaterialSEH(unityBase, mid, &curQ);
+                    if (cls != kMatStealthPart) {
+                        skipMatIds.insert(mid);
+                        continue;
+                    }
+                    int32_t newCloneId = 0;
+                    if (!SafeCloneOrAssignRendererMatSEH(unityBase, r.instanceId, static_cast<int32_t>(slotIdx), 0, &newCloneId) || newCloneId >= 0) {
+                        continue;
+                    }
+                    s_stealthAssetToClone.emplace(mid, newCloneId);
+                    s_savedStealthSwaps.push_back({ r.instanceId, static_cast<int32_t>(slotIdx), mid });
+                    targetMid = newCloneId;
+                    clonedAssetCount++;
+                } else {
+                    int32_t curQ = 0;
+                    const int cls = SafeClassifyMaterialSEH(unityBase, mid, &curQ);
+                    if (cls == kMatBody) {
+                        bodyMatIdSet.insert(mid);
+                        skipMatIds.insert(mid);
+                        SafeSyncMaterialQueueAndDepthSEH(unityBase, mid, wantTransparent, bodyTargetQueue, true, 2200, nullptr, nullptr);
+                        continue;
+                    }
+                    if (cls != kMatStealthPart) {
+                        skipMatIds.insert(mid);
+                        continue;
+                    }
+                }
+
+                int32_t origQ = 2200;
+                auto itSavedQ = s_savedStealthMatQueues.find(targetMid);
+                if (itSavedQ != s_savedStealthMatQueues.end()) origQ = itSavedQ->second;
+                bool modified = false;
+                int32_t outOrigQ = origQ;
+                if (SafeSyncMaterialQueueAndDepthSEH(unityBase, targetMid, true, 2580, false, origQ, &modified, &outOrigQ)) {
+                    s_savedStealthMatQueues.emplace(targetMid, outOrigQ);
+                    if (modified) movedCount++;
+                }
+            }
+        }
+        if (movedCount > 0 || clonedAssetCount > 0) {
+            Logger::Info("CarFX stealth staged " + std::to_string(movedCount) +
+                         " player part mats -> queue 2580 + DepthOnly OFF (isolated " +
+                         std::to_string(clonedAssetCount) + " shared assets)");
+        }
+    }
+
+    if (wantStealth && !stealthByOrder) {
         // Hide the car's internals (engine, suspension, interior...) from the colour pass: every non-wheel part is given the
         // "shadowcaster_only" material the tyres already use for their shadow proxies. They keep casting shadows but draw no
         // colour, so the scene snapshot taken for the body shader holds the real road behind the car.
