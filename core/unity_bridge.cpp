@@ -1058,7 +1058,7 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
 
     // Stealth places car_body at 2510 ([4] right after DrawSky) and all non-glass car parts at 2580 ([7] after car_body, before car_glass=2600),
     // so hardware Depth Test naturally hides engine/chassis behind cloaked body while keeping wheels, arms, lights & interior-through-glass visible!
-    const int32_t bodyTargetQueue = wantStealth ? 2510 : 2590;
+    const int32_t bodyTargetQueue = 2590;
     std::unordered_set<int32_t> bodyMatIdSet;
     if (partsMap && (wantTransparent || wantStealth || !s_savedBodyMatQueues.empty())) {
         int32_t matIds[512] = {};
@@ -1093,72 +1093,49 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
     }
 
     if (wantStealth) {
+        // Hide the car's internals (engine, suspension, interior...) from the colour pass: every non-wheel part is given the
+        // "shadowcaster_only" material the tyres already use for their shadow proxies. They keep casting shadows but draw no
+        // colour, so the scene snapshot taken for the body shader holds the real road behind the car.
         s_prevStealthRootGo = rootGo;
         std::vector<CarRendererRef> renderers;
         CollectCarRenderersOnMainThread(rootGo, renderers);
 
-        std::unordered_set<int32_t> skipMatIds = bodyMatIdSet;
-        int movedCount = 0;
-        int clonedAssetCount = 0;
-
+        int32_t shadowMat = 0;
         for (const CarRendererRef& r : renderers) {
-            for (uint32_t slotIdx = 0; slotIdx < r.matCount; ++slotIdx) {
-                const int32_t mid = r.matIds[slotIdx];
-                if (mid == 0 || skipMatIds.count(mid)) continue;
-
-                int32_t targetMid = mid;
-                if (mid > 0) {
-                    auto itClone = s_stealthAssetToClone.find(mid);
-                    if (itClone != s_stealthAssetToClone.end()) {
-                        if (SafeCloneOrAssignRendererMatSEH(unityBase, r.instanceId, static_cast<int32_t>(slotIdx), itClone->second, nullptr)) {
-                            s_savedStealthSwaps.push_back({ r.instanceId, static_cast<int32_t>(slotIdx), mid });
-                        }
-                        continue;
-                    }
-                    int32_t curQ = 0;
-                    const int cls = SafeClassifyMaterialSEH(unityBase, mid, &curQ);
-                    if (cls != kMatStealthPart) {
-                        skipMatIds.insert(mid);
-                        continue;
-                    }
-                    int32_t newCloneId = 0;
-                    if (!SafeCloneOrAssignRendererMatSEH(unityBase, r.instanceId, static_cast<int32_t>(slotIdx), 0, &newCloneId) || newCloneId >= 0) {
-                        continue;
-                    }
-                    s_stealthAssetToClone.emplace(mid, newCloneId);
-                    s_savedStealthSwaps.push_back({ r.instanceId, static_cast<int32_t>(slotIdx), mid });
-                    targetMid = newCloneId;
-                    clonedAssetCount++;
-                } else {
-                    int32_t curQ = 0;
-                    const int cls = SafeClassifyMaterialSEH(unityBase, mid, &curQ);
-                    if (cls == kMatBody) {
-                        bodyMatIdSet.insert(mid);
-                        skipMatIds.insert(mid);
-                        SafeSyncMaterialQueueAndDepthSEH(unityBase, mid, wantTransparent, bodyTargetQueue, true, 2200, nullptr, nullptr);
-                        continue;
-                    }
-                    if (cls != kMatStealthPart) {
-                        skipMatIds.insert(mid);
-                        continue;
-                    }
+            for (uint32_t slotIdx = 0; slotIdx < r.matCount && !shadowMat; ++slotIdx) {
+                char mn[64] = {};
+                if (SafeReadMatNameSEH(unityBase, r.matIds[slotIdx], mn, sizeof(mn)) && strcmp(mn, "shadowcaster_only") == 0) {
+                    shadowMat = r.matIds[slotIdx];
                 }
+            }
+            if (shadowMat) break;
+        }
 
-                int32_t origQ = 2200;
-                auto itSavedQ = s_savedStealthMatQueues.find(targetMid);
-                if (itSavedQ != s_savedStealthMatQueues.end()) origQ = itSavedQ->second;
-                bool modified = false;
-                int32_t outOrigQ = origQ;
-                if (SafeSyncMaterialQueueAndDepthSEH(unityBase, targetMid, true, 2580, false, origQ, &modified, &outOrigQ)) {
-                    s_savedStealthMatQueues.emplace(targetMid, outOrigQ);
-                    if (modified) movedCount++;
+        static const char* const kKeep[] = { "rim", "yolo", "defaultDiffuse", "BrakeRotor", "Caliper", "wheel_motion", "shadowcaster", "light", "lamp" };
+        int hidden = 0;
+        if (shadowMat) {
+            for (const CarRendererRef& r : renderers) {
+                for (uint32_t slotIdx = 0; slotIdx < r.matCount; ++slotIdx) {
+                    const int32_t mid = r.matIds[slotIdx];
+                    if (mid == 0 || mid == shadowMat) continue;
+                    char mn[64] = {};
+                    if (!SafeReadMatNameSEH(unityBase, mid, mn, sizeof(mn))) continue;
+                    bool keep = false;
+                    for (const char* k : kKeep) {
+                        if (strstr(mn, k)) { keep = true; break; }
+                    }
+                    if (keep) continue;
+                    int32_t curQ = 0;
+                    if (SafeClassifyMaterialSEH(unityBase, mid, &curQ) != kMatStealthPart) continue;
+                    if (SafeRestoreRendererMatSEH(unityBase, r.instanceId, static_cast<int32_t>(slotIdx), shadowMat)) {
+                        s_savedStealthSwaps.push_back({ r.instanceId, static_cast<int32_t>(slotIdx), mid });
+                        ++hidden;
+                    }
                 }
             }
         }
-        if (movedCount > 0 || clonedAssetCount > 0) {
-            Logger::Info("CarFX stealth staged " + std::to_string(movedCount) +
-                         " player part mats -> queue 2580 + DepthOnly OFF (isolated " +
-                         std::to_string(clonedAssetCount) + " shared assets)");
+        if (hidden > 0) {
+            Logger::Info("CarFX stealth: hid " + std::to_string(hidden) + " car internal material slots (shadow-only proxy)");
         }
     }
 
