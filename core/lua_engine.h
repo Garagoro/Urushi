@@ -2,6 +2,8 @@
 #include <string>
 #include <mutex>
 #include <vector>
+#include <atomic>
+#include <windows.h>
 
 extern "C" {
 #include <lua.h>
@@ -28,8 +30,12 @@ public:
 
     static std::wstring GetScriptsDirectory();
     static lua_State* GetState() { return s_L; }
+    // Lock that must be held by any code that touches the Lua state outside LuaEngine itself
+    static std::recursive_mutex& Mutex() { return s_mutex; }
 
 private:
+    static std::atomic<ULONGLONG> s_reloadAt;   // 0 = no reload pending, else tick when to reload
+    static float s_fixedAccum;
     static void RegisterEventsModule(lua_State* L);
     static void RegisterLogModule(lua_State* L);
     static void CallLuaCallbacks(const std::vector<int>& callbackRefs, int argCount = 0);

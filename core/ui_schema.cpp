@@ -540,6 +540,9 @@ void UiSchema::DrawUiNode(UiNode& node, ScriptPanel& panel) {
 
 void UiSchema::RenderAll(bool menuOpen) {
     if (!menuOpen) return;
+    // Panels dispatch into Lua (on_action / on_change): take the Lua lock first (same order as
+    // LuaEngine::OnRender -> UI) so the state cannot be closed/reloaded underneath us.
+    std::lock_guard<std::recursive_mutex> luaLock(LuaEngine::Mutex());
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
     if (s_panels.empty()) return;
 

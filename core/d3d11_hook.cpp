@@ -309,6 +309,10 @@ HRESULT WINAPI D3D11Hook::Hooked_Present(IDXGISwapChain* pSwapChain, UINT SyncIn
     }
     try {
         if (!s_imguiInitialized && pSwapChain) {
+            // Retry after a failed init: drop refs from the previous attempt instead of leaking them
+            if (s_renderTargetView) { s_renderTargetView->Release(); s_renderTargetView = nullptr; }
+            if (s_context) { s_context->Release(); s_context = nullptr; }
+            if (s_device) { s_device->Release(); s_device = nullptr; }
             if (SUCCEEDED(pSwapChain->GetDevice(__uuidof(ID3D11Device), (void**)&s_device))) {
                 s_device->GetImmediateContext(&s_context);
 
@@ -325,7 +329,9 @@ HRESULT WINAPI D3D11Hook::Hooked_Present(IDXGISwapChain* pSwapChain, UINT SyncIn
                 }
 
                 // Hook window procedure for inputs
-                if (s_hwnd) {
+                // Never subclass twice: if a previous half-finished init already installed us,
+                // s_originalWndProc would become our own proc and recurse forever.
+                if (s_hwnd && !s_originalWndProc) {
                     s_originalWndProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(s_hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(Hooked_WndProc)));
                 }
 
@@ -439,7 +445,7 @@ HRESULT WINAPI D3D11Hook::Hooked_ResizeBuffers(IDXGISwapChain* pSwapChain, UINT 
         return s_originalResizeBuffers(pSwapChain, BufferCount, Width, Height, NewFormat, SwapChainFlags);
     }
     if (s_renderTargetView) {
-        s_context->OMSetRenderTargets(0, nullptr, nullptr);
+        if (s_context) s_context->OMSetRenderTargets(0, nullptr, nullptr);
         s_renderTargetView->Release();
         s_renderTargetView = nullptr;
     }
@@ -467,15 +473,20 @@ LRESULT WINAPI D3D11Hook::Hooked_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
                            : DefWindowProc(hWnd, uMsg, wParam, lParam);
     }
     // Forward key events to Lua scripts and InputManager
-    if (uMsg == WM_KEYDOWN || uMsg == WM_KEYUP) {
+    const bool isRepeat = (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && (lParam & (1 << 30));
+    const bool typingInUi = s_imguiInitialized && ImGui::GetCurrentContext() &&
+                            ImGui::GetIO().WantTextInput;
+    if ((uMsg == WM_KEYDOWN || uMsg == WM_KEYUP) && !isRepeat && !typingInUi) {
+        // Don't fire script hotkeys while the user is typing into a text field,
+        // and ignore OS auto-repeat (would re-trigger toggles every ~30 ms).
         InputManager::OnKeyEvent(static_cast<int>(wParam), uMsg == WM_KEYDOWN);
         LuaEngine::OnKeyEvent(static_cast<int>(wParam), uMsg == WM_KEYDOWN);
     }
 
-    // Toggle menu on F4 or Insert
+    // Toggle menu on F4 or Insert (F4 arrives as WM_SYSKEYDOWN when Alt is held; Alt+F4 must still close the game)
     if (uMsg == WM_KEYDOWN) {
         if (wParam == VK_F4 || wParam == VK_INSERT) {
-            ToggleMenu();
+            if (!isRepeat) ToggleMenu();
             return 0;
         }
     }

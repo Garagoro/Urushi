@@ -13,11 +13,14 @@
 #include "bindings/lua_optimizer.h"
 #include "bindings/lua_urushi.h"
 #include <chrono>
+#include <unordered_map>
 
 std::recursive_mutex LuaEngine::s_mutex;
 lua_State* LuaEngine::s_L = nullptr;
 std::wstring LuaEngine::s_scriptsDir;
 bool LuaEngine::s_initialized = false;
+std::atomic<ULONGLONG> LuaEngine::s_reloadAt{ 0 };
+float LuaEngine::s_fixedAccum = 0.0f;
 
 std::vector<int> LuaEngine::s_mainUpdateCallbacks;
 std::vector<int> LuaEngine::s_updateCallbacks;
@@ -115,12 +118,19 @@ void LuaEngine::Reload() {
 }
 
 void LuaEngine::OnScriptModified(const std::string& filename) {
-    Logger::Info("Reload triggered by FileWatcher: " + filename);
-    Reload();
+    // Called from the FileWatcher thread. Never touch the Lua state here: closing it while
+    // the render thread is inside a Lua call is a crash. Defer to the render thread and
+    // debounce so that multi-file saves / half-written files cause a single clean reload.
+    Logger::Info("Reload scheduled by FileWatcher: " + filename);
+    s_reloadAt.store(GetTickCount64() + 300, std::memory_order_release);
 }
 
-void LuaEngine::CallLuaCallbacks(const std::vector<int>& callbackRefs, int argCount) {
+void LuaEngine::CallLuaCallbacks(const std::vector<int>& callbackRefsIn, int argCount) {
     if (!s_L) return;
+
+    // Copy: a callback may register another callback (push_back would invalidate iteration)
+    const std::vector<int> callbackRefs = callbackRefsIn;
+    static std::unordered_map<int, ULONGLONG> s_lastErrLog;
 
     for (int ref : callbackRefs) {
         lua_rawgeti(s_L, LUA_REGISTRYINDEX, ref);
@@ -131,7 +141,13 @@ void LuaEngine::CallLuaCallbacks(const std::vector<int>& callbackRefs, int argCo
             }
             if (lua_pcall(s_L, argCount, 0, 0) != LUA_OK) {
                 const char* err = lua_tostring(s_L, -1);
-                Logger::Error("Lua callback error: " + std::string(err ? err : "unknown"));
+                // A failing per-frame callback would otherwise flood the log (and disk) at FPS rate
+                const ULONGLONG now = GetTickCount64();
+                ULONGLONG& last = s_lastErrLog[ref];
+                if (now - last >= 2000) {
+                    last = now;
+                    Logger::Error("Lua callback error: " + std::string(err ? err : "unknown"));
+                }
                 lua_pop(s_L, 1);
             }
         } else {
@@ -168,13 +184,31 @@ void LuaEngine::OnFixedUpdate(float dt) {
 }
 
 void LuaEngine::OnRender() {
+    // Apply a pending hot-reload here: render thread, outside any Lua call
+    const ULONGLONG reloadAt = s_reloadAt.load(std::memory_order_acquire);
+    if (reloadAt != 0 && GetTickCount64() >= reloadAt) {
+        s_reloadAt.store(0, std::memory_order_release);
+        Reload();
+    }
+
     // Process update tick before render
     auto now = std::chrono::steady_clock::now();
     float dt = std::chrono::duration<float>(now - g_lastUpdateTime).count();
     g_lastUpdateTime = now;
+    if (dt > 0.25f) dt = 0.25f; // hitch / alt-tab guard
 
     OnUpdate(dt);
-    OnFixedUpdate(0.01666f);
+
+    // Fixed step at 60 Hz independent of render FPS
+    constexpr float kFixedStep = 1.0f / 60.0f;
+    s_fixedAccum += dt;
+    int steps = 0;
+    while (s_fixedAccum >= kFixedStep && steps < 4) {
+        OnFixedUpdate(kFixedStep);
+        s_fixedAccum -= kFixedStep;
+        ++steps;
+    }
+    if (steps == 4) s_fixedAccum = 0.0f;
 
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
     if (!s_initialized || !s_L) return;
