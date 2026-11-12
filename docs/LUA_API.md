@@ -134,6 +134,21 @@ urushi.register_window({
 
 ---
 
+### Settings, Scripts & Stability (`urushi.*`)
+
+| Function | Description |
+| :--- | :--- |
+| `urushi.get_setting(section, key, default)` | Read a string from `urushi_settings.ini`. |
+| `urushi.set_setting(section, key, value)` | Write a string (booleans are stored as `"1"`/`"0"`). |
+| `urushi.list_scripts()` | Names (without `.lua`) of all files in `scripts/`. |
+| `urushi.load_script(name)` | Load `scripts/<name>.lua` inside the sandbox. Returns `true` or `false, error`. |
+| `urushi.reload_scripts()` | Request a full Lua reload (applied on the next render frame; safe to call from callbacks). |
+| `urushi.get_last_crash()` | `{ crashed, in_urushi, summary, report }` describing the previous session. |
+| `urushi.open_crash_dir()` | Open the `urushi_crash` folder in Explorer. |
+| `urushi.is_safe_mode()` | `true` while features are off (scripts normally never see this: Lua does not run in Safe mode). |
+
+Every callback is executed under a wall-clock budget (250 ms; script load 8 s). Endless loops raise `script timeout`; a callback that errors 25 times in a row is unregistered. See [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## 4. `ui` Module — Component Library
 
 Provides modern, cohesive ImGui components with automatic layout and accent coloring.
@@ -252,4 +267,4 @@ urushi.register_window({
 })
 ```
 
-Add `dofile("scripts/drift_sound_mod.lua")` into `scripts/main.lua`, hit `Ctrl + F11`, and your mod window is live!
+Drop the file into `scripts/` (e.g. `scripts/drift_sound_mod.lua`). It shows up in **System → Scripts**, disabled by default; enable it and press "Reload scripts" (or `Ctrl + F11`). Built-in modules are listed in `BUILTIN` inside `scripts/main.lua`.
