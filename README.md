@@ -1,13 +1,13 @@
-# URUSHI (`CarX2ScriptHook`)
+# URUSHI
 
 [![Discord](https://img.shields.io/badge/Discord-URUSHI-5865F2?logo=discord&logoColor=white)](https://discord.gg/jS6cc49EbT)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 [English](#features-v020) · [Русский](#-urushi-ru)
 
 Open-source **C++ / Lua 5.4 / DirectX 11** modding & telemetry framework for **CarX Drift Racing Online 2**.
 
-> **License:** Distributed under the **GNU General Public License v3.0 (GPL-3.0)** — see [`LICENSE`](LICENSE). Any distributed modifications or derivative works must also remain open-source under GPL-3.0.
+> **License:** Distributed under the **MIT License** — see [`LICENSE`](LICENSE). Free for personal and commercial use, with required attribution to original author.
 
 ---
 
@@ -113,7 +113,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 ## License & Third-Party Notices
 
-- **URUSHI (`CarX2ScriptHook`)**: [GNU General Public License v3.0](LICENSE)
+- **URUSHI**: [MIT License](LICENSE)
 - **Dear ImGui** (`third_party/imgui`): MIT License
 - **Lua 5.4** (`third_party/lua`): MIT License
 - **MinHook** (`third_party/minhook`): BSD 2-Clause License
