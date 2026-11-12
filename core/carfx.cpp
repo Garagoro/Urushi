@@ -247,6 +247,15 @@ SRWLOCK s_gameTexLock = SRWLOCK_INIT;
 GameSrvSnapshot s_gameTex[kTargetCount];
 std::atomic<uint64_t> s_gameTexGen{ 1 };
 
+// Internals target: set of textures of the car's non-body parts (guarded by s_gameTexLock; render thread keeps a cached copy)
+struct InternalsTexSet {
+    std::vector<ID3D11ShaderResourceView*> srvs;
+    std::vector<ID3D11Resource*> res;
+    std::vector<uintptr_t> raw;
+};
+InternalsTexSet s_internals;
+std::atomic<uint64_t> s_internalsGen{ 1 };
+
 std::atomic<float> s_gameInputs[kTargetCount][kGameInputs]{};
 
 SRWLOCK s_spatialLock[kTargetCount] = {};
@@ -806,9 +815,25 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
         }
     }
 
+    // internals: cached copy of the texture set, refreshed when the main thread publishes a new one
+    static uint64_t s_rtIntGen = 0;
+    static std::vector<ID3D11ShaderResourceView*> s_rtIntSrvs;
+    static std::vector<ID3D11Resource*> s_rtIntRes;
+    {
+        const uint64_t ig = s_internalsGen.load(std::memory_order_acquire);
+        if (ig != s_rtIntGen) {
+            AcquireSRWLockShared(&s_gameTexLock);
+            s_rtIntSrvs = s_internals.srvs;
+            s_rtIntRes = s_internals.res;
+            s_rtIntGen = s_internalsGen.load(std::memory_order_relaxed);
+            ReleaseSRWLockShared(&s_gameTexLock);
+        }
+    }
+    const bool internalsCanMatch = (!s_rtIntSrvs.empty() || !s_rtIntRes.empty()) && IsTargetActiveInternal(kTargetInternals);
+
     const GameSrvSnapshot& body = s_rtSnap[kTargetBody];
     const bool playerCanMatch = targetHasMatchableSrv(body);
-    if (!playerCanMatch && !anyGhostTex) return false;
+    if (!playerCanMatch && !anyGhostTex && !internalsCanMatch) return false;
 
     int matchedTarget = kTargetNone;
     uint32_t mask = 0;
@@ -832,7 +857,33 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
         (!needAlbSlot || s_rtKnownAlbSlot >= kScanStartSlot) &&
         (!needPackSlot || s_rtKnownPackSlot >= kScanStartSlot);
 
-    if (haveFastSlots) {
+    if (internalsCanMatch) {
+        ID3D11ShaderResourceView* isrv[kScanSlotCount] = {};
+        c->PSGetShaderResources(kScanStartSlot, kScanSlotCount, isrv);
+        const bool needRes = !s_rtIntRes.empty();
+        for (int i = 0; i < kScanSlotCount; ++i) {
+            ID3D11ShaderResourceView* v = isrv[i];
+            if (!v || matchedTarget != kTargetNone) continue;
+            for (ID3D11ShaderResourceView* t : s_rtIntSrvs) {
+                if (t == v) { matchedTarget = kTargetInternals; break; }
+            }
+            if (matchedTarget == kTargetNone && needRes) {
+                ID3D11Resource* r = nullptr;
+                v->GetResource(&r);
+                if (r) {
+                    for (ID3D11Resource* t : s_rtIntRes) {
+                        if (t == r) { matchedTarget = kTargetInternals; break; }
+                    }
+                    r->Release();
+                }
+            }
+        }
+        for (int i = 0; i < kScanSlotCount; ++i) if (isrv[i]) isrv[i]->Release();
+    }
+
+    if (matchedTarget != kTargetNone) {
+        // internals matched: nothing else to discover
+    } else if (haveFastSlots) {
         ID3D11ShaderResourceView* vAlb = nullptr;
         ID3D11ShaderResourceView* vPack = nullptr;
         ID3D11Resource* resAlb = nullptr;
@@ -1534,6 +1585,50 @@ bool ShouldBypassDepthPrePass(int target) {
            s_targets[target].usesScene.load(std::memory_order_acquire);
 }
 
+void SetInternalsTextures(const std::vector<void*>& nativePtrs) {
+    if (!s_initialized.load(std::memory_order_acquire)) return;
+    std::vector<uintptr_t> raw;
+    raw.reserve(nativePtrs.size());
+    for (void* p : nativePtrs) raw.push_back(reinterpret_cast<uintptr_t>(p));
+    std::sort(raw.begin(), raw.end());
+
+    {
+        AcquireSRWLockShared(&s_gameTexLock);
+        const bool same = (s_internals.raw == raw);
+        ReleaseSRWLockShared(&s_gameTexLock);
+        if (same) return;
+    }
+
+    InternalsTexSet next;
+    next.raw = raw;
+    for (uintptr_t r : raw) {
+        if (!r) continue;
+        void* p = reinterpret_cast<void*>(r);
+        ID3D11ShaderResourceView* srv = nullptr;
+        ID3D11Resource* res = nullptr;
+        if (SUCCEEDED(SafeQueryInterfaceRaw(p, __uuidof(ID3D11ShaderResourceView), &srv)) && srv) {
+            next.srvs.push_back(srv);
+            srv->GetResource(&res);
+            if (res) next.res.push_back(res);   // a bound SRV of another view on the same texture still matches
+        } else if (SUCCEEDED(SafeQueryInterfaceRaw(p, __uuidof(ID3D11Resource), &res)) && res) {
+            next.res.push_back(res);
+        }
+    }
+
+    InternalsTexSet old;
+    AcquireSRWLockExclusive(&s_gameTexLock);
+    old = std::move(s_internals);
+    s_internals = std::move(next);
+    s_internalsGen.fetch_add(1, std::memory_order_release);
+    ReleaseSRWLockExclusive(&s_gameTexLock);
+
+    for (auto* s : old.srvs) Retire(s);
+    for (auto* r : old.res) Retire(r);
+
+    Logger::Info("CarFX internals textures: " + std::to_string(s_internals.srvs.size()) + " views, " +
+                 std::to_string(s_internals.res.size()) + " resources");
+}
+
 void SetStealthDepthWrite(bool on) {
     s_stealthDepthWrite.store(on, std::memory_order_relaxed);
 }
@@ -1908,6 +2003,7 @@ bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, Draw
     const int64_t prevQpc = s_lastDrawQpc.exchange(nowQpc.QuadPart, std::memory_order_relaxed);
     const double freq = s_qpcFreq.QuadPart ? static_cast<double>(s_qpcFreq.QuadPart) : 1.0;
 
+    const int dataTarget = (matchedTarget == kTargetInternals) ? kTargetBody : matchedTarget;   // telemetry / spatial data come from the player car
     FxConstants k{};
     k.time[0] = static_cast<float>((nowQpc.QuadPart - ts.loadQpc.QuadPart) / freq);
     k.time[1] = prevQpc ? static_cast<float>((nowQpc.QuadPart - prevQpc) / freq) : 0.0f;
@@ -1936,13 +2032,13 @@ bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, Draw
     k.frameInfo[3] = static_cast<float>(mode);
 
     for (int i = 0; i < kGameInputs; ++i) {
-        k.game[i / 4][i % 4] = s_gameInputs[matchedTarget][i].load(std::memory_order_relaxed);
+        k.game[i / 4][i % 4] = s_gameInputs[dataTarget][i].load(std::memory_order_relaxed);
     }
 
     {
-        AcquireSRWLockShared(&s_spatialLock[matchedTarget]);
-        const SpatialProximityInput sp = s_spatialInput[matchedTarget];
-        ReleaseSRWLockShared(&s_spatialLock[matchedTarget]);
+        AcquireSRWLockShared(&s_spatialLock[dataTarget]);
+        const SpatialProximityInput sp = s_spatialInput[dataTarget];
+        ReleaseSRWLockShared(&s_spatialLock[dataTarget]);
         memcpy(k.carPos, sp.carPos, sizeof(k.carPos));
         memcpy(k.carRight, sp.carRight, sizeof(k.carRight));
         memcpy(k.carUp, sp.carUp, sizeof(k.carUp));

@@ -487,6 +487,16 @@ enum CarMatCategory : int {
     kMatStealthPart = 2
 };
 
+static void* SafeIdToObjectSEH(uintptr_t unityBase, int32_t id) {
+    if (!unityBase || id == 0) return nullptr;
+    const auto pfn = reinterpret_cast<t_UP_InstanceIDToObject>(unityBase + 0x107480);
+    __try {
+        return pfn(&id);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
 static bool SafeReadMatNameSEH(uintptr_t unityBase, int32_t matId, char* outName, size_t maxLen) {
     if (!unityBase || matId == 0 || !outName || maxLen == 0) return false;
     outName[0] = '\0';
@@ -1061,6 +1071,35 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
     void* s_natBlack = nullptr;
     void* s_natNormal = nullptr;
     GetBuiltinNativeTextures(unityBase, &s_natWhite, &s_natBlack, &s_natNormal);
+
+    // Internals target: publish the albedo textures of every non-body, non-wheel part so CarFX can recognise their draws.
+    {
+        std::vector<void*> intTex;
+        if (CarFX::IsTargetActive(CarFX::kTargetInternals)) {
+            std::vector<CarRendererRef> rs;
+            CollectCarRenderersOnMainThread(rootGo, rs);
+            static const char* const kSkip[] = { "car_body", "car_glass", "shadowcaster", "rim", "yolo", "defaultDiffuse",
+                                                 "BrakeRotor", "Caliper", "wheel_motion" };
+            for (const CarRendererRef& r : rs) {
+                for (uint32_t si = 0; si < r.matCount; ++si) {
+                    const int32_t mid = r.matIds[si];
+                    char mn[64] = {};
+                    if (!mid || !SafeReadMatNameSEH(unityBase, mid, mn, sizeof(mn))) continue;
+                    bool skip = false;
+                    for (const char* k : kSkip) { if (strstr(mn, k)) { skip = true; break; } }
+                    if (skip) continue;
+                    void* natMat = SafeIdToObjectSEH(unityBase, mid);
+                    void* alb = SafeGetMatTextureSEH(unityBase, natMat, 380);
+                    if (alb && !IsDefaultNativeTex(alb, s_natWhite, s_natBlack, s_natNormal)) {
+                        void* d3dPtr = nullptr;   // Unity Texture object -> the D3D11 view/resource behind it
+                        SafeCallGetNativeTexPtr(unityBase + 0xA8710, alb, &d3dPtr);
+                        if (d3dPtr) intTex.push_back(d3dPtr);
+                    }
+                }
+            }
+        }
+        CarFX::SetInternalsTextures(intTex);
+    }
 
     void* natAlb = nullptr;
     void* natPack = nullptr;

@@ -17,7 +17,7 @@ constexpr int kMaxGhostTargets = 8;
 enum Target : int {
     kTargetNone      = -1,
     kTargetBody      = 0,
-    kTargetGlass     = 1,
+    kTargetInternals = 1,   // engine / suspension / interior parts of the player car (matched by their textures)
     kTargetGhostBase = 2,
     kTargetCount     = kTargetGhostBase + kMaxGhostTargets
 };
@@ -165,7 +165,9 @@ bool IsTargetCompiled(int target);
 bool IsTargetActive(int target);
 bool ShouldBypassDepthPrePass(int target = kTargetBody);
 bool ShouldHideCarInternals(int target = kTargetBody);
-void SetStealthDepthWrite(bool on);   // body replace draws also write depth (body is drawn before the internals)
+void SetStealthDepthWrite(bool on);
+// Native texture pointers (albedo) of the player car internals; draws using any of them go to kTargetInternals.
+void SetInternalsTextures(const std::vector<void*>& nativePtrs);   // body replace draws also write depth (body is drawn before the internals)
 void SetOverrideMode(int target, int overrideMode);
 int GetOverrideMode(int target);
 void SetOverrideStealth(int target, int overrideStealth);

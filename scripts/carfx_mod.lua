@@ -75,6 +75,41 @@ local function render_carfx_window()
     local short_name = (st.shader_path or ""):match("([^\\/]+)$") or ""
     local eff_mode = st.compiled and ((st.resolved_mode == 2) and "Overlay" or "Replace") or T("Выкл", "None")
 
+    ui.card(T("Внутренние части", "Internals"), T("Двигатель, подвеска, салон (свой шейдер)", "Engine, suspension, interior (own shader)"), function()
+        local ist = carfx.get_status(1)
+        local iname = (ist.shader_path or ""):match("([^\\/]+)$") or ""
+        ui.stat_row({
+            {
+                label = T("Шейдер", "Shader"),
+                value = ist.compiled and iname or T("Не выбран", "None"),
+                tone = ist.compiled and "accent" or "muted",
+            },
+            {
+                label = T("Деталей в кадре", "Draws / frame"),
+                value = tostring(ist.matched_last_frame or 0),
+                tone = (ist.matched_last_frame or 0) > 0 and "green" or "muted",
+            },
+        })
+        if #state.shaders > 0 then
+            local names = { T("(нет)", "(none)") }
+            local cur = 1
+            for i, name in ipairs(state.shaders) do
+                names[#names + 1] = name
+                if ist.compiled and name == iname then cur = i + 1 end
+            end
+            local ch, idx = ui.combo(T("Шейдер внутренностей##cfx_int", "Internals shader##cfx_int"), cur, names)
+            if ch then
+                if idx == 1 then
+                    carfx.unload(1)
+                else
+                    local ok, err = carfx.load(names[idx], 1)
+                    state.status_msg = ok and "" or tostring(err)
+                    state.status_tone = ok and "muted" or "red"
+                end
+            end
+        end
+    end)
+
     ui.card(T("Шейдер кузова", "Body Shader"), nil, function()
         local en_ch, new_en = ui.toggle(T("Включить CarFX##cfx_en", "Enable CarFX##cfx_en"), st.enabled == true)
         if en_ch then

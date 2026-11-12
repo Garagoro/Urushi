@@ -225,3 +225,16 @@ float4 main(PSIn i) : SV_Target {
 ```
 
 Save the file, open CarFX in the URUSHI menu, select **`livery_my_drift`**, and watch your car illuminate in tandem drifts!
+
+---
+
+## 8. Internals target (engine, suspension, interior)
+
+CarFX has a second slot for the **non-body parts of the player car**. Load any shader into it from *CarFX → Internals*
+(or `carfx.load("my_shader.hlsl", 1)`); it uses the same `PSIn`, `b13` buffer and helpers as a body shader, so existing examples work.
+
+* Draws are recognised by the albedo textures of the car's non-body parts (wheels, brakes, glass and shadow proxies are excluded).
+  Parts whose material only has a default (white/black) texture cannot be told apart and keep their normal look.
+* Telemetry / spatial data (`g_fxGame`, `g_fxCar*`, `g_fxCam*`) are the player car's.
+* `g_fxLivery` is not bound for this target (no livery on internals).
+* Sample: `shaders/internals_neon.hlsl`.
