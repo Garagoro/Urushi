@@ -121,6 +121,7 @@ bool s_dockEdit = false;
 bool s_dockOrderLoaded = false;
 std::vector<std::string> s_dockOrder;
 // drag & drop state (rows slide while one is carried by the cursor)
+float s_dockScrollTarget = -1.0f;         // smooth-scroll target of the dock list
 std::string s_dragId;                       // id of the row being carried ("" = none)
 ImVec2 s_dragPos(0.0f, 0.0f);               // smoothed top-left of the carried row (screen px)
 ImVec2 s_dragGrab(0.0f, 0.0f);              // cursor offset inside the carried row
@@ -476,8 +477,21 @@ static void RenderDock(bool menuOpen) {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
             ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, 4.0f * S);
             ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
-            ImGui::BeginChild("##dockscroll", ImVec2(innerW, listH), false, ImGuiWindowFlags_NoBackground);
+            ImGui::BeginChild("##dockscroll", ImVec2(innerW, listH), false, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollWithMouse);
             dl = ImGui::GetWindowDrawList();
+            // smooth wheel scrolling: the wheel moves a target, the view eases towards it (fast enough to feel instant)
+            const float cur = ImGui::GetScrollY();
+            if (s_dockScrollTarget < 0.0f) s_dockScrollTarget = cur;
+            if (ImGui::IsWindowHovered() && s_dragId.empty() && ImGui::GetIO().MouseWheel != 0.0f)
+                s_dockScrollTarget -= ImGui::GetIO().MouseWheel * step * 1.5f;
+            if (!s_dragId.empty()) s_dockScrollTarget = cur;   // edge auto-scroll while carrying drives the view directly
+            s_dockScrollTarget = std::clamp(s_dockScrollTarget, 0.0f, ImGui::GetScrollMaxY());
+            if (std::fabs(s_dockScrollTarget - cur) > 0.5f)
+                ImGui::SetScrollY(cur + (s_dockScrollTarget - cur) * (1.0f - std::exp(-22.0f * dt)));
+            else
+                ImGui::SetScrollY(s_dockScrollTarget);
+        } else {
+            s_dockScrollTarget = -1.0f;
         }
         const ImVec2 listTop = ImGui::GetCursorScreenPos();            // natural position of row 0 (scroll included)
         const int rowCount = static_cast<int>(s_windows.size());
