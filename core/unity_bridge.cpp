@@ -711,6 +711,47 @@ static void CollectCarRenderersOnMainThread(void* rootGo, std::vector<CarRendere
     out.resize(static_cast<size_t>(rCount));
 }
 
+// Diagnostic: log the player car hierarchy once (GameObject names + the materials of their renderers).
+static void DumpCarHierarchyOnce(uintptr_t unityBase, void* rootGo) {
+    void* rootTf = UnityBridge::GetTransformOfGameObject(rootGo);
+    if (!rootTf) return;
+    Logger::Info("CarFX car hierarchy dump begin");
+    struct Node { void* tf; int depth; };
+    std::vector<Node> stack;
+    stack.push_back({ rootTf, 0 });
+    std::unordered_set<void*> visited;
+    int lines = 0;
+    while (!stack.empty() && lines < 600) {
+        Node nd = stack.back();
+        stack.pop_back();
+        if (!nd.tf || !visited.insert(nd.tf).second) continue;
+        void* go = nullptr; void* chArr = nullptr; int32_t chCnt = 0;
+        CarRendererRef rr[8]; int rc = 0;
+        if (!SafeStepTransformNodeSEH(nd.tf, &go, &chArr, &chCnt, rr, &rc, 8)) continue;
+        std::string line(static_cast<size_t>(nd.depth) * 2, ' ');
+        line += UnityBridge::GetGameObjectName(go);
+        for (int r = 0; r < rc; ++r) {
+            line += "  [R:";
+            for (uint32_t m = 0; m < rr[r].matCount; ++m) {
+                char mn[48] = {};
+                if (SafeReadMatNameSEH(unityBase, rr[r].matIds[m], mn, sizeof(mn))) { line += mn; line += ","; }
+            }
+            line += "]";
+        }
+        Logger::Info(line);
+        ++lines;
+        if (chArr && chCnt > 0) {
+            for (int32_t ci = chCnt - 1; ci >= 0; --ci) {
+                void* childTf = nullptr;
+                if (SafeReadPtr(reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(chArr) + static_cast<size_t>(ci) * 8), &childTf) && childTf) {
+                    stack.push_back({ childTf, nd.depth + 1 });
+                }
+            }
+        }
+    }
+    Logger::Info("CarFX car hierarchy dump end");
+}
+
 static int SafeCollectPartsMaterialIdsSEH(uintptr_t partsMap, int32_t* outIds, int maxIds) {
     if (!partsMap || !outIds || maxIds <= 0) return 0;
     int count = 0;
@@ -987,6 +1028,14 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
     if (!rootGo) {
         s_nextUpdateMs = GetTickCount64() + 250;
         return;
+    }
+
+    {
+        static void* s_dumpedRoot = nullptr;
+        if ((wantTransparent || wantStealth) && s_dumpedRoot != rootGo) {
+            s_dumpedRoot = rootGo;
+            DumpCarHierarchyOnce(unityBase, rootGo);
+        }
     }
 
     if (s_playerIsoRootGo && s_playerIsoRootGo != rootGo) {
