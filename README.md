@@ -114,3 +114,11 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 - **Dear ImGui** (`third_party/imgui`): MIT License
 - **Lua 5.4** (`third_party/lua`): MIT License
 - **MinHook** (`third_party/minhook`): BSD 2-Clause License
+
+---
+
+## Credits & Acknowledgments
+
+- **Lead Developer:** [Garagoro](https://github.com/Garagoro)
+- **Pair Programming & Automation:** [Antigravity](https://deepmind.google/technologies/gemini/) (Google DeepMind)
+
