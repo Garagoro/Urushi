@@ -1,7 +1,7 @@
 # Cloud script library
 
 Optional scripts are **not** shipped with the mod. They live on a protected `verified` branch of the repository and are installed
-on demand from *System → Script Library*.
+on demand from the *Library* window.
 
 ```
 branch `verified`
@@ -13,10 +13,10 @@ branch `verified`
 ```
 
 ## Player flow
-1. *System → Script Library → Refresh list* (the only network request; nothing is fetched automatically).
+1. *Library → Refresh list* (the only network request; nothing is fetched automatically).
 2. *Install* downloads each file from `raw.githubusercontent.com/Garagoro/Urushi/verified/community/<id>/…`, checks its
    SHA-256 against `catalog.json`, stages it and moves it into `scripts/cloud/<id>/` atomically. A mismatch aborts and keeps the old version.
-3. The script is enabled right after install (toggle in *System → Scripts*), loaded on the next *Reload scripts*, runs **isolated**
+3. The script is enabled right after install (toggle in the *Library* window), loaded on the next *Reload scripts*, runs **isolated**
    (see [SECURITY.md](SECURITY.md)). *Remove* deletes the folder.
 4. `min_urushi` in the manifest blocks installation on older mods.
 
@@ -47,4 +47,4 @@ the SHA-256 checks only guarantee that files match the catalog; trust comes from
 
 ## Code
 `core/cloud_scripts.{h,cpp}` (catalog parser, installer, path/ID validation), `core/bindings/lua_cloud.cpp` (Lua module `cloud`),
-`scripts/main.lua` (loading + isolation), `scripts/system_mod.lua` (Script Library card).
+`scripts/main.lua` (loading + isolation), `scripts/system_mod.lua` (Library window: script toggles + cloud library).

@@ -290,4 +290,4 @@ urushi.register_window({
 })
 ```
 
-Drop the file into `scripts/` (e.g. `scripts/drift_sound_mod.lua`). It shows up in **System → Scripts**, disabled by default; enable it and press "Reload scripts" (or `Ctrl + F11`). Built-in modules are listed in `BUILTIN` inside `scripts/main.lua`.
+Drop the file into `scripts/` (e.g. `scripts/drift_sound_mod.lua`). It shows up in *the *Library* window*, disabled by default; enable it and press "Reload scripts" (or `Ctrl + F11`). Built-in modules are listed in `BUILTIN` inside `scripts/main.lua`.

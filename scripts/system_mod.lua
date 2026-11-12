@@ -197,6 +197,12 @@ local function apply_saved_prefs()
 end
 apply_saved_prefs()
 
+-- Separate "Library" window: script toggles (installed / built-in / user) + the cloud script library
+local function render_library_window()
+    render_scripts_card()
+    render_library_card()
+end
+
 local function render_system_window()
     local cur_lang = (urushi.get_language and urushi.get_language()) or "ru"
     local lang_idx = (cur_lang == "en") and 2 or 1
@@ -305,8 +311,6 @@ local function render_system_window()
     end
 
     render_stability_card()
-    render_scripts_card()
-    render_library_card()
 
     ui.card(T("Горячие клавиши и управление", "Keybinds & Controls"), nil, function()
         local gp_conn = input and input.is_gamepad_connected and input.is_gamepad_connected()
@@ -358,6 +362,19 @@ if urushi and urushi.register_window then
         y = 32,
         width = 412,
         render = render_system_window,
+    })
+
+    urushi.register_window({
+        id = "library",
+        title = T("Библиотека", "Library"),
+        icon = "library",
+        order = 68,
+        default_open = false,
+        default_pinned = false,
+        x = 310,
+        y = 60,
+        width = 430,
+        render = render_library_window,
     })
 end
 

@@ -136,7 +136,7 @@ copies of the API tables without `urushi.set_setting/get_setting/load_script/rel
 with `getmetatable` hiding the string metatable, a `load` bound to the private env, and an `io.open` redirected to `urushi_data/<script>/`.
 `include(rel)` loads sibling files of a cloud script.
 
-Enabled flags: `urushi_settings.ini` → `[scripts]` `<id>=0|1`. Toggling in *System → Scripts* sets `urushi_scripts.dirty`; the
+Enabled flags: `urushi_settings.ini` → `[scripts]` `<id>=0|1`. Toggling in the *Library* window sets `urushi_scripts.dirty`; the
 "Reload scripts" button applies it.
 
 A script registers UI with `urushi.register_window{ id, title, render=function() ... end }` (imperative `ui.*` widgets) or returns a

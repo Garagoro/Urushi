@@ -21,6 +21,7 @@ local WINDOW_TITLES = {
     hud           = { "Телеметрия HUD", "Telemetry HUD" },
     fps_net       = { "FPS и Сеть",     "FPS & Network" },
     system        = { "Система",        "System" },
+    library       = { "Библиотека",     "Library" },
 }
 
 function i18n.sync_titles()

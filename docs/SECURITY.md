@@ -26,7 +26,7 @@ cannot download anything, cannot create runnable files, and cannot reach other p
 ### Trust tiers (`scripts/main.lua`)
 * **Trusted** — core + built-in modules from this repository: shared globals, but still the hardened VM.
 * **Isolated** — everything else (user scripts in `scripts/`, cloud scripts): private environment, no `updater`/`cloud`/settings
-  functions, `io.open` redirected to `urushi_data/<script>/`. New user scripts are **off** until enabled in *System → Scripts*.
+  functions, `io.open` redirected to `urushi_data/<script>/`. New user scripts are **off** until enabled in the *Library* window.
 
 ### Other switches
 * `runner.lua` (loads code from a file) and the **dev pipe** (`\\.\pipe\urushi_dev`, remote Lua eval) are **off by default**.

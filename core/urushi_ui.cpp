@@ -304,6 +304,15 @@ static void DrawModuleIcon(ImDrawList* dl, ImVec2 center, const std::string& ico
         dl->AddLine(ImVec2(center.x + 3.4f * s, center.y), ImVec2(center.x + 7.4f * s, center.y), col, th);
         dl->AddLine(ImVec2(center.x, center.y - 7.4f * s), ImVec2(center.x, center.y - 3.4f * s), col, th);
         dl->AddLine(ImVec2(center.x, center.y + 3.4f * s), ImVec2(center.x, center.y + 7.4f * s), col, th);
+    } else if (icon == "library") {
+        // three books on a shelf
+        const float w = 3.0f * s, g = 1.2f * s, base = center.y + 6.0f * s;
+        float x = center.x - 5.4f * s;
+        const float hs[3] = { 10.0f * s, 12.5f * s, 9.0f * s };
+        for (int i = 0; i < 3; ++i) {
+            dl->AddRect(ImVec2(x, base - hs[i]), ImVec2(x + w, base), col, 0.0f, ImDrawFlags_None, th * 0.9f);
+            x += w + g;
+        }
     } else if (icon == "wheel") {
         dl->AddCircle(center, r, col, 20, th);
         dl->AddCircle(center, 1.9f * s, col, 12, th * 0.9f);
