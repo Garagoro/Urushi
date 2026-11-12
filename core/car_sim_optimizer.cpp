@@ -25,8 +25,6 @@ constexpr uintptr_t kRvaCarBehaviourSetEffectsEnabled = 0x1E02570;
 // CarX.DeformationPhysics.Systems
 constexpr uintptr_t kRvaApplyForceToDeformUpdate       = 0xEBF340;
 constexpr uintptr_t kRvaBreakPhysicsJointUpdate        = 0xEC2440;
-constexpr uintptr_t kRvaCarDeformationApply           = 0x1E56140;
-constexpr uintptr_t kRvaCarDeformationApplyPart       = 0x1E55FD0;
 
 constexpr uintptr_t kRvaINetworkCarContainerTypeInfo  = 0x843A128;
 constexpr uintptr_t kRvaDeformSleepTypeInfoGlobal     = 0x83E7018;
@@ -53,8 +51,6 @@ using t_NetCarGetInt32         = int32_t(__fastcall*)(void* netCar, void* method
 using t_NetCarGetBool          = uint8_t(__fastcall*)(void* netCar, void* method);
 using t_SetCarEffectsEnabled   = void(__fastcall*)(void* carBehaviour, uint8_t enabled, void* method);
 using t_SystemOnUpdate         = void(__fastcall*)(void* self, void* method);
-using t_CarDeformationApply     = void(__fastcall*)(void* self, void* a2, void* a3, void* method);
-using t_CarDeformationApplyPart = void(__fastcall*)(void* self, void* a2, void* a3, void* method);
 
 using t_CX_CarSetSimMode       = void(*)(void* car, int enable);
 using t_CX_CarGetSimMode       = int(*)(void* car);
@@ -120,8 +116,6 @@ t_SwitchingUpdate s_origSwitchingUpdate = nullptr;
 t_IsFarCar s_origIsFarCar = nullptr;
 t_SystemOnUpdate s_origApplyForceOnUpdate = nullptr;
 t_SystemOnUpdate s_origBreakPhysicsJointOnUpdate = nullptr;
-t_CarDeformationApply s_origCarDeformationApply = nullptr;
-t_CarDeformationApplyPart s_origCarDeformationApplyPart = nullptr;
 bool s_noDamageOverride = false;
 t_ProviderGetTransform pfn_ProviderGetTransform = nullptr;
 t_TransformGetPos pfn_TransformGetPos = nullptr;
@@ -509,7 +503,8 @@ static void ResolveStaticsIfNeeded() {
 }
 
 static void SyncStaticSubsystems(const CarSimOptimizer::Config& cfg, bool forceRestore) {
-    const bool noDamage = !forceRestore && (cfg.disableDamage || s_noDamageOverride);
+    const bool inSession = NativeCarX::IsInSessionFast();
+    const bool noDamage = inSession && !forceRestore && (cfg.disableDamage || s_noDamageOverride);
     if (s_sfDeformSleep && s_deformBase.captured) {
         uintptr_t p = reinterpret_cast<uintptr_t>(s_sfDeformSleep);
         if (noDamage) {
@@ -758,6 +753,10 @@ static void __fastcall Hooked_ApplyForceOnUpdate(void* self, void* method) {
         if (s_origApplyForceOnUpdate) s_origApplyForceOnUpdate(self, method);
         return;
     }
+    if (!NativeCarX::IsInSessionFast()) {
+        s_origApplyForceOnUpdate(self, method);
+        return;
+    }
     bool block = false;
     {
         std::lock_guard<std::recursive_mutex> lock(s_mutex);
@@ -776,6 +775,10 @@ static void __fastcall Hooked_BreakPhysicsJointOnUpdate(void* self, void* method
         if (s_origBreakPhysicsJointOnUpdate) s_origBreakPhysicsJointOnUpdate(self, method);
         return;
     }
+    if (!NativeCarX::IsInSessionFast()) {
+        s_origBreakPhysicsJointOnUpdate(self, method);
+        return;
+    }
     bool block = false;
     {
         std::lock_guard<std::recursive_mutex> lock(s_mutex);
@@ -786,42 +789,6 @@ static void __fastcall Hooked_BreakPhysicsJointOnUpdate(void* self, void* method
         return; // Part detaching blocked!
     }
     s_origBreakPhysicsJointOnUpdate(self, method);
-}
-
-static void __fastcall Hooked_CarDeformationApply(void* self, void* a2, void* a3, void* method) {
-    HookManager::ScopedHookGuard guard;
-    if (HookManager::IsUnloading() || !s_origCarDeformationApply) {
-        if (s_origCarDeformationApply) s_origCarDeformationApply(self, a2, a3, method);
-        return;
-    }
-    bool block = false;
-    {
-        std::lock_guard<std::recursive_mutex> lock(s_mutex);
-        block = s_cfg.disableDamage || s_noDamageOverride;
-    }
-    if (block) {
-        s_stats.damageBlocks++;
-        return; // Full car mesh deformation completely blocked!
-    }
-    s_origCarDeformationApply(self, a2, a3, method);
-}
-
-static void __fastcall Hooked_CarDeformationApplyPart(void* self, void* a2, void* a3, void* method) {
-    HookManager::ScopedHookGuard guard;
-    if (HookManager::IsUnloading() || !s_origCarDeformationApplyPart) {
-        if (s_origCarDeformationApplyPart) s_origCarDeformationApplyPart(self, a2, a3, method);
-        return;
-    }
-    bool block = false;
-    {
-        std::lock_guard<std::recursive_mutex> lock(s_mutex);
-        block = s_cfg.disableDamage || s_noDamageOverride;
-    }
-    if (block) {
-        s_stats.damageBlocks++;
-        return; // Part mesh deformation completely blocked!
-    }
-    s_origCarDeformationApplyPart(self, a2, a3, method);
 }
 
 static uint8_t __fastcall Hooked_IsFarCar(void* self, void* netCar, void* method) {
@@ -1088,8 +1055,6 @@ bool CarSimOptimizer::Init() {
     void* targetIsFar = reinterpret_cast<void*>(s_gaBase + kRvaIsFarCar);
     void* targetApplyForce = reinterpret_cast<void*>(s_gaBase + kRvaApplyForceToDeformUpdate);
     void* targetBreakJoint = reinterpret_cast<void*>(s_gaBase + kRvaBreakPhysicsJointUpdate);
-    void* targetDeformApply = reinterpret_cast<void*>(s_gaBase + kRvaCarDeformationApply);
-    void* targetDeformApplyPart = reinterpret_cast<void*>(s_gaBase + kRvaCarDeformationApplyPart);
 
     bool okSwitch = HookManager::CreateHook(
         targetSwitching,
@@ -1115,22 +1080,10 @@ bool CarSimOptimizer::Init() {
         reinterpret_cast<void**>(&s_origBreakPhysicsJointOnUpdate),
         "BreakPhysicsJointSystem::OnUpdate");
 
-    bool okDeformApply = HookManager::CreateHook(
-        targetDeformApply,
-        reinterpret_cast<void*>(Hooked_CarDeformationApply),
-        reinterpret_cast<void**>(&s_origCarDeformationApply),
-        "CarDeformationFeatureController::Apply");
-
-    bool okDeformPart = HookManager::CreateHook(
-        targetDeformApplyPart,
-        reinterpret_cast<void*>(Hooked_CarDeformationApplyPart),
-        reinterpret_cast<void**>(&s_origCarDeformationApplyPart),
-        "CarDeformationFeatureController::ApplyPart");
-
     ResolveNativeExportsIfNeeded();
     ResolveStaticsIfNeeded();
 
-    s_stats.hooksInstalled = okSwitch && okFar && okApply && okBreak && okDeformApply && okDeformPart;
+    s_stats.hooksInstalled = okSwitch && okFar && okApply && okBreak;
     s_stats.initialized = true;
 
     Logger::Info(std::string("CarSimOptimizer initialized (hooks=") +

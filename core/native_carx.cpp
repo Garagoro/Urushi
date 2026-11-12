@@ -5,6 +5,7 @@
 
 std::recursive_mutex NativeCarX::s_mutex;
 std::vector<CarTelemetry> NativeCarX::s_trackedCars;
+static std::atomic<bool> s_fastInSession{ false };
 void* NativeCarX::s_playerCarPtr = nullptr;
 void* NativeCarX::s_knownPlayerCarPtr = nullptr;
 void* NativeCarX::s_managerPtr = nullptr;
@@ -224,6 +225,7 @@ void NativeCarX::Hooked_CX_DestroyCar(void* manager, void* car) {
             if (s_playerCarPtr == car) {
                 s_playerCarPtr = nullptr;
             }
+            s_fastInSession.store(!s_trackedCars.empty(), std::memory_order_release);
         }
         orig = s_originalDestroyCar;
         if (orig) {
@@ -244,6 +246,7 @@ void NativeCarX::Hooked_CX_DestroyManager(void* manager) {
     s_trackedCars.clear();
     s_playerCarPtr = nullptr;
     s_knownPlayerCarPtr = nullptr;
+    s_fastInSession.store(false, std::memory_order_release);
     if (s_managerPtr == manager) {
         s_managerPtr = nullptr;
     }
@@ -297,6 +300,7 @@ void NativeCarX::PruneStaleCarsLocked() {
             s_knownPlayerCarPtr = nullptr;
         }
     }
+    s_fastInSession.store(!s_trackedCars.empty(), std::memory_order_release);
 }
 
 void NativeCarX::SetKnownPlayerCarPtr(void* car) {
@@ -519,7 +523,13 @@ std::vector<CarTelemetry> NativeCarX::GetAllCarsTelemetry() {
 bool NativeCarX::IsInSession() {
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
     PruneStaleCarsLocked();
-    return !s_trackedCars.empty();
+    const bool inSession = !s_trackedCars.empty();
+    s_fastInSession.store(inSession, std::memory_order_release);
+    return inSession;
+}
+
+bool NativeCarX::IsInSessionFast() {
+    return s_fastInSession.load(std::memory_order_relaxed);
 }
 
 void NativeCarX::SetCarRenderMatrix(void* car, const float* matrix16, float factor) {

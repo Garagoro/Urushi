@@ -1,5 +1,6 @@
 #include "carfx.h"
 #include "logger.h"
+#include "native_carx.h"
 
 #include <d3dcompiler.h>
 #include <d3d11shader.h>
@@ -1709,6 +1710,7 @@ SpatialProximityInput GetSpatialProximity(int target) {
 
 bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, DrawIssueFn issueFn, void* issueCtx) {
     if (!context || !issueFn || !s_initialized.load(std::memory_order_acquire)) return false;
+    if (!NativeCarX::IsInSessionFast()) return false;
     if (context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return false;
 
     s_totalDrawsFrame.fetch_add(1, std::memory_order_relaxed);

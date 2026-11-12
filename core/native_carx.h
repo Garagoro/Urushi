@@ -75,6 +75,7 @@ public:
     static CarTelemetry GetPlayerCarTelemetry();
     static std::vector<CarTelemetry> GetAllCarsTelemetry();
     static bool IsInSession();
+    static bool IsInSessionFast();
 
     // Direct Car Controls
     static void SetCarRenderMatrix(void* car, const float* matrix16, float factor = 1.0f);

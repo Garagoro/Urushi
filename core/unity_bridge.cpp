@@ -936,15 +936,19 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
     };
 
     if (!NativeCarX::IsInSession()) {
-        s_savedBodyMatQueues.clear();
-        s_savedStealthMatQueues.clear();
-        s_savedStealthSwaps.clear();
-        s_stealthAssetToClone.clear();
+        if (!s_savedBodyMatQueues.empty()) {
+            for (const auto& kv : s_savedBodyMatQueues) {
+                SafeSyncMaterialQueueAndDepthSEH(unityBase, kv.first, false, 2200, true, kv.second, nullptr, nullptr);
+            }
+            s_savedBodyMatQueues.clear();
+            Logger::Info("CarFX session ended: restored car_body(Clone) renderQueues -> 2200 + DepthOnly ON");
+        }
+        restoreAllStealthMaterials();
         s_prevStealthRootGo = nullptr;
         s_loggedDefRootGo = nullptr;
         releasePlayerIsoPackTex();
-        s_prevWantTransparent = wantTransparent;
-        s_prevWantStealth = wantStealth;
+        s_prevWantTransparent = false;
+        s_prevWantStealth = false;
         s_nextUpdateMs = GetTickCount64() + 250;
         CarFX::TargetTexturesInput empty{};
         CarFX::SetPlayerTargetTextures(CarFX::kTargetBody, empty);
@@ -1694,7 +1698,18 @@ void UnityBridge::ProcessPendingMainThreadTasks(float dt) {
     }
 
     // Periodically sync scene car model cache + per-frame lightweight position matching
-    if (NativeCarX::IsInSession()) {
+    static bool s_wasInSession = false;
+    const bool inSession = NativeCarX::IsInSession();
+    if (!inSession && s_wasInSession) {
+        s_wasInSession = false;
+        DestroyAllGhostSlotsInternal();
+        UpdateCarFXPlayerTexturesOnMainThread({});
+        CarSimOptimizer::UpdateOnMainThread(dt, {});
+    } else if (inSession) {
+        s_wasInSession = true;
+    }
+
+    if (inSession) {
         RefreshLiveCarListOnMainThread(false);
         std::vector<LiveCarInfo> liveSnapshot;
         {
