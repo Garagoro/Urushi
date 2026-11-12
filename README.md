@@ -1,6 +1,7 @@
 # URUSHI
 
 [![Discord](https://img.shields.io/badge/Discord-URUSHI-5865F2?logo=discord&logoColor=white)](https://discord.gg/jS6cc49EbT)
+[![Discussions](https://img.shields.io/badge/GitHub-Discussions-orange?logo=github)](https://github.com/Garagoro/Urushi/discussions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 [English](#about-urushi) · [Русский](#о-проекте-urushi)
@@ -17,6 +18,7 @@ The primary goal of URUSHI was to build a clean, solid **Lua scripting foundatio
 The repository includes several sample scripts in `scripts/` demonstrating telemetry HUDs, checkpoint teleports, physics overrides, and shader automation.
 
 ### Community & Maintenance
+* **Discussions & Scripts:** Share custom Lua scripts, shaders, or ask questions in [GitHub Discussions](https://github.com/Garagoro/Urushi/discussions)!
 * **Forks & PRs:** You are very welcome to fork the repository, experiment, and submit Pull Requests! New Lua mods, custom shaders, and fixes are always appreciated.
 * **Maintenance:** I maintain this project minimally — ensuring it remains working with game updates. I do not promise frequent feature releases or a heavy roadmap, which is why the code is open and easy to extend.
 
@@ -76,6 +78,7 @@ The repository includes several sample scripts in `scripts/` demonstrating telem
 В репозитории уже есть примеры скриптов в папке `scripts/`: HUD телеметрии, телепорт по чекпоинтам, управление износом шин и физикой.
 
 ### Сообщество и поддержка
+* **Дискуссии и скрипты:** Делитесь своими Lua-скриптами, шейдерами или задавайте вопросы в [GitHub Discussions](https://github.com/Garagoro/Urushi/discussions)!
 * **Форки и Pull Request'ы:** Буду рад форкам, идеям и PR! Если вы написали свой крутой скрипт или шейдер — присылайте.
 * **Поддержка:** Мод поддерживается в минимальном режиме — чтобы оставаться в рабочем состоянии при обновлениях игры. Частых контентных апдейтов и жесткого роадмапа не обещаю, поэтому проект полностью открыт для сообщества.
 
