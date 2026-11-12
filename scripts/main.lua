@@ -109,6 +109,7 @@ local function load_entry(e)
         e.status = "disabled"
         return
     end
+    if e.shader_only then e.status = "ok"; return end        -- shader pack: files are in shaders/cloud/<id>/, nothing to run
     local ok, err
     if e.cloud then
         ok, err = cloud.load(e.cloud_id, make_env(e.id, e.cloud_id))
@@ -146,7 +147,7 @@ if cloud and cloud.installed then
     for _, c in ipairs(cloud.installed()) do
         local key = "cloud:" .. c.id
         local e = {
-            id = key, cloud = true, isolated = true, cloud_id = c.id, version = c.version,
+            id = key, cloud = true, isolated = true, cloud_id = c.id, version = c.version, shader_only = (c.entry == ""),
             en = c.name, ru = (c.name_ru ~= "" and c.name_ru or c.name),
             enabled = enabled_flag(key, true),
         }

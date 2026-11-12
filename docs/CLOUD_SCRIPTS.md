@@ -9,7 +9,7 @@ branch `verified`
 └─ community/<id>/
    ├─ manifest.json             id, name, name_ru, author, version, description(_ru), min_urushi, entry
    ├─ init.lua                  entry file (default name)
-   └─ ...                       more .lua / .json / .txt / .png / .hlsl (max 32 files, 512 KB each)
+   └─ ...                       more .lua / .json / .txt / .png / .hlsl / .hlsli (max 32 files, 512 KB each)
 ```
 
 ## Player flow
@@ -22,6 +22,12 @@ branch `verified`
 
 The updater never touches `scripts/cloud/`. Branch name can be overridden with `[cloud] ref=<branch>` in `urushi_settings.ini`
 (for testing a candidate branch).
+
+## Shaders
+`.hlsl` / `.hlsli` files of a package are installed to `shaders/cloud/<id>/` (not `scripts/cloud/`), where CarFX is allowed to load from;
+they show up in the CarFX shader list as `cloud/<id>/<name>.hlsl`. A package may be **shader-only** (no `.lua`, no `entry`).
+`#include` inside a shader can only reach files under `shaders/` (so `carfx.hlsli` works, `../../anything` does not).
+Review note: a shader cannot touch files or run code, but a hostile one can hang the GPU (endless loop → driver reset), so test shaders in-game before merging.
 
 ## Writing a cloud script
 * Entry file `init.lua`. It runs in an isolated environment: the normal API (`ui`, `carx`, `events`, `urushi.register_window`, …)

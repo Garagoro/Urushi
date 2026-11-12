@@ -82,6 +82,7 @@ int Lua_CloudInstalled(lua_State* L) {
         SetStr(L, "name", i.name);
         SetStr(L, "name_ru", i.nameRu);
         SetStr(L, "version", i.version);
+        SetStr(L, "entry", i.entry);   // "" = shader-only package (nothing to run)
         lua_rawseti(L, -2, idx++);
     }
     return 1;

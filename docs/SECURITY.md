@@ -20,7 +20,7 @@ cannot download anything, cannot create runnable files, and cannot reach other p
 | Freeze the game with an endless loop | Wall-clock budget per call, enforced even through `pcall` (`core/lua_sandbox.cpp`) |
 | Aim native calls at forged pointers (memory write primitive) | Cars/Unity objects are light userdata that C++ handed out; every native function validates them against `PtrRegistry` (`core/ptr_registry.h`). `memory.read_ptr` returns a plain integer |
 | Write replay files outside `replays/` or with a runnable extension | Replay names are reduced to `<plain name>.cxr2` (`SanitizeReplayFileName`) |
-| Read / compile arbitrary files through CarFX | `carfx.load` / `carfx.set_tex` only accept files inside `shaders/` |
+| Read / compile arbitrary files through CarFX | `carfx.load` / `carfx.set_tex` only accept files inside `shaders/`; HLSL `#include` is confined to `shaders/` too |
 | Hijack other scripts | Isolated scripts run in their own environment with private copies of the API tables; the string metatable is hidden; `load` is bound to the private environment |
 
 ### Trust tiers (`scripts/main.lua`)

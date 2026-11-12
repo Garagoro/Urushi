@@ -170,13 +170,22 @@ std::wstring Widen(const std::string& s) {
 }
 
 std::wstring CloudRoot() { return g_exeDir + L"\\scripts\\cloud"; }
+// Shader files of a cloud package live where CarFX is allowed to load from (shaders/cloud/<id>/ under the game folder)
+std::wstring ShaderCloudRoot() { return g_exeDir + L"\\shaders\\cloud"; }
+bool IsShaderFile(const std::string& path) {
+    const size_t dot = path.rfind('.');
+    if (dot == std::string::npos) return false;
+    std::string ext = path.substr(dot);
+    for (char& c : ext) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+    return ext == ".hlsl" || ext == ".hlsli";
+}
 
 bool AllowedExt(const std::string& path) {
     const size_t dot = path.rfind('.');
     if (dot == std::string::npos) return false;
     std::string ext = path.substr(dot);
     for (char& c : ext) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
-    return ext == ".lua" || ext == ".json" || ext == ".txt" || ext == ".png" || ext == ".hlsl";
+    return ext == ".lua" || ext == ".json" || ext == ".txt" || ext == ".png" || ext == ".hlsl" || ext == ".hlsli";
 }
 
 bool DeleteTree(const std::wstring& dir) {
@@ -365,8 +374,6 @@ bool ParseCatalog(const std::string& json, std::vector<Item>& out, std::string& 
         it.descriptionRu = StrField(e, "description_ru");
         it.minUrushi = StrField(e, "min_urushi");
         it.entry = StrField(e, "entry");
-        if (it.entry.empty()) it.entry = "init.lua";
-        if (!ValidRelPath(it.entry)) continue;
 
         const JVal* files = e.get("files");
         bool good = files && files->t == JVal::Arr && !files->a.empty() && files->a.size() <= kMaxFilesPerScript;
@@ -379,11 +386,21 @@ bool ParseCatalog(const std::string& json, std::vector<Item>& out, std::string& 
                 for (char& c : fs.sha256) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
                 if (!ValidRelPath(fs.path) || fs.sha256.size() != 64 ||
                     fs.sha256.find_first_not_of("0123456789abcdef") != std::string::npos) { good = false; break; }
-                if (fs.path == it.entry) hasEntry = true;
-                it.files.push_back(std::move(fs));
+                        it.files.push_back(std::move(fs));
             }
         }
-        if (good && hasEntry) out.push_back(std::move(it));
+        if (!good) continue;
+        // entry: explicit, else init.lua, else "" for packages without any Lua file (shader-only packs)
+        bool anyLua = false, hasInit = false;
+        for (const FileSpec& f : it.files) {
+            if (f.path.size() > 4 && f.path.compare(f.path.size() - 4, 4, ".lua") == 0) anyLua = true;
+            if (f.path == "init.lua") hasInit = true;
+        }
+        if (it.entry.empty()) it.entry = hasInit ? "init.lua" : (anyLua ? "init.lua" : "");
+        if (!it.entry.empty() && !ValidRelPath(it.entry)) continue;
+        hasEntry = it.entry.empty() ? true : false;
+        for (const FileSpec& f : it.files) if (!it.entry.empty() && f.path == it.entry) hasEntry = true;
+        if (hasEntry) out.push_back(std::move(it));
     }
     return true;
 }
@@ -402,31 +419,38 @@ bool InstallBlocking(const Item& item, std::string& err) {
     EnsureDirs(root);
     const std::wstring stage = root + L"\\.stage_" + Widen(item.id);
     const std::wstring finalDir = root + L"\\" + Widen(item.id);
-    DeleteTree(stage);
+    const std::wstring shRoot = ShaderCloudRoot();
+    const std::wstring shStage = shRoot + L"\\.stage_" + Widen(item.id);
+    const std::wstring shFinal = shRoot + L"\\" + Widen(item.id);
+    bool hasShaders = false;
+    for (const FileSpec& f : item.files) if (IsShaderFile(f.path)) hasShaders = true;
+    auto cleanupStage = [&]() { DeleteTree(stage); DeleteTree(shStage); };
+    cleanupStage();
     EnsureDirs(stage);
+    if (hasShaders) { EnsureDirs(shRoot); EnsureDirs(shStage); }
 
     for (const FileSpec& f : item.files) {
-        if (g_stop.load()) { DeleteTree(stage); err = "cancelled"; return false; }
+        if (g_stop.load()) { cleanupStage(); err = "cancelled"; return false; }
         std::vector<uint8_t> data;
         DWORD status = 0;
         if (!Fetch("community/" + item.id + "/" + f.path, kMaxFileBytes, data, status)) {
-            DeleteTree(stage);
+            cleanupStage();
             err = "download failed for " + f.path + ": " + HttpErr(status);
             return false;
         }
         if (Sha256Hex(data.data(), data.size()) != f.sha256) {
-            DeleteTree(stage);
+            cleanupStage();
             err = "checksum mismatch for " + f.path + " (file differs from the reviewed version)";
             return false;
         }
-        std::wstring dest = stage + L"\\" + Widen(f.path);
+        std::wstring dest = (IsShaderFile(f.path) ? shStage : stage) + L"\\" + Widen(f.path);
         for (wchar_t& c : dest) if (c == L'/') c = L'\\';
         EnsureDirs(dest.substr(0, dest.rfind(L'\\')));
         std::ofstream out(dest, std::ios::binary | std::ios::trunc);
-        if (!out) { DeleteTree(stage); err = "cannot write " + f.path; return false; }
+        if (!out) { cleanupStage(); err = "cannot write " + f.path; return false; }
         out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
         out.close();
-        if (!out) { DeleteTree(stage); err = "write error for " + f.path; return false; }
+        if (!out) { cleanupStage(); err = "write error for " + f.path; return false; }
     }
 
     // Metadata last: its presence marks a complete install.
@@ -436,12 +460,19 @@ bool InstallBlocking(const Item& item, std::string& err) {
              << "name=" << item.name << "\n"
              << "name_ru=" << item.nameRu << "\n"
              << "entry=" << item.entry << "\n";
-        if (!meta) { DeleteTree(stage); err = "cannot write install metadata"; return false; }
+        if (!meta) { cleanupStage(); err = "cannot write install metadata"; return false; }
     }
 
     DeleteTree(finalDir);
+    DeleteTree(shFinal);
+    if (hasShaders && !MoveFileW(shStage.c_str(), shFinal.c_str())) {
+        cleanupStage();
+        err = "cannot move shader files into place";
+        return false;
+    }
     if (!MoveFileW(stage.c_str(), finalDir.c_str())) {
-        DeleteTree(stage);
+        cleanupStage();
+        DeleteTree(shFinal);
         err = "cannot move files into place";
         return false;
     }
@@ -463,7 +494,7 @@ static bool ReadInstallMeta(const std::wstring& dir, Installed& out) {
         else if (k == "name_ru") out.nameRu = v;
         else if (k == "entry") out.entry = v;
     }
-    return ValidRelPath(out.entry);
+    return out.entry.empty() || ValidRelPath(out.entry);   // empty entry = shader-only package
 }
 
 std::vector<Installed> ListInstalled() {
@@ -489,7 +520,7 @@ bool ResolveEntry(const std::string& id, std::wstring& outFile, std::wstring& ou
     if (!ValidId(id)) return false;
     const std::wstring dir = CloudRoot() + L"\\" + Widen(id);
     Installed ins;
-    if (!ReadInstallMeta(dir, ins)) return false;
+    if (!ReadInstallMeta(dir, ins) || ins.entry.empty()) return false;
     std::wstring file = dir + L"\\" + Widen(ins.entry);
     for (wchar_t& c : file) if (c == L'/') c = L'\\';
     if (GetFileAttributesW(file.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
@@ -503,6 +534,7 @@ bool Remove(const std::string& id, std::string& err) {
     const std::wstring dir = CloudRoot() + L"\\" + Widen(id);
     if (GetFileAttributesW(dir.c_str()) == INVALID_FILE_ATTRIBUTES) { err = "not installed"; return false; }
     if (!DeleteTree(dir)) { err = "cannot delete (files in use?)"; return false; }
+    DeleteTree(ShaderCloudRoot() + L"\\" + Widen(id));   // shader files, if any
     Settings::SetString("scripts", "cloud:" + id, "");   // drop the enabled flag
     Logger::Info("Cloud script removed: " + id);
     return true;

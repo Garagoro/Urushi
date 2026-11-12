@@ -158,8 +158,22 @@ public:
             candidates.push_back(m_localDir + L"\\" + wName);
         }
 
+        // #include may only reach files inside the shaders folder (cloud shaders must not read arbitrary files)
+        std::wstring rootFull;
+        {
+            wchar_t rb[MAX_PATH * 2] = {};
+            const DWORD rn = GetFullPathNameW(m_rootDir.c_str(), MAX_PATH * 2, rb, nullptr);
+            if (rn == 0 || rn >= MAX_PATH * 2) return E_ACCESSDENIED;
+            rootFull = rb;
+            if (rootFull.empty() || rootFull.back() != L'\\') rootFull += L'\\';
+        }
+        if (wcschr(wName, L':') != nullptr) return E_ACCESSDENIED;
+
         for (const auto& path : candidates) {
-            HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            wchar_t pb[MAX_PATH * 2] = {};
+            const DWORD pn = GetFullPathNameW(path.c_str(), MAX_PATH * 2, pb, nullptr);
+            if (pn == 0 || pn >= MAX_PATH * 2 || _wcsnicmp(pb, rootFull.c_str(), rootFull.size()) != 0) continue;
+            HANDLE f = CreateFileW(pb, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (f == INVALID_HANDLE_VALUE) continue;
             LARGE_INTEGER sz = {};
@@ -2066,6 +2080,25 @@ std::vector<std::string> ListAvailableShaders() {
             }
         } while (FindNextFileW(hf, &fd));
         FindClose(hf);
+    }
+    // shaders installed from the cloud library: shaders/cloud/<id>/*.hlsl  ->  "cloud/<id>/<name>.hlsl"
+    WIN32_FIND_DATAW dd{};
+    HANDLE hd = FindFirstFileW((s_shadersDir + L"\\cloud\\*").c_str(), &dd);
+    if (hd != INVALID_HANDLE_VALUE) {
+        do {
+            if (!(dd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (dd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) continue;
+            if (dd.cFileName[0] == L'.') continue;
+            WIN32_FIND_DATAW fd2{};
+            HANDLE h2 = FindFirstFileW((s_shadersDir + L"\\cloud\\" + dd.cFileName + L"\\*.hlsl").c_str(), &fd2);
+            if (h2 == INVALID_HANDLE_VALUE) continue;
+            do {
+                if (!(fd2.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                    out.push_back("cloud/" + WideToUtf8(dd.cFileName) + "/" + WideToUtf8(fd2.cFileName));
+                }
+            } while (FindNextFileW(h2, &fd2));
+            FindClose(h2);
+        } while (FindNextFileW(hd, &dd));
+        FindClose(hd);
     }
     std::sort(out.begin(), out.end());
     return out;
