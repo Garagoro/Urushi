@@ -19,13 +19,13 @@ void Logger::Init(const std::wstring& logFilePath) {
             FILE* fp;
             freopen_s(&fp, "CONOUT$", "w", stdout);
             freopen_s(&fp, "CONOUT$", "w", stderr);
-            SetConsoleTitleA("CarX2ScriptHook Debug Console");
+            SetConsoleTitleA("URUSHI Debug Console");
             s_hasConsole = true;
         }
 #endif
     }
 
-    Info("=== CarX2ScriptHook Logger Initialized ===");
+    Info("=== URUSHI Logger Initialized ===");
 }
 
 void Logger::Shutdown() {

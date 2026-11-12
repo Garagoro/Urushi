@@ -1986,6 +1986,170 @@ void* UnityBridge::FindGameObjectByName(const char* name) {
     return GetGameObjectOfTransform(tf);
 }
 
+static bool SafeGetSteamPersonaNameSEH(void* pfnFriends, void* pfnGetName, char* outBuf, size_t outSize) {
+    if (!pfnFriends || !pfnGetName || !outBuf || outSize == 0) return false;
+    __try {
+        typedef void* (*t_Friends)();
+        typedef const char* (*t_GetName)(void*);
+        void* friends = reinterpret_cast<t_Friends>(pfnFriends)();
+        if (friends) {
+            const char* name = reinterpret_cast<t_GetName>(pfnGetName)(friends);
+            if (name && name[0] != '\0') {
+                size_t i = 0;
+                for (; i + 1 < outSize && name[i] != '\0'; ++i) {
+                    outBuf[i] = name[i];
+                }
+                outBuf[i] = '\0';
+                return true;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    return false;
+}
+
+static std::string GetLocalSteamPersonaName() {
+    static std::string s_cachedName;
+    static bool s_checked = false;
+    if (s_checked) return s_cachedName;
+    s_checked = true;
+    HMODULE hSteam = GetModuleHandleW(L"steam_api64.dll");
+    if (!hSteam) {
+        hSteam = LoadLibraryW(L"steam_api64.dll");
+    }
+    if (hSteam) {
+        void* pfnFriends = reinterpret_cast<void*>(GetProcAddress(hSteam, "SteamAPI_SteamFriends_v017"));
+        void* pfnGetName = reinterpret_cast<void*>(GetProcAddress(hSteam, "SteamAPI_ISteamFriends_GetPersonaName"));
+        char buf[128] = { 0 };
+        if (SafeGetSteamPersonaNameSEH(pfnFriends, pfnGetName, buf, sizeof(buf))) {
+            s_cachedName = buf;
+        }
+    }
+    return s_cachedName;
+}
+
+static std::string StripRichTextTags(const std::string& str) {
+    std::string result;
+    result.reserve(str.size());
+    bool insideTag = false;
+    for (size_t i = 0; i < str.size(); ++i) {
+        if (str[i] == '<') {
+            insideTag = true;
+        } else if (str[i] == '>') {
+            insideTag = false;
+        } else if (!insideTag) {
+            result += str[i];
+        }
+    }
+    size_t first = result.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return "";
+    size_t last = result.find_last_not_of(" \t\r\n");
+    return result.substr(first, (last - first + 1));
+}
+
+static std::string Utf16ToUtf8(const wchar_t* wstr, int len) {
+    if (!wstr || len <= 0) return "";
+    int sizeNeeded = WideCharToMultiByte(CP_UTF8, 0, wstr, len, NULL, 0, NULL, NULL);
+    if (sizeNeeded <= 0) return "";
+    std::string out(sizeNeeded, 0);
+    WideCharToMultiByte(CP_UTF8, 0, wstr, len, &out[0], sizeNeeded, NULL, NULL);
+    return out;
+}
+
+static bool SafeGetIl2CppStringCharsSEH(void* il2cppStringPtr, const wchar_t** outChars, int32_t* outLen) {
+    if (!il2cppStringPtr || !outChars || !outLen) return false;
+    uintptr_t addr = reinterpret_cast<uintptr_t>(il2cppStringPtr);
+    if (!IsReadableMem(addr, 0x18)) return false;
+    __try {
+        int32_t len = *reinterpret_cast<const int32_t*>(addr + 0x10);
+        if (len <= 0 || len > 256) return false;
+        const wchar_t* chars = reinterpret_cast<const wchar_t*>(addr + 0x14);
+        if (!IsReadableMem(reinterpret_cast<uintptr_t>(chars), static_cast<size_t>(len) * sizeof(wchar_t))) return false;
+        *outChars = chars;
+        *outLen = len;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static std::string ReadIl2CppString(void* il2cppStringPtr) {
+    if (!il2cppStringPtr) return "";
+    const wchar_t* chars = nullptr;
+    int32_t len = 0;
+    if (SafeGetIl2CppStringCharsSEH(il2cppStringPtr, &chars, &len) && chars && len > 0) {
+        return Utf16ToUtf8(chars, len);
+    }
+    return "";
+}
+
+static uintptr_t SafeFindNickNamesContextSEH(void* nickContextGo) {
+    if (!nickContextGo) return 0;
+    __try {
+        uintptr_t go = reinterpret_cast<uintptr_t>(nickContextGo);
+        if (!IsReadableMem(go, 0x38)) return 0;
+        uintptr_t compArr = *reinterpret_cast<uintptr_t*>(go + 0x20);
+        uint32_t compCount = *reinterpret_cast<uint32_t*>(go + 0x30);
+        if (compCount == 0 || compCount > 256 || !IsReadableMem(compArr, static_cast<size_t>(compCount) * 16)) return 0;
+        for (uint32_t ci = 0; ci < compCount; ++ci) {
+            uint32_t cid = *reinterpret_cast<uint32_t*>(compArr + ci * 16);
+            if (cid != 66) continue;
+            uintptr_t natComp = *reinterpret_cast<uintptr_t*>(compArr + ci * 16 + 8);
+            if (!IsReadableMem(natComp, 0x20)) continue;
+            uintptr_t gcSlot = *reinterpret_cast<uintptr_t*>(natComp + 0x18);
+            if (!IsReadableMem(gcSlot & ~7ull, sizeof(uintptr_t))) continue;
+            uintptr_t managed = *reinterpret_cast<uintptr_t*>(gcSlot & ~7ull);
+            if ((managed & 7) || !IsReadableMem(managed, 0x70)) continue;
+            uintptr_t klass = *reinterpret_cast<uintptr_t*>(managed);
+            if (!IsReadableMem(klass, 0x18)) continue;
+            const char* kname = *reinterpret_cast<const char**>(klass + 0x10);
+            if (kname && IsReadableMem(reinterpret_cast<uintptr_t>(kname), 30) &&
+                strcmp(kname, "UIPlayersNickNamesContext") == 0) {
+                return managed;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    return 0;
+}
+
+static bool SafeGetNickDictCountAndEntriesSEH(uintptr_t context, uint32_t* outCount, uintptr_t* outEntries) {
+    if (!context || !outCount || !outEntries) return false;
+    __try {
+        if (!IsReadableMem(context, 0x70)) return false;
+        uintptr_t dict = *reinterpret_cast<const uintptr_t*>(context + 0x60);
+        if (!IsReadableMem(dict, 0x30)) return false;
+        uint32_t count = *reinterpret_cast<const uint32_t*>(dict + 0x20);
+        uintptr_t entries = *reinterpret_cast<const uintptr_t*>(dict + 0x18);
+        if (!entries || count == 0 || count > 128) return false;
+        if (!IsReadableMem(entries, 0x20 + count * 24)) return false;
+        *outCount = count;
+        *outEntries = entries;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static bool SafeReadSingleNickDataSEH(uintptr_t entryBase, void** outNativeTf, void** outIl2CppString, float outPos[3]) {
+    if (!outNativeTf || !outIl2CppString || !outPos) return false;
+    __try {
+        uintptr_t val = *reinterpret_cast<const uintptr_t*>(entryBase + 16);
+        if (!IsReadableMem(val, 0x70)) return false;
+        uintptr_t carTfManaged = *reinterpret_cast<const uintptr_t*>(val + 0x38);
+        void* nativeTf = nullptr;
+        if (carTfManaged && IsReadableMem(carTfManaged, 0x20)) {
+            nativeTf = *reinterpret_cast<void* const*>(carTfManaged + 0x10);
+        }
+        *outNativeTf = nativeTf;
+        *outIl2CppString = *reinterpret_cast<void* const*>(val + 0x50);
+        outPos[0] = *reinterpret_cast<const float*>(val + 0x40);
+        outPos[1] = *reinterpret_cast<const float*>(val + 0x44);
+        outPos[2] = *reinterpret_cast<const float*>(val + 0x48);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 void UnityBridge::RefreshLiveCarListOnMainThread(bool forceRescan) {
     if (!IsOnMainThread()) return;
 
@@ -2000,13 +2164,24 @@ void UnityBridge::RefreshLiveCarListOnMainThread(bool forceRescan) {
         needRescan = true;
     }
 
+    static uintptr_t s_cachedNickContext = 0;
+
     if (needRescan) {
         s_lastSceneCarScan = now;
+        s_cachedNickContext = 0;
         auto objects = GetAllGameObjects(30000);
         std::unordered_map<void*, const UnityObjectEntry*> tfMap;
         tfMap.reserve(objects.size());
+        void* nickContextGo = nullptr;
         for (const auto& obj : objects) {
             if (obj.transform) tfMap[obj.transform] = &obj;
+            if (!nickContextGo && obj.name == "UIPlayersNickNames(Clone)") {
+                nickContextGo = obj.go;
+            }
+        }
+
+        if (nickContextGo) {
+            s_cachedNickContext = SafeFindNickNamesContextSEH(nickContextGo);
         }
 
         std::unordered_set<void*> ownedClones;
@@ -2072,6 +2247,73 @@ void UnityBridge::RefreshLiveCarListOnMainThread(bool forceRescan) {
         }
     }
 
+    // Extract multiplayer nicknames from UIPlayersNickNamesContext
+    struct RemoteNickEntry {
+        void* nativeTf = nullptr;
+        float x = 0.0f, y = 0.0f, z = 0.0f;
+        std::string name;
+    };
+    std::vector<RemoteNickEntry> remoteNicks;
+
+    uint32_t nickCount = 0;
+    uintptr_t nickEntries = 0;
+    if (SafeGetNickDictCountAndEntriesSEH(s_cachedNickContext, &nickCount, &nickEntries)) {
+        for (uint32_t i = 0; i < nickCount; ++i) {
+            uintptr_t entryBase = nickEntries + 0x20 + i * 24;
+            void* nativeTf = nullptr;
+            void* il2cppStr = nullptr;
+            float pos[3] = { 0.0f, 0.0f, 0.0f };
+            if (SafeReadSingleNickDataSEH(entryBase, &nativeTf, &il2cppStr, pos)) {
+                std::string rawName = ReadIl2CppString(il2cppStr);
+                std::string clean = StripRichTextTags(rawName);
+                if (!clean.empty()) {
+                    RemoteNickEntry rne;
+                    rne.nativeTf = nativeTf;
+                    rne.name = clean;
+                    rne.x = pos[0];
+                    rne.y = pos[1];
+                    rne.z = pos[2];
+                    remoteNicks.push_back(std::move(rne));
+                }
+            }
+        }
+    }
+
+    std::string localNick = GetLocalSteamPersonaName();
+    if (localNick.empty()) localNick = "Вы";
+
+    for (auto& sc : s_sceneCarCache) {
+        if (sc.isPlayer) {
+            sc.playerName = localNick;
+        } else {
+            std::string matchedNick;
+            if (sc.rootTf) {
+                for (const auto& rne : remoteNicks) {
+                    if (rne.nativeTf && rne.nativeTf == sc.rootTf) {
+                        matchedNick = rne.name;
+                        break;
+                    }
+                }
+            }
+            if (matchedNick.empty() && sc.hasPos) {
+                float bestDistSq = 25.0f; // within 5m
+                for (const auto& rne : remoteNicks) {
+                    float dx = rne.x - sc.pos.x;
+                    float dy = rne.y - sc.pos.y;
+                    float dz = rne.z - sc.pos.z;
+                    float d2 = dx * dx + dy * dy + dz * dz;
+                    if (d2 < bestDistSq) {
+                        bestDistSq = d2;
+                        matchedNick = rne.name;
+                    }
+                }
+            }
+            if (!matchedNick.empty()) {
+                sc.playerName = matchedNick;
+            }
+        }
+    }
+
     // Push authoritative local player car pointer from Unity CarBehaviour::m_isPlayer into NativeCarX
     void* knownPlayerCarPtr = nullptr;
     for (const auto& sc : s_sceneCarCache) {
@@ -2119,6 +2361,7 @@ void UnityBridge::RefreshLiveCarListOnMainThread(bool forceRescan) {
 
         if (best) {
             info.unityName = best->unityName;
+            info.playerName = best->playerName;
             info.rootGo = best->rootGo;
             info.rootTf = best->rootTf;
             info.modelGo = best->modelGo;
@@ -2136,6 +2379,7 @@ void UnityBridge::RefreshLiveCarListOnMainThread(bool forceRescan) {
         } else {
             info.isLocalPlayer = knownPlayerCarPtr ? (c.carPtr == knownPlayerCarPtr) : c.isLocalPlayer;
             info.unityName = info.isLocalPlayer ? "Player Car" : ("Car #" + std::to_string(i + 1));
+            info.playerName = info.isLocalPlayer ? localNick : "";
         }
         updated.push_back(std::move(info));
     }
@@ -2146,6 +2390,8 @@ void UnityBridge::RefreshLiveCarListOnMainThread(bool forceRescan) {
 std::vector<LiveCarInfo> UnityBridge::GetLiveCarList() {
     auto cars = NativeCarX::GetAllCarsTelemetry();
     auto ecsStates = EcsCollision::GetCarStates();
+    std::string localNick = GetLocalSteamPersonaName();
+    if (localNick.empty()) localNick = "Вы";
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
 
     std::vector<LiveCarInfo> out;
@@ -2164,6 +2410,7 @@ std::vector<LiveCarInfo> UnityBridge::GetLiveCarList() {
         for (const auto& cached : s_liveCars) {
             if (cached.carPtr == c.carPtr) {
                 info.unityName = cached.unityName;
+                info.playerName = cached.playerName;
                 info.rootGo = cached.rootGo;
                 info.rootTf = cached.rootTf;
                 info.modelGo = cached.modelGo;
@@ -2184,6 +2431,7 @@ std::vector<LiveCarInfo> UnityBridge::GetLiveCarList() {
         }
         if (!matched) {
             info.unityName = c.isLocalPlayer ? "Player Car" : ("Car #" + std::to_string(i + 1));
+            info.playerName = c.isLocalPlayer ? localNick : "";
         }
 
         const CarGhostState* gst = nullptr;
@@ -2219,6 +2467,21 @@ std::string UnityBridge::LookupCarUnityName(void* carPtr) {
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
     for (const auto& c : s_liveCars) {
         if (c.carPtr == carPtr) return c.unityName;
+    }
+    for (const auto& sc : s_sceneCarCache) {
+        if (sc.nativeCarPtr == carPtr) return sc.unityName;
+    }
+    return "";
+}
+
+std::string UnityBridge::LookupCarPlayerName(void* carPtr) {
+    if (!carPtr) return "";
+    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    for (const auto& c : s_liveCars) {
+        if (c.carPtr == carPtr && !c.playerName.empty()) return c.playerName;
+    }
+    for (const auto& sc : s_sceneCarCache) {
+        if (sc.nativeCarPtr == carPtr && !sc.playerName.empty()) return sc.playerName;
     }
     return "";
 }

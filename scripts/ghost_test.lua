@@ -92,7 +92,7 @@ end
 events.on_key(function(key, is_down)
     if not is_down or is_typing() then return end
 
-    if key == 0x77 then -- F8
+    if not keybinds and key == 0x77 then -- F8
         if urushi and urushi.toggle_window then urushi.toggle_window("ghost") end
     elseif key == 0x47 then -- G
         spawn_ghost_action()
@@ -107,6 +107,9 @@ end)
 
 if events.on_main_update then
     events.on_main_update(function(dt)
+        if keybinds and keybinds.is_pressed and keybinds.is_pressed("dummy_ghost") then
+            if urushi and urushi.toggle_window then urushi.toggle_window("ghost") end
+        end
         if ghost_state.pending_destroy_ptr then
             if unity and unity.destroy then
                 unity.destroy(ghost_state.pending_destroy_ptr)

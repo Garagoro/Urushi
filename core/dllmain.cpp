@@ -78,12 +78,12 @@ extern "C" __declspec(dllexport) void ScriptHook_Unload() {
 static DWORD WINAPI InitThread(LPVOID) {
     try {
         std::wstring exeDir = GetExecutableDirectory();
-        std::wstring logPath = exeDir + L"\\CarX2ScriptHook.log";
+        std::wstring logPath = exeDir + L"\\urushi.log";
         std::wstring replaysDir = exeDir + L"\\replays";
         std::wstring scriptsDir = exeDir + L"\\scripts";
 
         Logger::Init(logPath);
-        Logger::Info("CarX2ScriptHook v1.0.0 initializing...");
+        Logger::Info("URUSHI v1.0.0 initializing...");
 
         // Wait until NativeCarX.dll is loaded
         int retries = 0;
@@ -137,7 +137,7 @@ static DWORD WINAPI InitThread(LPVOID) {
         Updater::Init(exeDir, g_module);
 
         g_initialized = true;
-        Logger::Info("CarX2ScriptHook fully initialized and ready. Press F4 to toggle menu.");
+        Logger::Info("URUSHI fully initialized and ready. Press F4 to toggle menu.");
     }
     catch (const std::exception& ex) {
         Logger::Error(std::string("Fatal exception in InitThread: ") + ex.what());

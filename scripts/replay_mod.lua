@@ -241,26 +241,17 @@ events.on_key(function(key, is_down)
     if not is_down then return end
     if imgui and imgui.is_any_item_active and imgui.is_any_item_active() then return end
 
-    if key == 0x75 then -- F6
-        if state.mode == "RECORDING" then
-            stop_recording()
-        else
-            start_recording()
-        end
-    end
-
-    if key == 0x76 then -- F7
-        if state.mode == "PLAYING" or state.mode == "PAUSED" then
-            stop_playback()
-        else
-            start_playback()
-        end
-    end
-
-    if key == 0x4A then -- J
-        if carx.set_selective_ghost_config then
-            state.ghost_cfg.enabled = not state.ghost_cfg.enabled
-            sync_selective_ghost_cfg()
+    -- Fallback raw keys if keybinds module is not loaded
+    if not keybinds then
+        if key == 0x75 then
+            if state.mode == "RECORDING" then stop_recording() else start_recording() end
+        elseif key == 0x76 then
+            if state.mode == "PLAYING" or state.mode == "PAUSED" then stop_playback() else start_playback() end
+        elseif key == 0x4A then
+            if carx.set_selective_ghost_config then
+                state.ghost_cfg.enabled = not state.ghost_cfg.enabled
+                sync_selective_ghost_cfg()
+            end
         end
     end
 end)
@@ -268,6 +259,32 @@ end)
 local register_tick = events.on_main_update or events.on_update
 register_tick(function(dt)
     if not dt or dt <= 0.0 or dt > 0.25 then dt = 0.016 end
+
+    -- Check unified keybinds (Keyboard + Gamepad)
+    if keybinds and keybinds.is_pressed then
+        if keybinds.is_pressed("replay_record") then
+            if state.mode == "RECORDING" then
+                stop_recording()
+            else
+                start_recording()
+            end
+        end
+
+        if keybinds.is_pressed("replay_ghost") then
+            if state.mode == "PLAYING" or state.mode == "PAUSED" then
+                stop_playback()
+            else
+                start_playback()
+            end
+        end
+
+        if keybinds.is_pressed("anticollision") then
+            if carx.set_selective_ghost_config then
+                state.ghost_cfg.enabled = not state.ghost_cfg.enabled
+                sync_selective_ghost_cfg()
+            end
+        end
+    end
 
     if state.mode == "RECORDING" then
         if replay.record_all_frames then
@@ -361,8 +378,9 @@ local function draw_ghost_radar()
             local tone = c.is_wrong_way and "red" or "yellow"
             ui.badge(reason, tone)
             ui.same_line(0, 8)
+            local d_name = (c.player_name and c.player_name ~= "") and c.player_name or (c.name or (c.unity_name or "Player"))
             ui.text(string.format(T("%s · %.0fм · %.0f км/ч", "%s · %.0fm · %.0f km/h"),
-                c.unity_name or "Player", c.dist_to_player or 0.0, c.speed_kmh or 0.0))
+                d_name, c.dist_to_player or 0.0, c.speed_kmh or 0.0))
         end
     end
     imgui.end_window()
@@ -396,8 +414,9 @@ local function render_replay_window()
                     { label = T("Кадры", "Frames"), value = tostring(replay.get_record_frame_count()), tone = "muted" },
                 })
 
+                local rec_key_name = (keybinds and keybinds.get and keybinds.get("replay_record").name) or "F6"
                 ui.spacing(4)
-                if ui.button(T("Остановить и сохранить [F6]##rep_rec_stop", "Stop & Save [F6]##rep_rec_stop"), ui.avail_width(), 32, "danger") then
+                if ui.button(string.format(T("Остановить и сохранить [%s]##rep_rec_stop", "Stop & Save [%s]##rep_rec_stop"), rec_key_name), ui.avail_width(), 32, "danger") then
                     stop_recording()
                 end
             end)
@@ -406,9 +425,15 @@ local function render_replay_window()
                 local changed, new_name = ui.input_text(T("Имя файла##rep_fname", "File Name##rep_fname"), state.custom_filename, 128)
                 if changed then state.custom_filename = new_name end
 
+                local rec_key_name = (keybinds and keybinds.get and keybinds.get("replay_record").name) or "F6"
                 ui.spacing(4)
-                if ui.button(T("Начать запись [F6]##rep_rec_start", "Start Recording [F6]##rep_rec_start"), ui.avail_width(), 32, "primary") then
+                if ui.button(string.format(T("Начать запись [%s]##rep_rec_start", "Start Recording [%s]##rep_rec_start"), rec_key_name), ui.avail_width(), 32, "primary") then
                     start_recording()
+                end
+
+                if keybinds and keybinds.render then
+                    ui.spacing(2)
+                    keybinds.render("rep_rec_hk", T("Кнопка записи", "Record Button"), "replay_record")
                 end
             end)
 
@@ -444,8 +469,12 @@ local function render_replay_window()
                             local dx, dy, dz = c.x - local_car.x, c.y - local_car.y, c.z - local_car.z
                             dist_str = string.format(T("%.0fм · ", "%.0fm · "), math.sqrt(dx * dx + dy * dy + dz * dz))
                         end
+                        local p_name = (c.player_name and c.player_name ~= "") and c.player_name or c.name
+                        local name = (p_name and p_name ~= "") and p_name or (c.unity_name or ("Car #" .. tostring(idx)))
                         local tag = c.is_local_player and T(" [ВЫ]", " [YOU]") or ""
-                        local name = c.unity_name or ("Car #" .. tostring(idx))
+                        if c.is_local_player and (name == T("Вы", "You") or name == "[ВЫ]" or name == "[YOU]") then
+                            tag = ""
+                        end
                         local label = string.format(T("#%d %s%s (%s%.0f км/ч)##rec_car_%d", "#%d %s%s (%s%.0f km/h)##rec_car_%d"),
                             idx, name, tag, dist_str, c.speed_kmh or 0.0, idx)
                         local cb_ch, cb_val = ui.toggle(label, checked)
@@ -596,10 +625,16 @@ end
 
 local function render_anticollision_window()
     ui.card(T("Выборочная коллизия", "Selective Collision"), nil, function()
-        local en_ch, en_val = ui.toggle(T("Включить Анти-встречку [J]##sg_en", "Enable Anti-Wrong-Way [J]##sg_en"), state.ghost_cfg.enabled)
+        local anti_name = (keybinds and keybinds.get and keybinds.get("anticollision").name) or "J"
+        local en_ch, en_val = ui.toggle(string.format(T("Включить Анти-встречку [%s]##sg_en", "Enable Anti-Wrong-Way [%s]##sg_en"), anti_name), state.ghost_cfg.enabled)
         if en_ch then
             state.ghost_cfg.enabled = en_val
             sync_selective_ghost_cfg()
+        end
+
+        if keybinds and keybinds.render then
+            keybinds.render("sg_hk_btn", T("Кнопка переключения", "Toggle Button"), "anticollision")
+            ui.spacing(2)
         end
 
         local aww_ch, aww_val = ui.toggle(T("Авто-призрак встречных##sg_aww", "Auto-Ghost Wrong-Way##sg_aww"), state.ghost_cfg.anti_wrong_way)
@@ -663,10 +698,12 @@ local function render_anticollision_window()
                     end
 
                     local dir_tag = (dot < (state.ghost_cfg.dot_threshold or -0.25)) and T("встреч.", "wrong") or T("попутка", "same")
+                    local p_name = (c.player_name and c.player_name ~= "") and c.player_name or c.name
+                    local car_label = (p_name and p_name ~= "") and p_name or (c.unity_name or ("Car #" .. idx))
                     ui.badge(status_txt, tone)
                     ui.same_line(0, 8)
                     ui.text(string.format(T("%s · %.0fм · %.0f км/ч (%s)", "%s · %.0fm · %.0f km/h (%s)"),
-                        c.unity_name or ("Car #" .. idx), dist, spd, dir_tag))
+                        car_label, dist, spd, dir_tag))
 
                     if carx.set_car_ghost_mode then
                         local target_id = c.unity_name or c.ptr

@@ -186,8 +186,19 @@ if urushi and urushi.register_window then
     })
 end
 
+local register_perf_tick = events.on_main_update or events.on_update
+if register_perf_tick then
+    register_perf_tick(function(dt)
+        if keybinds and keybinds.is_pressed and keybinds.is_pressed("perf_menu") then
+            if urushi and urushi.toggle_window then
+                urushi.toggle_window("perf")
+            end
+        end
+    end)
+end
+
 events.on_key(function(key, is_down)
-    if is_down and key == VK_F5 then
+    if not keybinds and is_down and key == VK_F5 then
         if imgui and imgui.is_any_item_active and imgui.is_any_item_active() then return end
         if urushi and urushi.toggle_window then
             urushi.toggle_window("perf")

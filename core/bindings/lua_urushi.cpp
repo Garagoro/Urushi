@@ -1,6 +1,7 @@
 #include "lua_urushi.h"
 #include "../urushi_ui.h"
 #include "../d3d11_hook.h"
+#include "../input_manager.h"
 #include "../native_carx.h"
 #include "../car_sim_optimizer.h"
 #include "../logger.h"
@@ -537,11 +538,261 @@ int Lua_UiAvailWidth(lua_State* L) {
     return 1;
 }
 
+int Lua_UrushiToggleMenu(lua_State* /*L*/) {
+    D3D11Hook::ToggleMenu();
+    return 0;
+}
+
+int Lua_UrushiSetMenuOpen(lua_State* L) {
+    bool open = lua_toboolean(L, 1) != 0;
+    D3D11Hook::SetMenuOpen(open);
+    return 0;
+}
+
+int Lua_UiKeybind(lua_State* L) {
+    const char* id = luaL_checkstring(L, 1);
+    const char* label = luaL_checkstring(L, 2);
+
+    UrushiUI::KeybindState state;
+    if (lua_istable(L, 3)) {
+        lua_getfield(L, 3, "source");
+        if (lua_isstring(L, -1)) state.source = lua_tostring(L, -1);
+        lua_pop(L, 1);
+
+        lua_getfield(L, 3, "code");
+        if (lua_isnumber(L, -1)) state.code = static_cast<int>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, 3, "mod");
+        if (lua_isnumber(L, -1)) state.modCode = static_cast<int>(lua_tointeger(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, 3, "name");
+        if (lua_isstring(L, -1)) state.name = lua_tostring(L, -1);
+        lua_pop(L, 1);
+    }
+
+    bool changed = UrushiUI::Keybind(id, label, state);
+
+    lua_pushboolean(L, changed ? 1 : 0);
+    lua_newtable(L);
+    lua_pushstring(L, state.source.c_str());
+    lua_setfield(L, -2, "source");
+    lua_pushinteger(L, state.code);
+    lua_setfield(L, -2, "code");
+    lua_pushinteger(L, state.modCode);
+    lua_setfield(L, -2, "mod");
+    lua_pushstring(L, state.name.c_str());
+    lua_setfield(L, -2, "name");
+    return 2;
+}
+
+static void PushBindingTable(lua_State* L, const InputBinding& b) {
+    lua_newtable(L);
+    const char* src = (b.source == InputSource::Gamepad) ? "gamepad" :
+                      (b.source == InputSource::Keyboard) ? "keyboard" : "none";
+    lua_pushstring(L, src);
+    lua_setfield(L, -2, "source");
+    lua_pushinteger(L, b.code);
+    lua_setfield(L, -2, "code");
+    lua_pushinteger(L, b.modCode);
+    lua_setfield(L, -2, "mod");
+    lua_pushstring(L, b.name.c_str());
+    lua_setfield(L, -2, "name");
+}
+
+static InputBinding ParseBindingTable(lua_State* L, int idx) {
+    InputBinding b;
+    if (!lua_istable(L, idx)) return b;
+
+    lua_getfield(L, idx, "source");
+    std::string src = lua_isstring(L, -1) ? lua_tostring(L, -1) : "none";
+    lua_pop(L, 1);
+
+    if (src == "gamepad") b.source = InputSource::Gamepad;
+    else if (src == "keyboard") b.source = InputSource::Keyboard;
+    else b.source = InputSource::None;
+
+    lua_getfield(L, idx, "code");
+    if (lua_isnumber(L, -1)) b.code = static_cast<int>(lua_tointeger(L, -1));
+    lua_pop(L, 1);
+
+    lua_getfield(L, idx, "mod");
+    if (lua_isnumber(L, -1)) b.modCode = static_cast<int>(lua_tointeger(L, -1));
+    lua_pop(L, 1);
+
+    lua_getfield(L, idx, "name");
+    if (lua_isstring(L, -1)) b.name = lua_tostring(L, -1);
+    lua_pop(L, 1);
+
+    if (b.name.empty() && b.IsValid()) {
+        b.name = InputManager::FormatBinding(b);
+    }
+    return b;
+}
+
+static int Lua_InputIsKeyDown(lua_State* L) {
+    int vk = static_cast<int>(luaL_checkinteger(L, 1));
+    lua_pushboolean(L, InputManager::IsKeyDown(vk) ? 1 : 0);
+    return 1;
+}
+
+static int Lua_InputIsKeyPressed(lua_State* L) {
+    int vk = static_cast<int>(luaL_checkinteger(L, 1));
+    lua_pushboolean(L, InputManager::IsKeyPressed(vk) ? 1 : 0);
+    return 1;
+}
+
+static int Lua_InputIsKeyReleased(lua_State* L) {
+    int vk = static_cast<int>(luaL_checkinteger(L, 1));
+    lua_pushboolean(L, InputManager::IsKeyReleased(vk) ? 1 : 0);
+    return 1;
+}
+
+static int Lua_InputIsGamepadConnected(lua_State* L) {
+    lua_pushboolean(L, InputManager::IsGamepadConnected() ? 1 : 0);
+    return 1;
+}
+
+static int Lua_InputGetGamepadState(lua_State* L) {
+    auto st = InputManager::GetGamepadState();
+    lua_newtable(L);
+    lua_pushboolean(L, st.connected ? 1 : 0);
+    lua_setfield(L, -2, "connected");
+    lua_pushinteger(L, st.slot);
+    lua_setfield(L, -2, "slot");
+    lua_pushinteger(L, st.buttons);
+    lua_setfield(L, -2, "buttons");
+    lua_pushinteger(L, st.buttonsPressed);
+    lua_setfield(L, -2, "buttons_pressed");
+    lua_pushinteger(L, st.buttonsReleased);
+    lua_setfield(L, -2, "buttons_released");
+    lua_pushnumber(L, st.leftTrigger);
+    lua_setfield(L, -2, "left_trigger");
+    lua_pushnumber(L, st.rightTrigger);
+    lua_setfield(L, -2, "right_trigger");
+    lua_pushnumber(L, st.leftThumbX);
+    lua_setfield(L, -2, "left_thumb_x");
+    lua_pushnumber(L, st.leftThumbY);
+    lua_setfield(L, -2, "left_thumb_y");
+    lua_pushnumber(L, st.rightThumbX);
+    lua_setfield(L, -2, "right_thumb_x");
+    lua_pushnumber(L, st.rightThumbY);
+    lua_setfield(L, -2, "right_thumb_y");
+    return 1;
+}
+
+static int Lua_InputIsGamepadDown(lua_State* L) {
+    int mask = static_cast<int>(luaL_checkinteger(L, 1));
+    lua_pushboolean(L, InputManager::IsGamepadDown(mask) ? 1 : 0);
+    return 1;
+}
+
+static int Lua_InputIsGamepadPressed(lua_State* L) {
+    int mask = static_cast<int>(luaL_checkinteger(L, 1));
+    lua_pushboolean(L, InputManager::IsGamepadPressed(mask) ? 1 : 0);
+    return 1;
+}
+
+static int Lua_InputIsGamepadReleased(lua_State* L) {
+    int mask = static_cast<int>(luaL_checkinteger(L, 1));
+    lua_pushboolean(L, InputManager::IsGamepadReleased(mask) ? 1 : 0);
+    return 1;
+}
+
+static int Lua_InputIsBoundDown(lua_State* L) {
+    auto b = ParseBindingTable(L, 1);
+    lua_pushboolean(L, InputManager::IsBindingDown(b) ? 1 : 0);
+    return 1;
+}
+
+static int Lua_InputIsBoundPressed(lua_State* L) {
+    auto b = ParseBindingTable(L, 1);
+    if (b.source == InputSource::Keyboard && ImGui::GetCurrentContext()) {
+        ImGuiIO& io = ImGui::GetIO();
+        if (io.WantTextInput) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+    }
+    lua_pushboolean(L, InputManager::IsBindingPressed(b) ? 1 : 0);
+    return 1;
+}
+
+static int Lua_InputGetAnyPressed(lua_State* L) {
+    InputBinding b;
+    bool cancelled = false;
+    bool cleared = false;
+    if (InputManager::PollAnyPressed(b, cancelled, cleared)) {
+        if (b.IsValid()) {
+            PushBindingTable(L, b);
+            return 1;
+        }
+    }
+    lua_pushnil(L);
+    return 1;
+}
+
+static int Lua_InputGetKeyName(lua_State* L) {
+    int vk = static_cast<int>(luaL_checkinteger(L, 1));
+    std::string name = InputManager::GetKeyName(vk);
+    lua_pushstring(L, name.c_str());
+    return 1;
+}
+
+static int Lua_InputGetGamepadButtonName(lua_State* L) {
+    int mask = static_cast<int>(luaL_checkinteger(L, 1));
+    std::string name = InputManager::GetGamepadButtonName(mask);
+    lua_pushstring(L, name.c_str());
+    return 1;
+}
+
+static int Lua_InputFormatBinding(lua_State* L) {
+    auto b = ParseBindingTable(L, 1);
+    std::string str = InputManager::FormatBinding(b);
+    lua_pushstring(L, str.c_str());
+    return 1;
+}
+
+static int Lua_InputGetMenuToggle(lua_State* L) {
+    auto b = InputManager::GetMenuToggleBinding();
+    PushBindingTable(L, b);
+    return 1;
+}
+
+static int Lua_InputSetMenuToggle(lua_State* L) {
+    auto b = ParseBindingTable(L, 1);
+    InputManager::SetMenuToggleBinding(b);
+    return 0;
+}
+
+static const luaL_Reg kInputFuncs[] = {
+    { "is_key_down",             Lua_InputIsKeyDown },
+    { "is_key_pressed",          Lua_InputIsKeyPressed },
+    { "is_key_released",         Lua_InputIsKeyReleased },
+    { "is_gamepad_connected",    Lua_InputIsGamepadConnected },
+    { "get_gamepad_state",       Lua_InputGetGamepadState },
+    { "is_gamepad_down",         Lua_InputIsGamepadDown },
+    { "is_gamepad_pressed",      Lua_InputIsGamepadPressed },
+    { "is_gamepad_released",     Lua_InputIsGamepadReleased },
+    { "is_bound_down",           Lua_InputIsBoundDown },
+    { "is_bound_pressed",        Lua_InputIsBoundPressed },
+    { "get_any_pressed",         Lua_InputGetAnyPressed },
+    { "get_key_name",            Lua_InputGetKeyName },
+    { "get_gamepad_button_name", Lua_InputGetGamepadButtonName },
+    { "format_binding",          Lua_InputFormatBinding },
+    { "get_menu_toggle",         Lua_InputGetMenuToggle },
+    { "set_menu_toggle",         Lua_InputSetMenuToggle },
+    { nullptr, nullptr }
+};
+
 const luaL_Reg kUrushiFuncs[] = {
     { "register_window", Lua_UrushiRegisterWindow },
     { "set_window_open", Lua_UrushiSetWindowOpen },
     { "toggle_window",   Lua_UrushiToggleWindow },
     { "is_window_open",  Lua_UrushiIsWindowOpen },
+    { "toggle_menu",     Lua_UrushiToggleMenu },
+    { "set_menu_open",   Lua_UrushiSetMenuOpen },
     { "close_all",       Lua_UrushiCloseAll },
     { "set_accent",        Lua_UrushiSetAccent },
     { "get_accent",        Lua_UrushiGetAccent },
@@ -580,6 +831,7 @@ const luaL_Reg kUiFuncs[] = {
     { "progress_bar", Lua_UiProgressBar },
     { "badge",        Lua_UiBadge },
     { "keycap",       Lua_UiKeycap },
+    { "keybind",      Lua_UiKeybind },
     { "text",         Lua_UiText },
     { "text_dim",     Lua_UiTextDim },
     { "text_wrapped", Lua_UiTextWrapped },
@@ -599,4 +851,7 @@ void LuaUrushi::Register(lua_State* L) {
 
     luaL_newlib(L, kUiFuncs);
     lua_setglobal(L, "ui");
+
+    luaL_newlib(L, kInputFuncs);
+    lua_setglobal(L, "input");
 }

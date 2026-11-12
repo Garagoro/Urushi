@@ -410,12 +410,29 @@ end
 
 events.on_key(function(vk, is_down)
     if not is_down or not state.hotkeys_enabled or is_typing() then return end
-    if vk == VK_SAVE then
-        save_checkpoint(state.new_point_name)
-    elseif vk == VK_TP then
-        teleport_to_point(state.active_idx)
+    if not keybinds then
+        if vk == VK_SAVE then
+            save_checkpoint(state.new_point_name)
+        elseif vk == VK_TP then
+            teleport_to_point(state.active_idx)
+        end
     end
 end)
+
+local register_tp_tick = events.on_main_update or events.on_update
+if register_tp_tick then
+    register_tp_tick(function(dt)
+        if not state.hotkeys_enabled or is_typing() then return end
+        if keybinds and keybinds.is_pressed then
+            if keybinds.is_pressed("tp_save") then
+                save_checkpoint(state.new_point_name)
+            end
+            if keybinds.is_pressed("tp_teleport") then
+                teleport_to_point(state.active_idx)
+            end
+        end
+    end)
+end
 
 -- ==================== UI Rendering ====================
 
@@ -565,10 +582,16 @@ local function render_teleport_window()
         end
 
         ui.spacing(4)
-        local hk_ch, hk_val = ui.toggle(T("Горячие клавиши [ / ]##tp_hk", "Hotkeys [ / ]##tp_hk"), state.hotkeys_enabled)
+        local hk_ch, hk_val = ui.toggle(T("Горячие клавиши##tp_hk", "Hotkeys##tp_hk"), state.hotkeys_enabled)
         if hk_ch then
             state.hotkeys_enabled = hk_val
             save_to_disk()
+        end
+
+        if state.hotkeys_enabled and keybinds and keybinds.render then
+            keybinds.render("tp_save_hk", T("Запомнить точку", "Save Checkpoint"), "tp_save")
+            keybinds.render("tp_go_hk",   T("Телепорт в точку", "Teleport to Point"), "tp_teleport")
+            ui.spacing(2)
         end
 
         local rep_ch, rep_val = ui.toggle(T("Восстанавливать авто и шины при ТП##tp_rep", "Repair car & tires on teleport##tp_rep"), state.repair_on_tp == true)

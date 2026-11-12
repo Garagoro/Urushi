@@ -10,9 +10,10 @@ set(IMGUI_SOURCES
     "${IMGUI_DIR}/backends/imgui_impl_dx11.cpp"
 )
 
-add_library(CarX2ScriptHook SHARED
+add_library(urushi SHARED
     dllmain.cpp
     logger.h logger.cpp
+    input_manager.h input_manager.cpp
     hook_manager.h hook_manager.cpp
     native_carx.h native_carx.cpp
     steer_assist.h steer_assist.cpp
@@ -41,14 +42,14 @@ add_library(CarX2ScriptHook SHARED
     ${IMGUI_SOURCES}
 )
 
-target_include_directories(CarX2ScriptHook PRIVATE
+target_include_directories(urushi PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_SOURCE_DIR}/third_party/minhook/include"
     "${CMAKE_SOURCE_DIR}/third_party/imgui"
     "${CMAKE_SOURCE_DIR}/third_party/lua"
 )
 
-target_link_libraries(CarX2ScriptHook PRIVATE
+target_link_libraries(urushi PRIVATE
     minhook
     lua
     d3d11
@@ -60,8 +61,8 @@ target_link_libraries(CarX2ScriptHook PRIVATE
     bcrypt
 )
 
-set_target_properties(CarX2ScriptHook PROPERTIES
-    OUTPUT_NAME "CarX2ScriptHook"
+set_target_properties(urushi PROPERTIES
+    OUTPUT_NAME "urushi"
     PREFIX ""
     SUFFIX ".dll"
 )

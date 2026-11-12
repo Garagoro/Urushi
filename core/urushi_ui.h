@@ -170,6 +170,14 @@ public:
     static void ProgressBar(float fraction, float width = -1.0f, float height = 10.0f, const char* overlay = nullptr);
 
     static void Badge(const std::string& text, Tone tone = Tone::Accent);
+    struct KeybindState {
+        std::string source = "none"; // "keyboard" | "gamepad" | "none"
+        int code = 0;
+        int modCode = 0;
+        std::string name = "None";
+    };
+
+    static bool Keybind(const std::string& id, const std::string& label, KeybindState& state);
     static void Keycap(const std::string& keyText);
     static void Text(const std::string& text, Tone tone = Tone::Default);
     static void TextWrapped(const std::string& text, Tone tone = Tone::Default);

@@ -1,4 +1,5 @@
 #include "d3d11_hook.h"
+#include "input_manager.h"
 #include "carfx.h"
 #include "dev_pipe.h"
 #include "hook_manager.h"
@@ -265,6 +266,7 @@ void D3D11Hook::DetachWndProc() {
 void D3D11Hook::Shutdown() {
     if (!s_initialized) return;
 
+    InputManager::Shutdown();
     DetachWndProc();
     DevPipe::ReleaseD3D11();
     CarFX::Shutdown();
@@ -391,6 +393,8 @@ HRESULT WINAPI D3D11Hook::Hooked_Present(IDXGISwapChain* pSwapChain, UINT SyncIn
         }
 
         if (s_imguiInitialized) {
+            InputManager::Update();
+
             if (s_context) {
                 HookContextVTable(s_context);
                 CarFX::OnNewFrame(s_context);
@@ -462,8 +466,9 @@ LRESULT WINAPI D3D11Hook::Hooked_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
         return origWndProc ? CallWindowProc(origWndProc, hWnd, uMsg, wParam, lParam)
                            : DefWindowProc(hWnd, uMsg, wParam, lParam);
     }
-    // Forward key events to Lua scripts
+    // Forward key events to Lua scripts and InputManager
     if (uMsg == WM_KEYDOWN || uMsg == WM_KEYUP) {
+        InputManager::OnKeyEvent(static_cast<int>(wParam), uMsg == WM_KEYDOWN);
         LuaEngine::OnKeyEvent(static_cast<int>(wParam), uMsg == WM_KEYDOWN);
     }
 

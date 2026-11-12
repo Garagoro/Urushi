@@ -1,5 +1,6 @@
 #include "urushi_ui.h"
 #include "d3d11_hook.h"
+#include "input_manager.h"
 #include "native_carx.h"
 #include "car_sim_optimizer.h"
 #include "unity_bridge.h"
@@ -1816,6 +1817,135 @@ void UrushiUI::Badge(const std::string& text, Tone tone) {
     if (AppFonts::Small) ImGui::PopFont();
 
     ImGui::Dummy(ImVec2(bw, bh));
+}
+
+static std::string s_activeListeningKeybindId;
+
+bool UrushiUI::Keybind(const std::string& id, const std::string& label, KeybindState& state) {
+    const float S = s_uiScale;
+    const float w = CurrentContentWidth();
+    const float rowH = 30.0f * S;
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    const bool isListening = (s_activeListeningKeybindId == id);
+
+    // Format display text
+    std::string keyText;
+    if (isListening) {
+        keyText = (s_language == Language::English) ? "Press any key..." : "Нажмите кнопку...";
+    } else {
+        if (state.source == "none" || state.code == 0) {
+            keyText = (s_language == Language::English) ? "None" : "Не назначен";
+        } else {
+            keyText = state.name.empty() ? "Bound" : state.name;
+        }
+    }
+
+    if (AppFonts::Mono) ImGui::PushFont(AppFonts::Mono);
+    ImVec2 tSz = ImGui::CalcTextSize(keyText.c_str());
+    if (AppFonts::Mono) ImGui::PopFont();
+
+    const float btnPadX = 12.0f * S;
+    const float minBtnW = 84.0f * S;
+    const float btnW = (std::max)(minBtnW, tSz.x + btnPadX * 2.0f);
+    const float btnH = 24.0f * S;
+    const float btnR = 6.0f * S;
+
+    const ImVec2 btnMin(pos.x + w - btnW, pos.y + (rowH - btnH) * 0.5f);
+    const ImVec2 btnMax(btnMin.x + btnW, btnMin.y + btnH);
+
+    // Label text on left
+    const char* hashPos = strstr(label.c_str(), "##");
+    std::string visLabel = hashPos ? label.substr(0, hashPos - label.c_str()) : label;
+
+    dl->PushClipRect(pos, ImVec2(btnMin.x - 8.0f * S, pos.y + rowH), true);
+    ImVec2 lblSz = ImGui::CalcTextSize(visLabel.c_str());
+    dl->AddText(ImVec2(pos.x, pos.y + (rowH - lblSz.y) * 0.5f), kColTextPrimary, visLabel.c_str());
+    dl->PopClipRect();
+
+    // Interactive button for keybind
+    ImGui::PushID(id.c_str());
+    ImGui::SetCursorScreenPos(btnMin);
+    bool clicked = ImGui::InvisibleButton("##kb_btn", ImVec2(btnW, btnH));
+    bool hovered = ImGui::IsItemHovered();
+    bool rightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
+
+    bool changed = false;
+
+    if (isListening) {
+        // Subtle pulse for listening border
+        float time = static_cast<float>(ImGui::GetTime());
+        float pulse = 0.5f + 0.5f * sinf(time * 6.0f);
+        ImU32 listeningBorder = ScaleAlpha(GetAccentU32(), 0.6f + 0.4f * pulse);
+        ImU32 listeningBg = ScaleAlpha(GetAccentU32(), 0.16f + 0.08f * pulse);
+
+        dl->AddRectFilled(btnMin, btnMax, listeningBg, btnR);
+        dl->AddRect(btnMin, btnMax, listeningBorder, btnR, 0, 1.5f * S);
+
+        if (AppFonts::Mono) ImGui::PushFont(AppFonts::Mono);
+        dl->AddText(ImVec2(btnMin.x + (btnW - tSz.x) * 0.5f, btnMin.y + (btnH - tSz.y) * 0.5f),
+                    GetAccentFgU32(), keyText.c_str());
+        if (AppFonts::Mono) ImGui::PopFont();
+
+        // Check for captured input
+        InputBinding captured;
+        bool cancelled = false;
+        bool cleared = false;
+        if (InputManager::PollAnyPressed(captured, cancelled, cleared)) {
+            if (cancelled) {
+                s_activeListeningKeybindId.clear();
+            } else if (cleared) {
+                state.source = "none";
+                state.code = 0;
+                state.modCode = 0;
+                state.name = (s_language == Language::English) ? "None" : "Не назначен";
+                s_activeListeningKeybindId.clear();
+                changed = true;
+            } else if (captured.IsValid()) {
+                state.source = (captured.source == InputSource::Gamepad) ? "gamepad" : "keyboard";
+                state.code = captured.code;
+                state.modCode = captured.modCode;
+                state.name = captured.name;
+                s_activeListeningKeybindId.clear();
+                changed = true;
+            }
+        } else if (clicked) {
+            // Click again cancels listening
+            s_activeListeningKeybindId.clear();
+        } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !hovered) {
+            // Click outside cancels listening
+            s_activeListeningKeybindId.clear();
+        }
+    } else {
+        // Normal state
+        if (rightClicked) {
+            // Right-click clears binding
+            state.source = "none";
+            state.code = 0;
+            state.modCode = 0;
+            state.name = (s_language == Language::English) ? "None" : "Не назначен";
+            changed = true;
+        } else if (clicked) {
+            s_activeListeningKeybindId = id;
+        }
+
+        ImU32 bg = hovered ? kColBgRaisedHover : kColBgControl;
+        ImU32 border = hovered ? GetAccentU32(0.8f) : kColHairlineStrong;
+        ImU32 txtCol = (state.source == "none" || state.code == 0) ? kColTextMuted : kColTextPrimary;
+
+        dl->AddRectFilled(btnMin, btnMax, bg, btnR);
+        dl->AddRect(btnMin, btnMax, border, btnR, 0, 1.0f);
+
+        if (AppFonts::Mono) ImGui::PushFont(AppFonts::Mono);
+        dl->AddText(ImVec2(btnMin.x + (btnW - tSz.x) * 0.5f, btnMin.y + (btnH - tSz.y) * 0.5f),
+                    txtCol, keyText.c_str());
+        if (AppFonts::Mono) ImGui::PopFont();
+    }
+
+    ImGui::PopID();
+    ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + rowH));
+    return changed;
 }
 
 void UrushiUI::Keycap(const std::string& keyText) {

@@ -1,7 +1,8 @@
--- CarX2ScriptHook: Main Entry Point
-log.info("CarX2ScriptHook main.lua initialized")
+-- URUSHI: Main Entry Point
+log.info("URUSHI main.lua initialized")
 
 dofile("scripts/i18n.lua")
+dofile("scripts/keybinds.lua")
 dofile("scripts/telemetry_hud.lua")
 dofile("scripts/ghost_test.lua")
 dofile("scripts/teleport_mod.lua")

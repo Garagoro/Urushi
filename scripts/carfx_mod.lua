@@ -26,7 +26,7 @@ end
 refresh_shader_list()
 
 events.on_key(function(vk, is_down)
-    if vk == VK_F9 and is_down then
+    if not keybinds and vk == VK_F9 and is_down then
         if imgui and imgui.is_any_item_active and imgui.is_any_item_active() then return end
         if urushi and urushi.toggle_window then
             urushi.toggle_window("carfx")
@@ -35,6 +35,11 @@ events.on_key(function(vk, is_down)
 end)
 
 events.on_update(function(dt)
+    if keybinds and keybinds.is_pressed and keybinds.is_pressed("carfx_menu") then
+        if urushi and urushi.toggle_window then
+            urushi.toggle_window("carfx")
+        end
+    end
     if not carfx or not carfx.set_game_input then return end
     local p = carx.get_player_car and carx.get_player_car() or nil
     if p then

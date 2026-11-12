@@ -1204,7 +1204,9 @@ void CarSimOptimizer::UpdateOnMainThread(float /*dt*/, const std::vector<LiveCar
                 best = &lc;
             }
         }
-        if (best && !best->unityName.empty()) {
+        if (best && !best->playerName.empty()) {
+            netEntry.name = best->playerName;
+        } else if (best && !best->unityName.empty()) {
             netEntry.name = best->unityName;
         } else if (netEntry.name.empty()) {
             netEntry.name = "NetCar #" + std::to_string(netEntry.ownerId);

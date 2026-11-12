@@ -35,7 +35,7 @@ Open-source **C++ / Lua 5.4 / DirectX 11** modding & telemetry framework for **C
 
 1. Copy from this repository into your **CarX Drift Racing Online 2** root directory (next to `CarX Drift Racing Online 2.exe`):
    - `dist/version.dll`
-   - `dist/CarX2ScriptHook.dll`
+   - `dist/urushi.dll`
    - `scripts/`
    - `shaders/`
 2. Launch the game via Steam and press **`F4`** or **`Insert`** to open URUSHI.
@@ -57,7 +57,7 @@ Open-source **C++ / Lua 5.4 / DirectX 11** modding & telemetry framework for **C
 | **J** | Toggle Anti-Wrong-Way ghosting |
 | **K** | Toggle 3D ghost / dummy collision |
 | **[** / **]** | Save checkpoint / Teleport |
-| **Ctrl + F11** | Hot-reload `CarX2ScriptHook.dll` |
+| **Ctrl + F11** | Hot-reload `urushi.dll` |
 
 ---
 
@@ -103,7 +103,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 - **Интерфейс:** выбор языка **Русский / English** (по умолчанию подхватывается язык Windows), 5 цветовых тем (включая свой RGB/Hue-акцент), масштаб UI, закрепление HUD (`Телеметрия HUD`, `FPS и Сеть`) и авто-обновление с GitHub (`dist/`).
 
 ### Быстрая установка
-1. Скопируйте в папку с игрой (`CarX Drift Racing Online 2`): `dist/version.dll`, `dist/CarX2ScriptHook.dll`, папки `scripts/` и `shaders/`.
+1. Скопируйте в папку с игрой (`CarX Drift Racing Online 2`): `dist/version.dll`, `dist/urushi.dll`, папки `scripts/` и `shaders/`.
 2. Запустите игру. Меню открывается на **`F4`** или **`Insert`** (горячие клавиши те же, что в таблице выше).
 
 ---

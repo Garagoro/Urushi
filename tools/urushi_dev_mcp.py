@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""urushi_dev_mcp.py - Development MCP server & CLI for CarX2ScriptHook (URUSHI).
+"""urushi_dev_mcp.py - Development MCP server & CLI for URUSHI.
 
 Bridges an MCP client or direct --cli calls to:
   1. The in-game named pipe \\\\.\\pipe\\urushi_dev (DX11 backbuffer PNG shots,
      ImGui layout inspection, menu/window control, Lua eval & hot-reload,
      CarFX / Optimizer state, synthetic UI input).
   2. The version.dll reload event Local\\UrushiReload_<pid> (hot-swaps
-     CarX2ScriptHook.dll inside the live game without restarting).
+     urushi.dll inside the live game without restarting).
 
 Pure Python stdlib (no third-party packages required).
 """
@@ -100,12 +100,15 @@ def _signal_dll_reload(pid=None):
 
 def _deploy_artifacts(game_dir=None):
     game_dir = game_dir or os.environ.get("URUSHI_GAME_DIR") or DEFAULT_GAME_DIR
-    dll_src = os.path.join(REPO_DIR, "build", "core", "Release", "CarX2ScriptHook.dll")
+    dll_src = os.path.join(REPO_DIR, "build", "core", "Release", "urushi.dll")
+    if not os.path.isfile(dll_src):
+        dll_src = os.path.join(REPO_DIR, "build", "core", "Release", "CarX2ScriptHook.dll")
     scripts_src = os.path.join(REPO_DIR, "scripts")
     copied = []
     if os.path.isfile(dll_src):
+        shutil.copy2(dll_src, os.path.join(game_dir, "urushi.dll"))
         shutil.copy2(dll_src, os.path.join(game_dir, "CarX2ScriptHook.dll"))
-        copied.append("CarX2ScriptHook.dll")
+        copied.append("urushi.dll")
     if os.path.isdir(scripts_src):
         dst_scripts = os.path.join(game_dir, "scripts")
         os.makedirs(dst_scripts, exist_ok=True)
@@ -145,7 +148,7 @@ def pipe_call(cmd, args=None, req_id=1):
                 time.sleep(PIPE_RETRY_WAIT_S)
                 continue
             raise PipeError(f"{PIPE_PATH} error: {e}") from e
-    raise PipeError(f"{PIPE_PATH} unavailable ({last_err}). Is updated CarX2ScriptHook.dll loaded in the game?")
+    raise PipeError(f"{PIPE_PATH} unavailable ({last_err}). Is updated urushi.dll loaded in the game?")
 
 
 def wait_for_pipe(timeout_s=10.0):
@@ -265,7 +268,7 @@ TOOLS = [
     },
     {
         "name": "urushi_reload_dll",
-        "description": "Hot-reload CarX2ScriptHook.dll inside the live running CarX Drift Racing Online 2 process via version.dll event (no game restart needed).",
+        "description": "Hot-reload urushi.dll inside the live running CarX Drift Racing Online 2 process via version.dll event (no game restart needed).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -277,7 +280,7 @@ TOOLS = [
     },
     {
         "name": "urushi_logs",
-        "description": "Read the last N lines of CarX2ScriptHook.log from the game directory.",
+        "description": "Read the last N lines of urushi.log from the game directory.",
         "inputSchema": {
             "type": "object",
             "properties": {

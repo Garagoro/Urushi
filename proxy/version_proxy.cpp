@@ -167,23 +167,26 @@ static std::wstring GetShadowDirectory() {
     if (!dir.empty() && dir.back() != L'\\' && dir.back() != L'/') {
         dir += L'\\';
     }
-    dir += L"CarX2ScriptHook_live";
+    dir += L"urushi_live";
     CreateDirectoryW(dir.c_str(), nullptr);
     return dir;
 }
 
 static void SweepOldShadowFiles(const std::wstring& shadowDir) {
-    WIN32_FIND_DATAW fd = {};
-    HANDLE hFind = FindFirstFileW((shadowDir + L"\\CarX2ScriptHook_*.*").c_str(), &fd);
-    if (hFind == INVALID_HANDLE_VALUE) return;
-    do {
-        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-            std::wstring full = shadowDir + L"\\" + fd.cFileName;
-            // Silently deletes dead runs' files; locked live files stay untouched
-            DeleteFileW(full.c_str());
+    const wchar_t* patterns[] = { L"\\urushi_*.*", L"\\CarX2ScriptHook_*.*" };
+    for (const auto* pat : patterns) {
+        WIN32_FIND_DATAW fd = {};
+        HANDLE hFind = FindFirstFileW((shadowDir + pat).c_str(), &fd);
+        if (hFind != INVALID_HANDLE_VALUE) {
+            do {
+                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                    std::wstring full = shadowDir + L"\\" + fd.cFileName;
+                    DeleteFileW(full.c_str());
+                }
+            } while (FindNextFileW(hFind, &fd));
+            FindClose(hFind);
         }
-    } while (FindNextFileW(hFind, &fd));
-    FindClose(hFind);
+    }
 }
 
 static void UnloadCoreModule() {
@@ -209,7 +212,10 @@ static void UnloadCoreModule() {
 
 static void LoadCoreShadow(const std::wstring& exeDir) {
     if (g_coreHookModule) return;
-    std::wstring srcDll = exeDir + L"\\CarX2ScriptHook.dll";
+    std::wstring srcDll = exeDir + L"\\urushi.dll";
+    if (GetFileAttributesW(srcDll.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        srcDll = exeDir + L"\\CarX2ScriptHook.dll";
+    }
     if (GetFileAttributesW(srcDll.c_str()) == INVALID_FILE_ATTRIBUTES) {
         return;
     }
@@ -218,13 +224,16 @@ static void LoadCoreShadow(const std::wstring& exeDir) {
     const DWORD pid = GetCurrentProcessId();
     const DWORD seq = ++g_shadowSeq;
     wchar_t nameBuf[128] = {};
-    wsprintfW(nameBuf, L"\\CarX2ScriptHook_%lu_%lu", pid, seq);
+    wsprintfW(nameBuf, L"\\urushi_%lu_%lu", pid, seq);
     std::wstring shadowDll = shadowDir + nameBuf + L".dll";
     std::wstring shadowPdb = shadowDir + nameBuf + L".pdb";
 
-    // Shadow-copy so the game process NEVER locks <gameDir>\CarX2ScriptHook.dll
+    // Shadow-copy so the game process NEVER locks <gameDir>\urushi.dll
     if (CopyFileW(srcDll.c_str(), shadowDll.c_str(), FALSE)) {
-        std::wstring srcPdb = exeDir + L"\\CarX2ScriptHook.pdb";
+        std::wstring srcPdb = exeDir + L"\\urushi.pdb";
+        if (GetFileAttributesW(srcPdb.c_str()) == INVALID_FILE_ATTRIBUTES) {
+            srcPdb = exeDir + L"\\CarX2ScriptHook.pdb";
+        }
         if (GetFileAttributesW(srcPdb.c_str()) != INVALID_FILE_ATTRIBUTES &&
             CopyFileW(srcPdb.c_str(), shadowPdb.c_str(), FALSE)) {
             g_loadedShadowPdb = shadowPdb;

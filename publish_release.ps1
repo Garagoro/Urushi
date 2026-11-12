@@ -19,16 +19,20 @@ if ($Build) {
     if ($LASTEXITCODE -ne 0) { throw "Release build failed" }
 }
 
-$coreDll = Join-Path $root "build\core\Release\CarX2ScriptHook.dll"
+$coreDll = Join-Path $root "build\core\Release\urushi.dll"
+if (-not (Test-Path $coreDll)) {
+    $coreDll = Join-Path $root "build\core\Release\CarX2ScriptHook.dll"
+}
 $proxyDll = Join-Path $root "build\proxy\Release\version.dll"
 if (-not (Test-Path $coreDll)) { throw "Missing $coreDll" }
 if (-not (Test-Path $proxyDll)) { throw "Missing $proxyDll" }
 
+Copy-Item $coreDll (Join-Path $distDir "urushi.dll") -Force
 Copy-Item $coreDll (Join-Path $distDir "CarX2ScriptHook.dll") -Force
 Copy-Item $proxyDll (Join-Path $distDir "version.dll") -Force
 
-# Read PE TimeDateStamp from dist/CarX2ScriptHook.dll
-$bytes = [System.IO.File]::ReadAllBytes((Join-Path $distDir "CarX2ScriptHook.dll"))
+# Read PE TimeDateStamp from dist/urushi.dll
+$bytes = [System.IO.File]::ReadAllBytes((Join-Path $distDir "urushi.dll"))
 $peOff = [BitConverter]::ToInt32($bytes, 60)
 $linkTime = [BitConverter]::ToUInt32($bytes, $peOff + 8)
 

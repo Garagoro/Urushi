@@ -33,6 +33,7 @@ struct UnityObjectEntry {
 struct LiveCarInfo {
     void* carPtr = nullptr;
     std::string unityName;
+    std::string playerName;
     void* rootGo = nullptr;
     void* rootTf = nullptr;
     void* modelGo = nullptr;
@@ -103,6 +104,7 @@ public:
     static void* FindPlayerCarModel(void** outRootTf = nullptr);
     static std::vector<LiveCarInfo> GetLiveCarList();
     static std::string LookupCarUnityName(void* carPtr);
+    static std::string LookupCarPlayerName(void* carPtr);
 
     // Direct Unity calls (safe only on Unity Main Thread!)
     static void* CloneGameObjectDirect(void* nativeGo);
@@ -204,6 +206,7 @@ private:
 
     struct SceneCarModelCache {
         std::string unityName;
+        std::string playerName;
         void* rootGo = nullptr;
         void* rootTf = nullptr;
         void* modelGo = nullptr;

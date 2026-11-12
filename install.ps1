@@ -1,4 +1,4 @@
-# CarX2ScriptHook Installer / Deployer
+# URUSHI Installer / Deployer
 param (
     [string]$GamePath = "C:\Program Files (x86)\Steam\steamapps\common\CarX Drift Racing Online 2"
 )
@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 Write-Host "=======================================" -ForegroundColor Cyan
-Write-Host " CarX2ScriptHook Installation Script " -ForegroundColor Cyan
+Write-Host " URUSHI Installation Script            " -ForegroundColor Cyan
 Write-Host "=======================================" -ForegroundColor Cyan
 
 if (-not (Test-Path $GamePath)) {
@@ -16,7 +16,10 @@ if (-not (Test-Path $GamePath)) {
 
 $BuildDir = Join-Path $ScriptDir "build"
 $VersionDll = Join-Path $BuildDir "proxy\Release\version.dll"
-$CoreDll = Join-Path $BuildDir "core\Release\CarX2ScriptHook.dll"
+$CoreDll = Join-Path $BuildDir "core\Release\urushi.dll"
+if (-not (Test-Path $CoreDll)) {
+    $CoreDll = Join-Path $BuildDir "core\Release\CarX2ScriptHook.dll"
+}
 $ScriptsSource = Join-Path $ScriptDir "scripts"
 $ShadersSource = Join-Path $ScriptDir "shaders"
 
@@ -24,12 +27,17 @@ if (-not (Test-Path $VersionDll) -or -not (Test-Path $CoreDll)) {
     Write-Host "Building project first..." -ForegroundColor Yellow
     $CMake = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
     & $CMake --build $BuildDir --config Release
+    if (Test-Path (Join-Path $BuildDir "core\Release\urushi.dll")) {
+        $CoreDll = Join-Path $BuildDir "core\Release\urushi.dll"
+    }
 }
 
 Write-Host "Copying version.dll (Proxy Loader)..." -ForegroundColor Green
 Copy-Item -Path $VersionDll -Destination (Join-Path $GamePath "version.dll") -Force
 
-Write-Host "Copying CarX2ScriptHook.dll (Core Engine)..." -ForegroundColor Green
+Write-Host "Copying urushi.dll (Core Engine)..." -ForegroundColor Green
+Copy-Item -Path $CoreDll -Destination (Join-Path $GamePath "urushi.dll") -Force
+# Also copy CarX2ScriptHook.dll for backwards compatibility
 Copy-Item -Path $CoreDll -Destination (Join-Path $GamePath "CarX2ScriptHook.dll") -Force
 
 $DestScripts = Join-Path $GamePath "scripts"

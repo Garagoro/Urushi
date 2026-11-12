@@ -36,6 +36,14 @@ static void PushCarTelemetry(lua_State* L, const CarTelemetry& car) {
         lua_setfield(L, -2, "unity_name");
     }
 
+    std::string playerName = UnityBridge::LookupCarPlayerName(car.carPtr);
+    if (!playerName.empty()) {
+        lua_pushstring(L, playerName.c_str());
+        lua_setfield(L, -2, "player_name");
+        lua_pushstring(L, playerName.c_str());
+        lua_setfield(L, -2, "name");
+    }
+
     lua_pushnumber(L, car.posX);
     lua_setfield(L, -2, "x");
     lua_pushnumber(L, car.posY);
@@ -146,6 +154,10 @@ int LuaCarX::GetPlayerList(lua_State* L) {
         lua_setfield(L, -2, "ptr");
         lua_pushstring(L, list[i].unityName.c_str());
         lua_setfield(L, -2, "unity_name");
+        lua_pushstring(L, list[i].playerName.c_str());
+        lua_setfield(L, -2, "player_name");
+        lua_pushstring(L, list[i].playerName.empty() ? list[i].unityName.c_str() : list[i].playerName.c_str());
+        lua_setfield(L, -2, "name");
         lua_pushboolean(L, list[i].isLocalPlayer);
         lua_setfield(L, -2, "is_local_player");
         lua_pushnumber(L, list[i].x);

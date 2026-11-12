@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(CarX2ScriptHook LANGUAGES C CXX)
+project(urushi LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -25,9 +25,9 @@ set(GAME_DIR "C:/Program Files (x86)/Steam/steamapps/common/CarX Drift Racing On
 
 add_custom_target(deploy
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:version>" "${GAME_DIR}/version.dll"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CarX2ScriptHook>" "${GAME_DIR}/CarX2ScriptHook.dll"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:urushi>" "${GAME_DIR}/urushi.dll"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/scripts" "${GAME_DIR}/scripts"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/shaders" "${GAME_DIR}/shaders"
-    DEPENDS version CarX2ScriptHook
-    COMMENT "Deploying CarX2ScriptHook to CarX Drift Racing Online 2..."
+    DEPENDS version urushi
+    COMMENT "Deploying URUSHI to CarX Drift Racing Online 2..."
 )

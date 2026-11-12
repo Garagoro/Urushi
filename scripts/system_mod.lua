@@ -159,22 +159,27 @@ local function render_system_window()
         end)
     end
 
-    if ui.collapsing(T("Горячие клавиши##sys_hk", "Hotkeys##sys_hk"), false) then
-        ui.card(nil, nil, function()
-            hotkey_row("F4 / Ins", T("Открыть / скрыть меню URUSHI", "Toggle URUSHI overlay"))
-            hotkey_row("F5",       T("Оптимизатор FPS", "FPS Optimizer"))
-            hotkey_row("F6",       T("Старт / стоп записи реплея", "Start / stop recording"))
-            hotkey_row("F7",       T("Старт / стоп 3D-призрака", "Start / stop 3D ghost"))
-            hotkey_row("F8",       T("3D-болванка", "3D Dummy"))
-            hotkey_row("F9",       T("CarFX шейдеры", "CarFX Shaders"))
-            hotkey_row("J",        T("Анти-встречка", "Anti-Wrong-Way"))
-            hotkey_row("K",        T("Коллизия призрака", "Dummy / Ghost collision"))
-            hotkey_row("G / H",    T("Создать / удалить болванку", "Spawn / delete dummy"))
-            hotkey_row("M",        T("Живое зеркало (+3.8 м)", "Live mirror (+3.8 m)"))
-            hotkey_row("[ / ]",    T("Запомнить / телепорт", "Save point / Teleport"))
-            hotkey_row("Ctrl+F11", T("Перезагрузить C++ ядро", "Reload C++ core"))
-        end)
-    end
+    ui.card(T("Горячие клавиши и управление", "Keybinds & Controls"), nil, function()
+        local gp_conn = input and input.is_gamepad_connected and input.is_gamepad_connected()
+        ui.badge(gp_conn and T("Геймпад: Подключен (XInput)", "Gamepad: Connected (XInput)") or T("Геймпад: Не обнаружен", "Gamepad: Not detected"), gp_conn and "green" or "muted")
+        ui.spacing(4)
+
+        if keybinds and keybinds.render then
+            keybinds.render("kb_menu",        T("Открыть / скрыть меню", "Toggle URUSHI menu"), "menu_toggle")
+            keybinds.render("kb_rec",         T("Старт / стоп записи", "Start / stop record"),  "replay_record")
+            keybinds.render("kb_ghost",       T("Старт / стоп призрака", "Start / stop ghost"), "replay_ghost")
+            keybinds.render("kb_anti",        T("Анти-встречка", "Anti-Wrong-Way"),             "anticollision")
+            keybinds.render("kb_tp_save",     T("Запомнить точку (ТП)", "Save point (TP)"),     "tp_save")
+            keybinds.render("kb_tp_go",       T("Телепорт в точку", "Teleport to point"),       "tp_teleport")
+            keybinds.render("kb_perf",        T("Оптимизатор FPS", "FPS Optimizer"),            "perf_menu")
+            keybinds.render("kb_carfx",       T("CarFX шейдеры", "CarFX Shaders"),              "carfx_menu")
+            keybinds.render("kb_dummy",       T("3D-болванка", "3D Dummy"),                     "dummy_ghost")
+        end
+
+        ui.spacing(4)
+        ui.text_dim(T("ЛКМ: нажать и переназначить на клавишу или кнопку геймпада\nПКМ / Del: сбросить · Esc: отмена",
+                      "LMB: click to rebind to key or gamepad button\nRMB / Del: clear · Esc: cancel"))
+    end)
 end
 
 if urushi and urushi.register_window then
