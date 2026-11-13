@@ -3,6 +3,8 @@ name: CI / Auto-Build
 on:
   push:
     branches: [ main ]
+    tags:
+      - 'v*'
     paths-ignore:
       - 'dist/**'
       - 'docs/**'
@@ -52,8 +54,14 @@ jobs:
           $peOff = [BitConverter]::ToInt32($bytes, 60)
           $linkTime = [BitConverter]::ToUInt32($bytes, $peOff + 8)
 
-          $ver = "1.1.0"
-          $notes = "Automated release build v${ver}: dynamic sigscans, Unity Transform cluster fixes, reactive config and live auto-updater"
+          $ver = "1.2.0"
+          if ($env:GITHUB_REF_TYPE -eq "tag" -or $env:GITHUB_REF -like "refs/tags/*") {
+              $ver = ($env:GITHUB_REF -replace '^refs/tags/v?', '')
+          } elseif (Test-Path "dist/version.txt") {
+              $m = Get-Content "dist/version.txt" | Select-String "^version=(.+)"
+              if ($m) { $ver = $m.Matches[0].Groups[1].Value.Trim() }
+          }
+          $notes = "Automated release build v${ver}: dynamic sigscans, C++ UI introspection, auto-persistence and live auto-updater"
           $manifest = @(
               "version=$ver"
               "link_time=$linkTime"
@@ -69,7 +77,13 @@ jobs:
       - name: Package Release ZIP
         shell: pwsh
         run: |
-          $ver = "1.1.0"
+          $ver = "1.2.0"
+          if ($env:GITHUB_REF_TYPE -eq "tag" -or $env:GITHUB_REF -like "refs/tags/*") {
+              $ver = ($env:GITHUB_REF -replace '^refs/tags/v?', '')
+          } elseif (Test-Path "dist/version.txt") {
+              $m = Get-Content "dist/version.txt" | Select-String "^version=(.+)"
+              if ($m) { $ver = $m.Matches[0].Groups[1].Value.Trim() }
+          }
           $root = $PWD.Path
           $distDir = Join-Path $root "dist"
           $pkgDir = Join-Path $root "Urushi-v$ver"
@@ -120,13 +134,19 @@ jobs:
           }
 
       - name: Publish GitHub Release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $ver = "1.1.0"
+          $ver = "1.2.0"
+          if ($env:GITHUB_REF_TYPE -eq "tag" -or $env:GITHUB_REF -like "refs/tags/*") {
+              $ver = ($env:GITHUB_REF -replace '^refs/tags/v?', '')
+          } elseif (Test-Path "dist/version.txt") {
+              $m = Get-Content "dist/version.txt" | Select-String "^version=(.+)"
+              if ($m) { $ver = $m.Matches[0].Groups[1].Value.Trim() }
+          }
           $tag = "v$ver"
           $root = $PWD.Path
           $distDir = Join-Path $root "dist"
@@ -135,13 +155,14 @@ jobs:
           $dllUrushi = Join-Path $distDir "urushi.dll"
           $dllProxy = Join-Path $distDir "version.dll"
 
-          $title = "$tag — Dynamic Signature Scans, Hot-Reinject and Keybinds Hub"
+          $title = "$tag — C++ UI Introspection, Auto-Persistence and Reinject"
           $notes = @(
-              "### 🏎️ Features & Changes:"
-              "- ⚡ **Dynamic Signature Scanning**: All critical game engine and Unity RVA offsets (Transform cluster, raycasts, engine tick) are now dynamically resolved via signature scans to survive game updates."
-              "- 🎯 **Wall Tap & Raycast Proximity Overhaul**: Fixed world raycasting and vehicle orientation math for robust collision detection and proximity telemetry."
-              "- 🎨 **CarFX Shaders**: Restored dynamic livery shaders (Holo, Tandem Angle, Chams) with automatic directory watcher."
-              "- 🔄 **Live Hot-Reinject & One-Click Update**: Zero-downtime updates — urushi.dll can be hot-reloaded live inside the running game process via version.dll event with a single click."
+              "### 🏎️ Features & Changes in $tag:"
+              "- 🧠 **C++ UI Element Introspection & Registry**: UI elements (toggles, sliders, combos, text fields) declared by Lua scripts are automatically identified, registered, and introspected by the C++ core."
+              "- 💾 **Universal Auto-Persistence**: Full bi-directional persistence — settings are restored into the C++ UI on startup and automatically saved back to urushi_data/config.json whenever changed."
+              "- ⚡ **Dynamic Signature Scanning**: All critical game engine and Unity RVA offsets (Transform cluster, raycasts, engine tick) are dynamically resolved via signature scans to survive game updates."
+              "- 🎨 **CarFX Shaders & Materials**: Dynamic livery shaders (Holo, Tandem Angle, Chams) with automatic directory watcher."
+              "- 🔄 **Live Hot-Reinject**: Zero-downtime updates — urushi.dll hot-reloads live inside the running game process via version.dll event."
               "- ⌨️ **Dynamic Keybinds Hub**: Dedicated Keybinds window aggregating all actions by active mod without hardcoded layouts."
               "- 📦 **Automated CI/CD**: Automatic builds, release packaging, and live in-game auto-updater."
           ) -join "`n"
