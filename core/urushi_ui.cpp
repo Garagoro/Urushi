@@ -2444,67 +2444,19 @@ void UrushiUI::RecordUiElement(const std::string& winId, const std::string& elem
     elem.initialized = true;
 }
 
-bool UrushiUI::ConsumeStoredBool(const std::string& winId, const std::string& elemId, bool& val) {
-    std::lock_guard<std::mutex> lock(s_uiElementMutex);
-    std::string wKey = winId.empty() ? "general" : winId;
-    auto wIt = s_uiElements.find(wKey);
-    if (wIt != s_uiElements.end()) {
-        auto eIt = wIt->second.find(elemId);
-        if (eIt != wIt->second.end() && eIt->second.hasStored && !eIt->second.initialized) {
-            bool oldVal = val;
-            val = eIt->second.boolValue;
-            eIt->second.initialized = true;
-            return (val != oldVal);
-        }
-    }
+bool UrushiUI::ConsumeStoredBool(const std::string& /*winId*/, const std::string& /*elemId*/, bool& /*val*/) {
     return false;
 }
 
-bool UrushiUI::ConsumeStoredDouble(const std::string& winId, const std::string& elemId, double& val) {
-    std::lock_guard<std::mutex> lock(s_uiElementMutex);
-    std::string wKey = winId.empty() ? "general" : winId;
-    auto wIt = s_uiElements.find(wKey);
-    if (wIt != s_uiElements.end()) {
-        auto eIt = wIt->second.find(elemId);
-        if (eIt != wIt->second.end() && eIt->second.hasStored && !eIt->second.initialized) {
-            double oldVal = val;
-            val = eIt->second.numValue;
-            eIt->second.initialized = true;
-            return (std::abs(val - oldVal) > 0.0001);
-        }
-    }
+bool UrushiUI::ConsumeStoredDouble(const std::string& /*winId*/, const std::string& /*elemId*/, double& /*val*/) {
     return false;
 }
 
-bool UrushiUI::ConsumeStoredInt(const std::string& winId, const std::string& elemId, int& val) {
-    std::lock_guard<std::mutex> lock(s_uiElementMutex);
-    std::string wKey = winId.empty() ? "general" : winId;
-    auto wIt = s_uiElements.find(wKey);
-    if (wIt != s_uiElements.end()) {
-        auto eIt = wIt->second.find(elemId);
-        if (eIt != wIt->second.end() && eIt->second.hasStored && !eIt->second.initialized) {
-            int oldVal = val;
-            val = static_cast<int>(eIt->second.numValue);
-            eIt->second.initialized = true;
-            return (val != oldVal);
-        }
-    }
+bool UrushiUI::ConsumeStoredInt(const std::string& /*winId*/, const std::string& /*elemId*/, int& /*val*/) {
     return false;
 }
 
-bool UrushiUI::ConsumeStoredString(const std::string& winId, const std::string& elemId, std::string& val) {
-    std::lock_guard<std::mutex> lock(s_uiElementMutex);
-    std::string wKey = winId.empty() ? "general" : winId;
-    auto wIt = s_uiElements.find(wKey);
-    if (wIt != s_uiElements.end()) {
-        auto eIt = wIt->second.find(elemId);
-        if (eIt != wIt->second.end() && eIt->second.hasStored && !eIt->second.initialized) {
-            std::string oldVal = val;
-            val = eIt->second.strValue;
-            eIt->second.initialized = true;
-            return (val != oldVal);
-        }
-    }
+bool UrushiUI::ConsumeStoredString(const std::string& /*winId*/, const std::string& /*elemId*/, std::string& /*val*/) {
     return false;
 }
 

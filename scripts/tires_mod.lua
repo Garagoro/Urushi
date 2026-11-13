@@ -21,21 +21,11 @@ local tire_settings = {
 
 if config and config.bind then
     tire_settings = config.bind("tires", tire_settings)
-    -- Migration from legacy tyre_config table if present in user's saved config
-    if tire_settings.tyre_config and type(tire_settings.tyre_config) == "table" then
-        local tc = tire_settings.tyre_config
-        if tc.infinite_wear ~= nil and tire_settings.infinite_wear == nil then
-            tire_settings.infinite_wear = tc.infinite_wear
-        end
-        if tc.desired_life ~= nil then tire_settings.desired_life = tc.desired_life end
-        if tc.wear_multiplier ~= nil then tire_settings.wear_multiplier = tc.wear_multiplier end
-        if tc.override_pressure ~= nil then tire_settings.override_pressure = tc.override_pressure end
-        if tc.front_pressure ~= nil then tire_settings.front_pressure = tc.front_pressure end
-        if tc.rear_pressure ~= nil then tire_settings.rear_pressure = tc.rear_pressure end
-        if tc.lock_temp ~= nil then tire_settings.lock_temp = tc.lock_temp end
-        if tc.target_temp ~= nil then tire_settings.target_temp = tc.target_temp end
-    end
 end
+if rawget(tire_settings, "_raw") then
+    tire_settings._raw.tyre_config = nil
+end
+tire_settings.tyre_config = nil
 
 local function apply_tires()
     if not carx then return end

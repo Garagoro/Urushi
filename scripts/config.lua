@@ -603,6 +603,11 @@ function config.save()
         elseif reg.store then
             data[sec] = deep_copy(reg.store)
         end
+        if type(data[sec]) == "table" then
+            data[sec].tyre_config = nil
+            data[sec].config = nil
+            data[sec].ghost_cfg = nil
+        end
     end
 
     local text = encode(data)
@@ -636,6 +641,11 @@ function config.reload()
         end
     end
 
+    -- Clean up legacy sub-tables
+    if type(data.tires) == "table" then
+        data.tires.tyre_config = nil
+    end
+
     -- Sync back to all live registered providers
     for section, reg in pairs(config.registry) do
         local sec = resolve_section(section)
@@ -645,20 +655,8 @@ function config.reload()
                 pcall(reg.on_load, deep_copy(saved))
             elseif type(reg.store) == "table" and type(saved) == "table" then
                 for k, v in pairs(saved) do
-                    reg.store[k] = deep_copy(v)
-                end
-            end
-        end
-    end
-
-    -- Feed stored values into C++ UI introspection registry
-    if urushi and urushi.set_ui_element then
-        for sec, section_data in pairs(data) do
-            if type(section_data) == "table" and sec ~= "version" then
-                for elem_id, val in pairs(section_data) do
-                    local vt = type(val)
-                    if vt == "boolean" or vt == "number" or vt == "string" then
-                        pcall(urushi.set_ui_element, sec, elem_id, val)
+                    if k ~= "tyre_config" and k ~= "config" and k ~= "ghost_cfg" then
+                        reg.store[k] = deep_copy(v)
                     end
                 end
             end

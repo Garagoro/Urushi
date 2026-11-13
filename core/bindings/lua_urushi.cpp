@@ -297,11 +297,10 @@ int Lua_UiToggle(lua_State* L) {
     std::string cleanLabel, elemId;
     UrushiUI::ParseElementId(label, cleanLabel, elemId);
 
-    bool forced = UrushiUI::ConsumeStoredBool(winId, elemId, val);
     bool ch = UrushiUI::Toggle(label, &val, width);
     UrushiUI::RecordUiElement(winId, elemId, cleanLabel, "toggle", val, 0.0, "", ch);
 
-    lua_pushboolean(L, (ch || forced) ? 1 : 0);
+    lua_pushboolean(L, ch ? 1 : 0);
     lua_pushboolean(L, val ? 1 : 0);
     return 2;
 }
@@ -326,14 +325,10 @@ int Lua_UiSliderFloat(lua_State* L) {
     std::string cleanLabel, elemId;
     UrushiUI::ParseElementId(label, cleanLabel, elemId);
 
-    double dVal = static_cast<double>(val);
-    bool forced = UrushiUI::ConsumeStoredDouble(winId, elemId, dVal);
-    if (forced) val = static_cast<float>(dVal);
-
     bool ch = UrushiUI::SliderFloat(label, &val, minV, maxV, fmt);
     UrushiUI::RecordUiElement(winId, elemId, cleanLabel, "slider_float", false, static_cast<double>(val), "", ch);
 
-    lua_pushboolean(L, (ch || forced) ? 1 : 0);
+    lua_pushboolean(L, ch ? 1 : 0);
     lua_pushnumber(L, val);
     return 2;
 }
@@ -350,12 +345,10 @@ int Lua_UiSliderInt(lua_State* L) {
     std::string cleanLabel, elemId;
     UrushiUI::ParseElementId(label, cleanLabel, elemId);
 
-    bool forced = UrushiUI::ConsumeStoredInt(winId, elemId, val);
-
     bool ch = UrushiUI::SliderInt(label, &val, minV, maxV, fmt);
     UrushiUI::RecordUiElement(winId, elemId, cleanLabel, "slider_int", false, static_cast<double>(val), "", ch);
 
-    lua_pushboolean(L, (ch || forced) ? 1 : 0);
+    lua_pushboolean(L, ch ? 1 : 0);
     lua_pushinteger(L, val);
     return 2;
 }
@@ -382,14 +375,10 @@ int Lua_UiSegmented(lua_State* L) {
     std::string cleanLabel, elemId;
     UrushiUI::ParseElementId(id, cleanLabel, elemId);
 
-    int storedCur = cur + 1;
-    bool forced = UrushiUI::ConsumeStoredInt(winId, elemId, storedCur);
-    if (forced) cur = storedCur - 1;
-
     bool ch = UrushiUI::Segmented(id, &cur, opts);
     UrushiUI::RecordUiElement(winId, elemId, cleanLabel, "segmented", false, static_cast<double>(cur + 1), "", ch);
 
-    lua_pushboolean(L, (ch || forced) ? 1 : 0);
+    lua_pushboolean(L, ch ? 1 : 0);
     lua_pushinteger(L, cur + 1);
     return 2;
 }
@@ -475,14 +464,10 @@ int Lua_UiCombo(lua_State* L) {
     std::string cleanLabel, elemId;
     UrushiUI::ParseElementId(label, cleanLabel, elemId);
 
-    int storedCur = cur + 1;
-    bool forced = UrushiUI::ConsumeStoredInt(winId, elemId, storedCur);
-    if (forced) cur = storedCur - 1;
-
     bool ch = UrushiUI::Combo(label, &cur, items);
     UrushiUI::RecordUiElement(winId, elemId, cleanLabel, "combo", false, static_cast<double>(cur + 1), "", ch);
 
-    lua_pushboolean(L, (ch || forced) ? 1 : 0);
+    lua_pushboolean(L, ch ? 1 : 0);
     lua_pushinteger(L, cur + 1);
     return 2;
 }
@@ -497,12 +482,10 @@ int Lua_UiInputText(lua_State* L) {
     std::string cleanLabel, elemId;
     UrushiUI::ParseElementId(label, cleanLabel, elemId);
 
-    bool forced = UrushiUI::ConsumeStoredString(winId, elemId, text);
-
     bool ch = UrushiUI::InputText(label, text, maxLen);
     UrushiUI::RecordUiElement(winId, elemId, cleanLabel, "input_text", false, 0.0, text, ch);
 
-    lua_pushboolean(L, (ch || forced) ? 1 : 0);
+    lua_pushboolean(L, ch ? 1 : 0);
     lua_pushstring(L, text.c_str());
     return 2;
 }
