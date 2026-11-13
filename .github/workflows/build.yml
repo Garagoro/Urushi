@@ -155,7 +155,7 @@ jobs:
 
           $title = "$tag — C++ UI Introspection, Auto-Persistence and Reinject"
           $notes = @(
-              "### 🏎️ Features & Changes in $tag:"
+              "### 🏎️ Features & Changes in ${tag}:"
               "- 🧠 **C++ UI Element Introspection & Registry**: UI elements (toggles, sliders, combos, text fields) declared by Lua scripts are automatically identified, registered, and introspected by the C++ core."
               "- 💾 **Universal Auto-Persistence**: Full bi-directional persistence — settings are restored into the C++ UI on startup and automatically saved back to urushi_data/config.json whenever changed."
               "- ⚡ **Dynamic Signature Scanning**: All critical game engine and Unity RVA offsets (Transform cluster, raycasts, engine tick) are dynamically resolved via signature scans to survive game updates."
