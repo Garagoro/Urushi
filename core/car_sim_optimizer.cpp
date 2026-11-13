@@ -1,5 +1,6 @@
 #include "car_sim_optimizer.h"
 #include "pattern_scanner.h"
+#include "game_build.h"
 #include "unity_bridge.h"
 #include "native_carx.h"
 #include "hook_manager.h"
@@ -15,20 +16,29 @@
 
 namespace {
 
-// Dynamic RVAs inside GameAssembly.dll (fallback default RVAs, resolved dynamically via PatternScanner)
-static uintptr_t s_rvaSwitchingUpdate               = 0x1311B90; // fallback beta RVA (vanilla 0xE4F8B0)
-static uintptr_t s_rvaIsFarCar                      = 0x1310E50; // fallback beta RVA (vanilla 0xE4F160)
-static uintptr_t s_rvaProviderGetTransform          = 0xE57BA0;
-static uintptr_t s_rvaTransformGetPosInjected       = 0x5F72710;
-static uintptr_t s_rvaIl2CppVirtualInvokeData       = 0x9238B0;
-static uintptr_t s_rvaCarBehaviourSetEffectsEnabled = 0x23D1440; // fallback beta RVA (vanilla 0x1E00F50)
+// Fallback RVAs inside GameAssembly.dll, per Steam branch (see game_build.h).
+// Signatures are always tried first; these are only used when a scan misses on a known build.
+constexpr BranchRva kFbSwitchingUpdate           = { 0x0E4FA70, 0x13110F0 };
+constexpr BranchRva kFbIsFarCar                  = { 0x0E50760, 0x1311E50 };
+constexpr BranchRva kFbProviderGetTransform      = { 0x0E57BA0, 0x1319350 };
+constexpr BranchRva kFbTransformGetPosInjected   = { 0x5F72710, 0x6FB9930 };
+constexpr BranchRva kFbIl2CppVirtualInvokeData   = { 0x09238B0, 0x0A736D0 };
+constexpr BranchRva kFbCarBehaviourSetEffects    = { 0x1E02570, 0x23D2460 };
+constexpr BranchRva kFbBaseCollisionEffectApply  = { 0x0EA05F0, 0x1362FD0 }; // CarX.DeformationPhysics
+constexpr BranchRva kFbINetworkCarContainerTI    = { 0x843A128, 0x9797458 };
+constexpr BranchRva kFbDeformSleepTypeInfo       = { 0x83E7018, 0x984C918 };
+constexpr BranchRva kFbTypeInfoDefinitionTable   = { 0x87EAEA0, 0x9C2F5C0 };
 
-// CarX.DeformationPhysics
-static uintptr_t s_rvaBaseCollisionEffectApply       = 0x1362FD0;
-
-static uintptr_t s_rvaINetworkCarContainerTypeInfo  = 0x843A128;
-static uintptr_t s_rvaDeformSleepTypeInfoGlobal     = 0x83E7018;
-static uintptr_t s_rvaTypeInfoDefinitionTable       = 0x9C2E9C0; // fallback beta RVA (vanilla 0x87EA348)
+static uintptr_t s_rvaSwitchingUpdate               = 0;
+static uintptr_t s_rvaIsFarCar                      = 0;
+static uintptr_t s_rvaProviderGetTransform          = 0;
+static uintptr_t s_rvaTransformGetPosInjected       = 0;
+static uintptr_t s_rvaIl2CppVirtualInvokeData       = 0;
+static uintptr_t s_rvaCarBehaviourSetEffectsEnabled = 0;
+static uintptr_t s_rvaBaseCollisionEffectApply      = 0;
+static uintptr_t s_rvaINetworkCarContainerTypeInfo  = 0;
+static uintptr_t s_rvaDeformSleepTypeInfoGlobal     = 0;
+static uintptr_t s_rvaTypeInfoDefinitionTable       = 0;
 
 // Verified s_TypeInfoDefinitionTable indices
 constexpr uint32_t kIdxOptimizeCarGeometry = 24088;
@@ -1097,52 +1107,67 @@ bool CarSimOptimizer::Init() {
     }
     s_gaBase = reinterpret_cast<uintptr_t>(hGA);
 
-    // Dynamic signature scans inside GameAssembly.dll
-    // 1. Scan for TypeInfoDefinitionTable
-    uintptr_t vaTable = PatternScanner::Find(hGA, "48 63 C8 48 8B 05 ? ? ? ? 48 8B 04 C8 C3", "TypeInfoDefinitionTable");
-    if (vaTable) {
-        uintptr_t tablePtr = PatternScanner::ResolveRip(vaTable + 3, 7, 3);
-        if (tablePtr >= s_gaBase) {
-            s_rvaTypeInfoDefinitionTable = tablePtr - s_gaBase;
-        }
+    // Signature scans inside GameAssembly.dll. Every signature below was verified to match exactly once in
+    // both the release and alpha-test builds; fallbacks come from the detected branch (0 on unknown builds).
+    const GameBranch branch = GameBuild::Get();
+    auto toRva = [](uintptr_t va) -> uintptr_t { return va >= s_gaBase ? va - s_gaBase : 0; };
+
+    // 1. il2cpp s_TypeInfoDefinitionTable (mov rax, [rip+X] inside the type-index accessor)
+    s_rvaTypeInfoDefinitionTable = toRva(PatternScanner::FindRipOrFallback(
+        hGA, "48 63 C8 48 8B 05 ? ? ? ? 48 8B 04 C8 C3", 7, 3,
+        GameBuild::Pick(kFbTypeInfoDefinitionTable), 3, "TypeInfoDefinitionTable"));
+
+    // 2. CarBehaviour::SetCarEffectsEnabled
+    s_rvaCarBehaviourSetEffectsEnabled = toRva(PatternScanner::FindFunctionEntryOrFallback(
+        hGA, "48 8B 89 68 01 00 00 48 85 C9 74 ? 45 33 C0 E8 ? ? ? ? 48 8B BF 70 01 00 00",
+        GameBuild::Pick(kFbCarBehaviourSetEffects), 256, "CarBehaviour_SetEffectsEnabled"));
+
+    // 3. DistanceBasedPhysicsSwitchingSubController::Update
+    s_rvaSwitchingUpdate = toRva(PatternScanner::FindFunctionEntryOrFallback(
+        hGA, "4C 8B 46 28 4D 85 C0 0F 84 ? ? ? ? 33 C9 48 8B 15 ? ? ? ? E8 ? ? ? ? 48 89 44 24 50",
+        GameBuild::Pick(kFbSwitchingUpdate), 256, "DistanceBasedSwitching_Update"));
+
+    // 4. DistanceBasedPhysicsSwitchingSubController::IsFarCar
+    s_rvaIsFarCar = toRva(PatternScanner::FindOrFallback(
+        hGA, "48 89 5C 24 10 48 89 74 24 18 57 41 54 41 55 41 56 41 57 48 81 EC B0 01 00 00 4C 8B E9",
+        GameBuild::Pick(kFbIsFarCar), "DistanceBasedSwitching_IsFarCar"));
+
+    // 5. BaseCollisionEffectBehaviour::Apply — codegen differs per branch, so each has its own signature.
+    //    Try the detected branch's signature first, then the other one (helps on unknown builds).
+    {
+        static const char* kApplyRelease = "80 79 20 00 75 ? 80 79 21 00 C6 41 20 01 74 ? 48 8B 01 48 8B 90 C0 01 00 00 48 FF A0 B8 01 00 00";
+        static const char* kApplyAlpha   = "80 79 20 00 75 1E 80 79 21 00 C6 41 20 01 74 14 48 8B 11 48 8B 82 B8 01 00 00";
+        const bool alphaFirst = (branch == GameBranch::Alpha);
+        uintptr_t va = PatternScanner::Find(hGA, alphaFirst ? kApplyAlpha : kApplyRelease, "BaseCollisionEffect_Apply");
+        if (!va) va = PatternScanner::FindOrFallback(hGA, alphaFirst ? kApplyRelease : kApplyAlpha,
+                                                     GameBuild::Pick(kFbBaseCollisionEffectApply), "BaseCollisionEffect_Apply(alt)");
+        s_rvaBaseCollisionEffectApply = toRva(va);
     }
 
-    // 2. Scan for CarBehaviour::SetEffectsEnabled
-    uintptr_t vaEffects = PatternScanner::FindFunctionEntryOrFallback(
-        hGA,
-        "48 8B 89 68 01 00 00 48 85 C9 74 ? 45 33 C0 E8 ? ? ? ? 48 8B BF 70 01 00 00",
-        s_rvaCarBehaviourSetEffectsEnabled,
-        256,
-        "CarBehaviour_SetEffectsEnabled");
-    if (vaEffects && vaEffects >= s_gaBase) {
-        s_rvaCarBehaviourSetEffectsEnabled = vaEffects - s_gaBase;
-    }
+    // 6. CarX provider get_transform (resolved through a unique call site: `call <fn>` at +0x17)
+    s_rvaProviderGetTransform = toRva(PatternScanner::FindRipOrFallback(
+        hGA, "48 83 C1 18 E8 ? ? ? ? 48 8B 7B 20 48 85 FF 74 ? 33 D2 48 8B CB E8 ? ? ? ?", 5, 1,
+        GameBuild::Pick(kFbProviderGetTransform), 0x17, "ProviderGetTransform"));
 
-    // 3. Scan for DistanceBasedPhysicsSwitchingSubController::IsFarCar
-    uintptr_t vaIsFar = PatternScanner::FindOrFallback(
-        hGA,
-        "48 89 5C 24 10 48 89 74 24 18 57 41 54 41 55 41 56 41 57 48 81 EC B0 01 00 00 4C 8B E9",
-        s_rvaIsFarCar,
-        "DistanceBasedSwitching_IsFarCar");
-    if (vaIsFar && vaIsFar >= s_gaBase) {
-        s_rvaIsFarCar = vaIsFar - s_gaBase;
-    }
+    // 7. UnityEngine.Transform::get_position_Injected (call site: `call <fn>` at +3)
+    s_rvaTransformGetPosInjected = toRva(PatternScanner::FindRipOrFallback(
+        hGA, "48 8B D5 E8 ? ? ? ? 48 85 DB 74 ? F2 0F 10 00", 5, 1,
+        GameBuild::Pick(kFbTransformGetPosInjected), 3, "Transform_get_position_Injected"));
 
-    // 4. Scan for BaseCollisionEffectBehaviour::Apply
-    uintptr_t vaEffectApply = PatternScanner::FindOrFallback(
-        hGA,
-        "80 79 20 00 75 1E 80 79 21 00 C6 41 20 01 74 14 48 8B 11 48 8B 82 B8 01 00 00",
-        s_rvaBaseCollisionEffectApply,
-        "BaseCollisionEffect_Apply");
-    if (vaEffectApply && vaEffectApply >= s_gaBase) {
-        s_rvaBaseCollisionEffectApply = vaEffectApply - s_gaBase;
-    }
+    // 8. il2cpp interface VirtualInvokeData lookup (call site: `call <fn>` at +7)
+    s_rvaIl2CppVirtualInvokeData = toRva(PatternScanner::FindRipOrFallback(
+        hGA, "45 0F B7 C3 48 8B CB E8 ? ? ? ? 48 8B 48 08 48 8B D7 E8 ? ? ? ? 4C 8B C0 0F 28 CE", 5, 1,
+        GameBuild::Pick(kFbIl2CppVirtualInvokeData), 7, "Il2CppVirtualInvokeData"));
 
-    uintptr_t kEffect = LookupTypeClass("BaseCollisionEffectBehaviour", "CarX.DeformationPhysics");
-    void* fnEffect = LookupClassMethod(kEffect, "Apply");
-    if (fnEffect && reinterpret_cast<uintptr_t>(fnEffect) >= s_gaBase) {
-        s_rvaBaseCollisionEffectApply = reinterpret_cast<uintptr_t>(fnEffect) - s_gaBase;
-    }
+    // 9. INetworkCarContainer TypeInfo global (mov rdx, [rip+X])
+    s_rvaINetworkCarContainerTypeInfo = toRva(PatternScanner::FindRipOrFallback(
+        hGA, "48 8B 15 ? ? ? ? B9 11 00 00 00 4C 8B C3 48 8B 5C 24 30", 7, 3,
+        GameBuild::Pick(kFbINetworkCarContainerTI), 0, "INetworkCarContainer_TypeInfo"));
+
+    // 10. DeformationSkeletonSleepSystem TypeInfo global (mov rcx, [rip+X] at +0xE)
+    s_rvaDeformSleepTypeInfoGlobal = toRva(PatternScanner::FindRipOrFallback(
+        hGA, "74 ? 48 8B 15 ? ? ? ? E8 ? ? ? ? 48 8B 0D ? ? ? ? 83 B9 ? ? ? ? 00 75 ? E8 ? ? ? ? 80 3D ? ? ? ? 00", 7, 3,
+        GameBuild::Pick(kFbDeformSleepTypeInfo), 0xE, "DeformSkeletonSleep_TypeInfo"));
 
     pfn_ProviderGetTransform = s_rvaProviderGetTransform ? reinterpret_cast<t_ProviderGetTransform>(s_gaBase + s_rvaProviderGetTransform) : nullptr;
     pfn_TransformGetPos = s_rvaTransformGetPosInjected ? reinterpret_cast<t_TransformGetPos>(s_gaBase + s_rvaTransformGetPosInjected) : nullptr;

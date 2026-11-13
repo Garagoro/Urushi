@@ -1,5 +1,6 @@
 #include "unity_bridge.h"
 #include "pattern_scanner.h"
+#include "game_build.h"
 #include "carfx.h"
 #include "ecs_collision.h"
 #include "car_sim_optimizer.h"
@@ -484,13 +485,16 @@ static bool SafeCallRaceCarTeleportSEH(uintptr_t gaBase, void* raceCarPtr,
         static uintptr_t s_rvaTf = 0;
         if (!s_rvaVel && gaBase) {
             uintptr_t vaVel = PatternScanner::FindOrFallback(reinterpret_cast<HMODULE>(gaBase),
-                "48 83 EC 38 4C 8B 89 48 01 00 00 4D 85 C9 ? ? F2 0F 10 02", 0x239D160, "ForceVelocityChange");
-            s_rvaVel = vaVel ? (vaVel - gaBase) : 0x239D160;
+                "48 83 EC 38 4C 8B 89 48 01 00 00 4D 85 C9 ? ? F2 0F 10 02",
+                GameBuild::Pick({ 0x1DCE130, 0x239D160 }), "ForceVelocityChange");
+            s_rvaVel = vaVel ? (vaVel - gaBase) : 0;
 
             uintptr_t vaTf = PatternScanner::FindOrFallback(reinterpret_cast<HMODULE>(gaBase),
-                "48 89 5C 24 08 57 48 83 EC 60 48 8B F9 48 8B DA 48 8B 89 40 01 00 00", 0x239D0E0, "ForceTransformChangeMat");
-            s_rvaTf = vaTf ? (vaTf - gaBase) : 0x239D0E0;
+                "48 89 5C 24 08 57 48 83 EC 60 48 8B F9 48 8B DA 48 8B 89 40 01 00 00",
+                GameBuild::Pick({ 0x1DCE0B0, 0x239D0E0 }), "ForceTransformChangeMat");
+            s_rvaTf = vaTf ? (vaTf - gaBase) : 0;
         }
+        if (!s_rvaVel || !s_rvaTf) return false; // unknown build and signatures missed
 
         auto pfnVel = reinterpret_cast<t_ForceVelocityChange>(gaBase + s_rvaVel);
         auto pfnTf  = reinterpret_cast<t_ForceTransformChangeMat>(gaBase + s_rvaTf);
@@ -5050,11 +5054,15 @@ void UnityBridge::ApplyRepairPlayerCarInternal() {
     if (!s_repairsResolved && hGA) {
         s_repairsResolved = true;
         pfn_CarRepair = reinterpret_cast<t_CarRepair>(PatternScanner::FindOrFallback(hGA,
-            "40 53 41 55 48 83 EC 38 80 3D ? ? ? ? 00 44 0F B6 EA 48 8B D9", 0x17C3EE0, "CarRepair"));
+            "40 53 41 55 48 83 EC 38 80 3D ? ? ? ? 00 44 0F B6 EA 48 8B D9",
+            GameBuild::Pick({ 0x12FEC20, 0x17C3EE0 }), "CarRepair"));
         pfn_VisualRepair = reinterpret_cast<t_VisualRepair>(PatternScanner::FindFunctionEntryOrFallback(hGA,
-            "48 89 6C 24 30 48 89 74 24 38 48 89 7C 24 40 4C 89 74 24 48 48 85 DB 0F 84 ? ? ? ? 48 8B 15 ? ? ? ? B9 02 00 00 00 4C 8B C3", 0x15CFC00, 256, "VisualRepair"));
-        pfn_FullCarRepair = reinterpret_cast<t_FullCarRepair>(PatternScanner::FindOrFallback(hGA,
-            "48 89 5C 24 08 57 48 83 EC 70 48 8B D9 80 3D ? ? ? ? 00 75 4F", 0x2426DD0, "FullCarRepair"));
+            "48 89 6C 24 30 48 89 74 24 38 48 89 7C 24 40 4C 89 74 24 48 48 85 DB 0F 84 ? ? ? ? 48 8B 15 ? ? ? ? B9 02 00 00 00 4C 8B C3",
+            GameBuild::Pick({ 0x1108340, 0x15CFBC0 }), 256, "VisualRepair"));
+        // The function's own prologue has an identical twin in release, so resolve it through its unique call site.
+        pfn_FullCarRepair = reinterpret_cast<t_FullCarRepair>(PatternScanner::FindRipOrFallback(hGA,
+            "48 8B 4C 24 20 E8 ? ? ? ? 48 81 C4 C0 00 00 00", 5, 1,
+            GameBuild::Pick({ 0x1E570D0, 0x2426DD0 }), 5, "FullCarRepair"));
     }
 
     bool repaired = false;

@@ -1,5 +1,6 @@
 #include "ecs_collision.h"
 #include "pattern_scanner.h"
+#include "game_build.h"
 #include "unity_bridge.h"
 #include "native_carx.h"
 #include "logger.h"
@@ -16,15 +17,22 @@
 
 namespace {
 
-// Dynamic RVAs inside GameAssembly.dll (fallback default RVAs for beta/vanilla build)
-static uintptr_t s_rvaWorldClass                = 0x9819CF0; // Unity.Entities.World* (fallback)
-static uintptr_t s_rvaEcsClass                  = 0x976FE30; // EntityComponentStore class static_fields -> s_chunkStore
-static uintptr_t s_rvaChunkMetaClass           = 0x982D7E0; // SharedStatic chunk meta table
-static uintptr_t s_rvaTypeNamesSS              = 0x97DBAC8; // TypeManager.TypeNames SharedStatic<UnsafeList>
-static uintptr_t s_rvaCollisionWorldCastRay    = 0x2F27300; // Unity.Physics.CollisionWorld.CastRay(RaycastInput, out RaycastHit)
-static uintptr_t s_rvaCollisionWorldSphereCast = 0x6B97C00; // Unity.Physics.CollisionWorld.SphereCast
-static uintptr_t s_rvaCastRayMiPtr             = 0x9848F98; // Generic MethodInfo* slot for CollisionWorld.CastRay<RaycastHit>
-static uintptr_t s_rvaInitRuntimeMetadata      = 0x0A75B50; // il2cpp_codegen_initialize_runtime_metadata
+// Fallback RVAs inside GameAssembly.dll per Steam branch (see game_build.h); signatures are scanned first.
+constexpr BranchRva kFbEcsClass             = { 0x8428C98, 0x9770E30 }; // EntityComponentStore class static_fields -> s_chunkStore
+constexpr BranchRva kFbChunkMetaClass       = { 0x843CB48, 0x982E7E0 }; // SharedStatic chunk meta table
+constexpr BranchRva kFbTypeNamesSS          = { 0x83F57D8, 0x97DCAC8 }; // TypeManager.TypeNames SharedStatic<UnsafeList>
+constexpr BranchRva kFbCollisionWorldCastRay= { 0x2717C40, 0x2F28300 }; // Unity.Physics.CollisionWorld.CastRay(RaycastInput, out RaycastHit)
+constexpr BranchRva kFbSphereCast           = { 0x5B57270, 0x6B97C00 }; // Unity.Physics.CollisionWorld.SphereCast (two identical generic copies; first is used)
+constexpr BranchRva kFbCastRayMiPtr         = { 0x8387960, 0x9849F98 }; // Generic MethodInfo* slot for CollisionWorld.CastRay<RaycastHit>
+constexpr BranchRva kFbInitRuntimeMetadata  = { 0x09264A0, 0x0A76750 }; // il2cpp_codegen_initialize_runtime_metadata
+
+static uintptr_t s_rvaEcsClass                  = 0;
+static uintptr_t s_rvaChunkMetaClass           = 0;
+static uintptr_t s_rvaTypeNamesSS              = 0;
+static uintptr_t s_rvaCollisionWorldCastRay    = 0;
+static uintptr_t s_rvaCollisionWorldSphereCast = 0;
+static uintptr_t s_rvaCastRayMiPtr             = 0;
+static uintptr_t s_rvaInitRuntimeMetadata      = 0;
 
 constexpr uint32_t FALLBACK_TIDX_PHYSICS_COLLIDER  = 0x5BA;
 constexpr uint32_t FALLBACK_TIDX_PHYSICS_VELOCITY  = 0x5BE;
@@ -172,6 +180,14 @@ static bool ResolveGameAssembly() {
     s_gaBase = reinterpret_cast<uintptr_t>(hMod);
     s_gaSize = mi.SizeOfImage;
 
+    // Branch fallbacks first (0 on unknown builds); signature hits below override them.
+    s_rvaEcsClass                  = GameBuild::Pick(kFbEcsClass);
+    s_rvaChunkMetaClass            = GameBuild::Pick(kFbChunkMetaClass);
+    s_rvaTypeNamesSS               = GameBuild::Pick(kFbTypeNamesSS);
+    s_rvaCollisionWorldCastRay     = GameBuild::Pick(kFbCollisionWorldCastRay);
+    s_rvaCastRayMiPtr              = GameBuild::Pick(kFbCastRayMiPtr);
+    s_rvaInitRuntimeMetadata       = GameBuild::Pick(kFbInitRuntimeMetadata);
+
     // Dynamically scan GameAssembly.dll for Unity Physics / ECS signatures
     // 1. CastRay callsite -> resolves both CastRay MethodInfo slot and CollisionWorld.CastRay function
     uintptr_t vaCastRaySite = PatternScanner::Find(hMod, "4C 8B 0D ? ? ? ? 4C 8D 45 D0 48 8D 55 10 44 0F 29 6D 10 48 8B CE", "Ecs_CastRayCallSite");
@@ -210,12 +226,8 @@ static bool ResolveGameAssembly() {
     }
 
     // 6. SphereCast
-    uintptr_t vaSphere = PatternScanner::FindOrFallback(hMod, "48 89 5C 24 08 48 89 74 24 10 57 48 81 EC 90 00 00 00 80 3D ? ? ? ? 00 49 8B D9 0F 29 B4 24 80 00 00 00 48 8B FA 0F 28 F2 48 8B F1 75 ? 48 8D 0D ? ? ? ? E8 ? ? ? ? C6 05 ? ? ? ? 01 48 8B 84 24 D0 00 00 00 4C 8D 4C 24 60 4C 8B 05 ? ? ? ? 48 8D 54 24 70 4C 89 44 24 40 0F 28 D6 48 8B CE", 0x6B97C00, "Ecs_SphereCast");
-    if (vaSphere && vaSphere >= s_gaBase) {
-        s_rvaCollisionWorldSphereCast = vaSphere - s_gaBase;
-    } else {
-        s_rvaCollisionWorldSphereCast = 0x6B97C00;
-    }
+    uintptr_t vaSphere = PatternScanner::FindOrFallback(hMod, "48 89 5C 24 08 48 89 74 24 10 57 48 81 EC 90 00 00 00 80 3D ? ? ? ? 00 49 8B D9 0F 29 B4 24 80 00 00 00 48 8B FA 0F 28 F2 48 8B F1 75 ? 48 8D 0D ? ? ? ? E8 ? ? ? ? C6 05 ? ? ? ? 01 48 8B 84 24 D0 00 00 00 4C 8D 4C 24 60 4C 8B 05 ? ? ? ? 48 8D 54 24 70 4C 89 44 24 40 0F 28 D6 48 8B CE", GameBuild::Pick(kFbSphereCast), "Ecs_SphereCast");
+    s_rvaCollisionWorldSphereCast = (vaSphere && vaSphere >= s_gaBase) ? vaSphere - s_gaBase : 0;
 
     return s_gaBase != 0;
 }
@@ -224,7 +236,7 @@ static void TryResolveTypeIndices() {
     if (s_types.resolvedFromTypeNames || !ResolveGameAssembly()) return;
 
     uintptr_t tmCls = 0, tmSf = 0, tmList = 0, entries = 0;
-    if (!SafeRead(s_gaBase + s_rvaTypeNamesSS, tmCls) || tmCls < 0x10000) return;
+    if (!s_rvaTypeNamesSS || !SafeRead(s_gaBase + s_rvaTypeNamesSS, tmCls) || tmCls < 0x10000) return;
     if (!SafeRead(tmCls + 0xB8, tmSf) || tmSf < 0x10000) return;
     if (!SafeRead(tmSf, tmList) || tmList < 0x10000) return;
     if (!SafeRead(tmList, entries) || entries < 0x10000) return;
@@ -273,23 +285,13 @@ struct EcsStores {
 static bool GetEcsStores(EcsStores& out) {
     if (!ResolveGameAssembly()) return false;
 
-    // World class sanity check (optional, if world is created)
-    if (s_rvaWorldClass) {
-        uintptr_t worldCls = 0, worldSf = 0, world = 0;
-        if (SafeRead(s_gaBase + s_rvaWorldClass, worldCls) && worldCls >= 0x10000) {
-            if (SafeRead(worldCls + 0xB8, worldSf) && worldSf >= 0x10000) {
-                SafeRead(worldSf + 0x08, world);
-            }
-        }
-    }
-
     uintptr_t ecsCls = 0, ecsSf = 0;
-    if (!SafeRead(s_gaBase + s_rvaEcsClass, ecsCls) || ecsCls < 0x10000) return false;
+    if (!s_rvaEcsClass || !SafeRead(s_gaBase + s_rvaEcsClass, ecsCls) || ecsCls < 0x10000) return false;
     if (!SafeRead(ecsCls + 0xB8, ecsSf) || ecsSf < 0x10000) return false;
     if (!SafeRead(ecsSf + 0x10, out.chunkStore) || out.chunkStore < 0x10000) return false;
 
     uintptr_t cmCls = 0, cmSf = 0, cmInner = 0;
-    if (!SafeRead(s_gaBase + s_rvaChunkMetaClass, cmCls) || cmCls < 0x10000) return false;
+    if (!s_rvaChunkMetaClass || !SafeRead(s_gaBase + s_rvaChunkMetaClass, cmCls) || cmCls < 0x10000) return false;
     if (!SafeRead(cmCls + 0xB8, cmSf) || cmSf < 0x10000) return false;
     if (!SafeRead(cmSf, cmInner) || cmInner < 0x10000) return false;
     if (!SafeRead(cmInner, out.chunkMetaBase) || out.chunkMetaBase < 0x10000) return false;
