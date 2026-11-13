@@ -39,3 +39,7 @@ urushi_settings.ini
 urushi.prev.log
 urushi_data/
 scripts/cloud/
+
+__pycache__/
+*.pyc
+

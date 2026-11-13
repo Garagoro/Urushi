@@ -846,7 +846,6 @@ static void __fastcall Hooked_BaseCollisionEffectApply(void* self, void* a2, voi
     }
     if (block) {
         s_stats.damageBlocks++;
-        UnityBridge::RequestRepairPlayerCar();
         return; // Headlights breaking, cracked glass & collision mesh replacement blocked!
     }
     s_origBaseCollisionEffectApply(self, a2, a3, a4);
@@ -1325,15 +1324,6 @@ void CarSimOptimizer::UpdateOnMainThread(float /*dt*/, const std::vector<LiveCar
         s_stats.vanillaSmallRadius = s_renderBase.smallRadius;
         s_stats.vanillaTinyRadius = s_renderBase.tinyRadius;
     }
-
-    if (s_stats.noDamageActive && NativeCarX::IsInSessionFast()) {
-        static ULONGLONG s_lastAutoRepairMs = 0;
-        const ULONGLONG nowMs = GetTickCount64();
-        if (nowMs - s_lastAutoRepairMs >= 1000) {
-            s_lastAutoRepairMs = nowMs;
-            UnityBridge::RequestRepairPlayerCar();
-        }
-    }
 }
 
 CarSimOptimizer::Config CarSimOptimizer::GetConfig() {
@@ -1375,9 +1365,6 @@ void CarSimOptimizer::SetConfig(const Config& cfg) {
     if (clamped.disableTireWear) {
         NativeCarX::SetNoTireWear(true);
     }
-    if (damageTurnedOn) {
-        UnityBridge::RequestRepairPlayerCar();
-    }
 }
 
 void CarSimOptimizer::ResetDefaults() {
@@ -1407,9 +1394,6 @@ void CarSimOptimizer::SetNoDamageOverride(bool enable) {
     s_noDamageOverride = enable;
     s_cfg.disableDamage = enable;
     NativeCarX::SetNoDamage(enable);
-    if (enable) {
-        UnityBridge::RequestRepairPlayerCar();
-    }
 }
 
 bool CarSimOptimizer::GetNoDamageOverride() {

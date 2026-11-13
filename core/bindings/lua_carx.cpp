@@ -1161,7 +1161,6 @@ int LuaCarX::RepairCar(lua_State* L) {
     }
     NativeCarX::ResetCarDamage(car);
     NativeCarX::ResetTireWear(car);
-    UnityBridge::RequestRepairPlayerCar();
     lua_pushboolean(L, true);
     return 1;
 }

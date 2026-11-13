@@ -45,7 +45,6 @@ std::atomic<bool> UnityBridge::s_ghostCollisionEnabled{ false };
 std::atomic<bool> UnityBridge::s_ghostMirrorPlayerShader{ true };
 std::atomic<bool> UnityBridge::s_pendingCollisionSync{ false };
 std::atomic<bool> UnityBridge::s_pendingTeleport{ false };
-std::atomic<bool> UnityBridge::s_pendingRepairCar{ false };
 TeleportPose UnityBridge::s_pendingTeleportPose{};
 int UnityBridge::s_pendingTeleportVelMode = 0;
 UnityVector3 UnityBridge::s_pendingPos{};
@@ -1951,7 +1950,6 @@ void UnityBridge::Shutdown() {
     s_pendingDestroy.store(false);
     s_pendingTransform.store(false);
     s_pendingCollisionSync.store(false);
-    s_pendingRepairCar.store(false);
 
     EcsCollision::Shutdown();
 
@@ -2051,10 +2049,6 @@ void UnityBridge::ProcessPendingMainThreadTasks(float dt) {
             velMode = s_pendingTeleportVelMode;
         }
         ApplyTeleportPlayerInternal(poseCopy, velMode);
-    }
-
-    if (s_pendingRepairCar.exchange(false)) {
-        ApplyRepairPlayerCarInternal();
     }
 
     // Periodically sync scene car model cache + per-frame lightweight position matching
@@ -4975,129 +4969,6 @@ bool UnityBridge::RaycastWorld(const UnityVector3& origin, const UnityVector3& d
     if (!pfn_InternalRaycast) return false;
     UnityRay ray{ origin, dir };
     return SafePhysicsRaycastSEH(reinterpret_cast<void*>(pfn_InternalRaycast), &ray, maxDist, &outHit, layerMask);
-}
-
-void UnityBridge::RequestRepairPlayerCar() {
-    if (IsOnMainThread()) {
-        ApplyRepairPlayerCarInternal();
-        return;
-    }
-    s_pendingRepairCar.store(true);
-}
-
-static void* SafeGetCarModelSEH(void* carBehaviour) {
-    if (!carBehaviour) return nullptr;
-    __try {
-        return *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(carBehaviour) + 0x60);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return nullptr;
-    }
-}
-
-static void* SafeGetDeformationBehavioursListSEH(void* deformCtrl) {
-    if (!deformCtrl) return nullptr;
-    __try {
-        return *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(deformCtrl) + 0x20);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return nullptr;
-    }
-}
-
-static bool SafeInvokeCarRepairSEH(void* pfn, void* carModel, uint8_t resetVisual) {
-    if (!pfn || !carModel) return false;
-    __try {
-        reinterpret_cast<void(__fastcall*)(void*, uint8_t, void*)>(pfn)(carModel, resetVisual, nullptr);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-
-static bool SafeInvokeVisualRepairSEH(void* pfn, void* carModel) {
-    if (!pfn || !carModel) return false;
-    __try {
-        reinterpret_cast<void(__fastcall*)(void*, void*)>(pfn)(carModel, nullptr);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-
-static bool SafeInvokeFullCarRepairSEH(void* pfn, void* defBehavList) {
-    if (!pfn || !defBehavList) return false;
-    __try {
-        reinterpret_cast<void(__fastcall*)(void*, void*)>(pfn)(defBehavList, nullptr);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-
-void UnityBridge::ApplyRepairPlayerCarInternal() {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    void* activePlayer = NativeCarX::GetPlayerCarPtr();
-    if (activePlayer) {
-        NativeCarX::ResetCarDamage(activePlayer);
-        NativeCarX::ResetTireWear(activePlayer);
-    }
-
-    HMODULE hGA = GetModuleHandleW(L"GameAssembly.dll");
-    typedef void (__fastcall *t_CarRepair)(void* carModel, uint8_t resetVisual, void* method);
-    typedef void (__fastcall *t_VisualRepair)(void* carModel, void* method);
-    typedef void (__fastcall *t_FullCarRepair)(void* list, void* method);
-
-    static t_CarRepair pfn_CarRepair = nullptr;
-    static t_VisualRepair pfn_VisualRepair = nullptr;
-    static t_FullCarRepair pfn_FullCarRepair = nullptr;
-    static bool s_repairsResolved = false;
-
-    if (!s_repairsResolved && hGA) {
-        s_repairsResolved = true;
-        pfn_CarRepair = reinterpret_cast<t_CarRepair>(PatternScanner::FindOrFallback(hGA,
-            "40 53 41 55 48 83 EC 38 80 3D ? ? ? ? 00 44 0F B6 EA 48 8B D9",
-            GameBuild::Pick({ 0x12FEC20, 0x17C3EE0 }), "CarRepair"));
-        pfn_VisualRepair = reinterpret_cast<t_VisualRepair>(PatternScanner::FindFunctionEntryOrFallback(hGA,
-            "48 89 6C 24 30 48 89 74 24 38 48 89 7C 24 40 4C 89 74 24 48 48 85 DB 0F 84 ? ? ? ? 48 8B 15 ? ? ? ? B9 02 00 00 00 4C 8B C3",
-            GameBuild::Pick({ 0x1108340, 0x15CFBC0 }), 256, "VisualRepair"));
-        // The function's own prologue has an identical twin in release, so resolve it through its unique call site.
-        pfn_FullCarRepair = reinterpret_cast<t_FullCarRepair>(PatternScanner::FindRipOrFallback(hGA,
-            "48 8B 4C 24 20 E8 ? ? ? ? 48 81 C4 C0 00 00 00", 5, 1,
-            GameBuild::Pick({ 0x1E570D0, 0x2426DD0 }), 5, "FullCarRepair"));
-    }
-
-    bool repaired = false;
-    for (const auto& sc : s_sceneCarCache) {
-        bool isPlayerCar = sc.isPlayer || (activePlayer && sc.nativeCarPtr == activePlayer);
-        if (isPlayerCar && sc.carBehaviour) {
-            void* carModel = SafeGetCarModelSEH(sc.carBehaviour);
-            if (carModel) {
-                if (pfn_CarRepair && SafeInvokeCarRepairSEH(reinterpret_cast<void*>(pfn_CarRepair), carModel, 1)) {
-                    Logger::Info("CarExtensions::Repair executed on player car.");
-                    repaired = true;
-                }
-                if (pfn_VisualRepair && SafeInvokeVisualRepairSEH(reinterpret_cast<void*>(pfn_VisualRepair), carModel)) {
-                    Logger::Info("CarExtensions::VisualRepair executed on player car.");
-                    repaired = true;
-                }
-            }
-
-            void* deformCtrl = SafeFindDeformationControllerSEH(sc.carBehaviour);
-            if (deformCtrl && pfn_FullCarRepair) {
-                void* defBehavList = SafeGetDeformationBehavioursListSEH(deformCtrl);
-                if (defBehavList) {
-                    if (SafeInvokeFullCarRepairSEH(reinterpret_cast<void*>(pfn_FullCarRepair), defBehavList)) {
-                        Logger::Info("CarDeformationFeatureController::FullCarRepair executed on player car.");
-                        repaired = true;
-                    }
-                }
-            }
-            break;
-        }
-    }
-
-    if (!repaired) {
-        Logger::Warn("ApplyRepairPlayerCarInternal: player car or carModel not found in scene car cache.");
-    }
 }
 
 
