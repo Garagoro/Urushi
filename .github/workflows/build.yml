@@ -29,7 +29,15 @@ jobs:
       - name: Configure CMake
         shell: pwsh
         run: |
-          cmake -B build -G "Visual Studio 17 2022" -A x64
+          try {
+            cmake -B build -G "Visual Studio 17 2022" -A x64 2>&1 | Tee-Object -FilePath cmake_configure.log
+          } finally {
+            if (Test-Path cmake_configure.log) {
+              "### CMake Configure Output`n```" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              Get-Content cmake_configure.log | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              "```" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            }
+          }
 
       - name: Build Project
         shell: pwsh
