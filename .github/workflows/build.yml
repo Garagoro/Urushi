@@ -29,14 +29,11 @@ jobs:
       - name: Configure CMake
         shell: pwsh
         run: |
-          try {
-            cmake -B build -G "Visual Studio 17 2022" -A x64 2>&1 | Tee-Object -FilePath cmake_configure.log
-          } finally {
-            if (Test-Path cmake_configure.log) {
-              "### CMake Configure Output`n```" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-              Get-Content cmake_configure.log | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-              "```" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-            }
+          & cmake -B build -G "Visual Studio 17 2022" -A x64 2>&1 | Tee-Object -FilePath cmake_configure.log
+          if ($LASTEXITCODE -ne 0) {
+            $errText = Get-Content cmake_configure.log -Raw
+            Write-Error "CMake configure failed: `n$errText"
+            exit 1
           }
 
       - name: Build Project
@@ -91,12 +88,13 @@ jobs:
           Copy-Item "Urushi-v$ver.zip" "Urushi-latest.zip" -Force
 
       - name: Upload Build Artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Urushi-v0.3.1
+          name: Urushi-Artifacts
           path: |
-            Urushi-v0.3.1.zip
-            Urushi-latest.zip
+            *.log
+            Urushi-*.zip
             dist/version.dll
             dist/urushi.dll
             dist/version.txt
