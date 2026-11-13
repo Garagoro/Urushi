@@ -135,16 +135,16 @@ jobs:
           $dllUrushi = Join-Path $distDir "urushi.dll"
           $dllProxy = Join-Path $distDir "version.dll"
 
-          $title = "$tag — Dynamic Signature Scans, Hot-Reinject & Keybinds Hub"
-          $notes = @"
-### 🏎️ Features & Changes:
-- ⚡ **Dynamic Signature Scanning**: All critical game engine and Unity RVA offsets (Transform cluster, raycasts, engine tick) are now dynamically resolved via signature scans to survive game updates.
-- 🎯 **Wall Tap & Raycast Proximity Overhaul**: Fixed world raycasting and vehicle orientation math for robust collision detection and proximity telemetry.
-- 🎨 **CarFX Shaders**: Restored dynamic livery shaders (Holo, Tandem Angle, Chams) with automatic directory watcher.
-- 🔄 **Live Hot-Reinject & One-Click Update**: Zero-downtime updates — `urushi.dll` can be hot-reloaded live inside the running game process via `version.dll` event with a single click.
-- ⌨️ **Dynamic Keybinds Hub**: Dedicated Keybinds window aggregating all actions by active mod without hardcoded layouts.
-- 📦 **Automated CI/CD**: Automatic builds, release packaging, and live in-game auto-updater.
-"@
+          $title = "$tag — Dynamic Signature Scans, Hot-Reinject and Keybinds Hub"
+          $notes = @(
+              "### 🏎️ Features & Changes:"
+              "- ⚡ **Dynamic Signature Scanning**: All critical game engine and Unity RVA offsets (Transform cluster, raycasts, engine tick) are now dynamically resolved via signature scans to survive game updates."
+              "- 🎯 **Wall Tap & Raycast Proximity Overhaul**: Fixed world raycasting and vehicle orientation math for robust collision detection and proximity telemetry."
+              "- 🎨 **CarFX Shaders**: Restored dynamic livery shaders (Holo, Tandem Angle, Chams) with automatic directory watcher."
+              "- 🔄 **Live Hot-Reinject & One-Click Update**: Zero-downtime updates — urushi.dll can be hot-reloaded live inside the running game process via version.dll event with a single click."
+              "- ⌨️ **Dynamic Keybinds Hub**: Dedicated Keybinds window aggregating all actions by active mod without hardcoded layouts."
+              "- 📦 **Automated CI/CD**: Automatic builds, release packaging, and live in-game auto-updater."
+          ) -join "`n"
 
           $exists = $false
           try {
