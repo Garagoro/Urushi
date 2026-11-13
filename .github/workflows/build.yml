@@ -27,19 +27,12 @@ jobs:
           fetch-depth: 0
 
       - name: Configure CMake
-        shell: pwsh
-        run: |
-          & cmake -B build -G "Visual Studio 17 2022" -A x64 2>&1 | Tee-Object -FilePath cmake_configure.log
-          if ($LASTEXITCODE -ne 0) {
-            $errText = Get-Content cmake_configure.log -Raw
-            Write-Error "CMake configure failed: `n$errText"
-            exit 1
-          }
+        shell: cmd
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64
 
       - name: Build Project
-        shell: pwsh
-        run: |
-          cmake --build build --config Release --target ALL_BUILD --parallel
+        shell: cmd
+        run: cmake --build build --config Release --target ALL_BUILD --parallel
 
       - name: Stage Dist Binaries & Version Manifest
         shell: pwsh
