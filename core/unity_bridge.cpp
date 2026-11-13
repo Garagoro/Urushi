@@ -538,14 +538,16 @@ static bool SafeExtractMasterMatTexPairSEH(void* rootGo, uint32_t targetTypeId,
         if (outerCount == 0 || !IsReadableMem(outerEntries, 0x20 + static_cast<size_t>(outerCount) * 24)) return false;
 
         uintptr_t subDict = 0;
+        uint32_t foundTids[16] = {};
+        uint32_t numFoundTids = 0;
         for (uint32_t i = 0; i < outerCount; ++i) {
             uintptr_t e = outerEntries + 0x20 + static_cast<size_t>(i) * 24;
             int32_t hc = *reinterpret_cast<int32_t*>(e + 0);
             if (hc < 0) continue;
             uint32_t tid = *reinterpret_cast<uint32_t*>(e + 8);
+            if (numFoundTids < 16) foundTids[numFoundTids++] = tid;
             if (tid == targetTypeId) {
                 subDict = *reinterpret_cast<uintptr_t*>(e + 16);
-                break;
             }
         }
         if (!IsReadableMem(subDict, 0x28)) return false;
@@ -1218,7 +1220,7 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
 
     {
         static void* s_dumpedRoot = nullptr;
-        if ((wantTransparent || wantStealth) && s_dumpedRoot != rootGo) {
+        if (s_dumpedRoot != rootGo) {
             s_dumpedRoot = rootGo;
             DumpCarHierarchyOnce(unityBase, rootGo);
         }
@@ -1490,9 +1492,10 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
                 }
             }
 
-            if (albIsDef && packIsDef) {
+            const bool hasIso = (s_playerIsoPackTex != nullptr && s_playerIsoPackSrv != nullptr);
+            if ((albIsDef && packIsDef) || hasIso) {
                 bool copyOk = false;
-                if (!s_playerIsoPackTex || !s_playerIsoPackSrv) {
+                if (!hasIso) {
                     releasePlayerIsoPackTex();
                     void* isoSrv = nullptr;
                     void* isoTex = CreateIsolatedPackedTexture(matPack, true, s_natWhite, s_natBlack, &isoSrv, &copyOk);
@@ -1528,7 +1531,12 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
                         if (targetMid != 0 && updatedMats.insert(targetMid).second) {
                             void* natM = nullptr;
                             if (SafeResolveMatAndQueueSEH(unityBase, targetMid, &natM, nullptr) && natM) {
-                                if (SafeSetMatTextureSEH(unityBase, natM, 1370, s_playerIsoPackTex)) {
+                                void* curPack = SafeGetMatTextureSEH(unityBase, natM, 1370);
+                                if (curPack != s_playerIsoPackTex) {
+                                    if (SafeSetMatTextureSEH(unityBase, natM, 1370, s_playerIsoPackTex)) {
+                                        assignedSlots++;
+                                    }
+                                } else {
                                     assignedSlots++;
                                 }
                             }

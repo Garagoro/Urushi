@@ -23,9 +23,10 @@ static uintptr_t s_rvaTransformGetPosInjected       = 0x5F72710;
 static uintptr_t s_rvaIl2CppVirtualInvokeData       = 0x9238B0;
 static uintptr_t s_rvaCarBehaviourSetEffectsEnabled = 0x23D1440; // fallback beta RVA (vanilla 0x1E00F50)
 
-// CarX.DeformationPhysics.Systems
-static uintptr_t s_rvaApplyForceToDeformUpdate       = 0xEBF1E0;
-static uintptr_t s_rvaBreakPhysicsJointUpdate        = 0xEC2020;
+// CarX.DeformationPhysics
+static uintptr_t s_rvaApplyForceToDeformUpdate       = 0xEBF350;
+static uintptr_t s_rvaBreakPhysicsJointUpdate        = 0xEC1DC0;
+static uintptr_t s_rvaBaseCollisionEffectApply       = 0xEA0450;
 
 static uintptr_t s_rvaINetworkCarContainerTypeInfo  = 0x843A128;
 static uintptr_t s_rvaDeformSleepTypeInfoGlobal     = 0x83E7018;
@@ -52,6 +53,7 @@ using t_NetCarGetInt32         = int32_t(__fastcall*)(void* netCar, void* method
 using t_NetCarGetBool          = uint8_t(__fastcall*)(void* netCar, void* method);
 using t_SetCarEffectsEnabled   = void(__fastcall*)(void* carBehaviour, uint8_t enabled, void* method);
 using t_SystemOnUpdate         = void(__fastcall*)(void* self, void* method);
+using t_BaseCollisionEffectApply = void(__fastcall*)(void* self, void* a2, void* a3, void* a4);
 
 using t_CX_CarSetSimMode       = void(*)(void* car, int enable);
 using t_CX_CarGetSimMode       = int(*)(void* car);
@@ -117,6 +119,7 @@ t_SwitchingUpdate s_origSwitchingUpdate = nullptr;
 t_IsFarCar s_origIsFarCar = nullptr;
 t_SystemOnUpdate s_origApplyForceOnUpdate = nullptr;
 t_SystemOnUpdate s_origBreakPhysicsJointOnUpdate = nullptr;
+t_BaseCollisionEffectApply s_origBaseCollisionEffectApply = nullptr;
 bool s_noDamageOverride = false;
 t_ProviderGetTransform pfn_ProviderGetTransform = nullptr;
 t_TransformGetPos pfn_TransformGetPos = nullptr;
@@ -844,6 +847,28 @@ static void __fastcall Hooked_BreakPhysicsJointOnUpdate(void* self, void* method
     s_origBreakPhysicsJointOnUpdate(self, method);
 }
 
+static void __fastcall Hooked_BaseCollisionEffectApply(void* self, void* a2, void* a3, void* a4) {
+    HookManager::ScopedHookGuard guard;
+    if (HookManager::IsUnloading() || !s_origBaseCollisionEffectApply) {
+        if (s_origBaseCollisionEffectApply) s_origBaseCollisionEffectApply(self, a2, a3, a4);
+        return;
+    }
+    if (!NativeCarX::IsInSessionFast()) {
+        s_origBaseCollisionEffectApply(self, a2, a3, a4);
+        return;
+    }
+    bool block = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(s_mutex);
+        block = s_cfg.disableDamage || s_noDamageOverride;
+    }
+    if (block) {
+        s_stats.damageBlocks++;
+        return; // Headlights breaking, cracked glass & collision mesh replacement blocked!
+    }
+    s_origBaseCollisionEffectApply(self, a2, a3, a4);
+}
+
 static uint8_t __fastcall Hooked_IsFarCar(void* self, void* netCar, void* method) {
     HookManager::ScopedHookGuard guard;
     if (HookManager::IsUnloading() || !s_origIsFarCar) {
@@ -1139,6 +1164,7 @@ bool CarSimOptimizer::Init() {
     void* targetIsFar = s_rvaIsFarCar ? reinterpret_cast<void*>(s_gaBase + s_rvaIsFarCar) : nullptr;
     void* targetApplyForce = s_rvaApplyForceToDeformUpdate ? reinterpret_cast<void*>(s_gaBase + s_rvaApplyForceToDeformUpdate) : nullptr;
     void* targetBreakJoint = s_rvaBreakPhysicsJointUpdate ? reinterpret_cast<void*>(s_gaBase + s_rvaBreakPhysicsJointUpdate) : nullptr;
+    void* targetEffectApply = s_rvaBaseCollisionEffectApply ? reinterpret_cast<void*>(s_gaBase + s_rvaBaseCollisionEffectApply) : nullptr;
 
     bool okSwitch = false;
     if (targetSwitching) {
@@ -1176,10 +1202,19 @@ bool CarSimOptimizer::Init() {
             "BreakPhysicsJointSystem::OnUpdate");
     }
 
+    bool okEffect = false;
+    if (targetEffectApply) {
+        okEffect = HookManager::CreateHook(
+            targetEffectApply,
+            reinterpret_cast<void*>(Hooked_BaseCollisionEffectApply),
+            reinterpret_cast<void**>(&s_origBaseCollisionEffectApply),
+            "BaseCollisionEffectBehaviour::Apply");
+    }
+
     ResolveNativeExportsIfNeeded();
     ResolveStaticsIfNeeded();
 
-    s_stats.hooksInstalled = (okSwitch || okFar || okApply || okBreak);
+    s_stats.hooksInstalled = (okSwitch || okFar || okApply || okBreak || okEffect);
     s_stats.initialized = true;
 
     Logger::Info(std::string("CarSimOptimizer initialized (hooks=") +
@@ -1329,6 +1364,7 @@ void CarSimOptimizer::SetConfig(const Config& cfg) {
     if (s_noDamageOverride) {
         clamped.disableDamage = true;
     }
+    const bool damageTurnedOn = clamped.disableDamage && !s_cfg.disableDamage;
     s_cfg = clamped;
     if (!s_noDamageOverride) {
         NativeCarX::SetNoDamage(clamped.disableDamage);
@@ -1336,7 +1372,7 @@ void CarSimOptimizer::SetConfig(const Config& cfg) {
     if (clamped.disableTireWear) {
         NativeCarX::SetNoTireWear(true);
     }
-    if (clamped.disableDamage) {
+    if (damageTurnedOn) {
         UnityBridge::RequestRepairPlayerCar();
     }
 }
@@ -1364,6 +1400,7 @@ std::vector<CarSimOptimizer::CarEntry> CarSimOptimizer::GetNetCarsSnapshot() {
 
 void CarSimOptimizer::SetNoDamageOverride(bool enable) {
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    if (s_noDamageOverride == enable && s_cfg.disableDamage == enable) return;
     s_noDamageOverride = enable;
     s_cfg.disableDamage = enable;
     NativeCarX::SetNoDamage(enable);

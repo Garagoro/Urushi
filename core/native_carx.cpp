@@ -626,6 +626,7 @@ void* NativeCarX::GetManagerPtr() {
 
 void NativeCarX::SetNoDamage(bool enable) {
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    if (s_noDamage == enable) return;
     s_noDamage = enable;
     if (enable) {
         void* car = s_knownPlayerCarPtr ? s_knownPlayerCarPtr : s_playerCarPtr;
