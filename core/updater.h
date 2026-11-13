@@ -6,7 +6,7 @@
 #include <vector>
 
 #ifndef URUSHI_VERSION
-#define URUSHI_VERSION "1.1.0"
+#define URUSHI_VERSION "1.2.0"
 #endif
 
 namespace Updater {

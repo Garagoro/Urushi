@@ -426,6 +426,26 @@ static const unsigned char kGithubAlpha20[20 * 20] = {
       0,   0,   0,   0,   0,  69, 162,  73,   0,   0,   0,   0,  84, 139,  18,   0,   0,   0,   0,   0,
 };
 
+// Official Lucide refresh-cw 16x16 anti-aliased SVG alpha bitmap
+static const unsigned char kLucideRefreshAlpha16[16 * 16] = {
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,   0,   0,  60, 119, 168, 169, 122,  69,   0,   0, 115, 111,   0,
+      0,   0,   0,  18, 169, 255, 255, 224, 220, 255, 255, 195,  36, 214, 213,   0,
+      0,   0,  22, 230, 253, 144,  34,   0,   0,  24, 133, 254, 249, 227, 213,   0,
+      0,   0, 176, 253,  57,   0,   0,   0,   0,   1, 105, 156, 245, 255, 226,   0,
+      0,  42, 255, 134,   0,   0,   0,   0,   0,  15, 243, 255, 255, 255, 234,   0,
+      0, 112, 255,  26,   0,   0,   0,   0,   0,   0,  31,  64,  64,  85,  34,   0,
+      0, 182, 239,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 115, 111,   0,
+      0, 115, 108,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 240, 187,   0,
+      0,  37,  77,  64,  64,  40,   0,   0,   0,   0,   0,   0,  31, 255, 136,   0,
+      0, 241, 255, 255, 255, 255,  19,   0,   0,   0,   0,   0, 139, 255,  85,   0,
+      0, 227, 255, 244, 155, 128,   1,   0,   0,   0,   0,  56, 253, 204,   8,   0,
+      0, 214, 227, 249, 253, 132,  22,   0,   0,   0, 100, 248, 230,  27,   0,   0,
+      0, 214, 213,  37, 194, 255, 255, 218, 209, 241, 255, 161,  17,   0,   0,   0,
+      0, 115, 108,   0,   1,  69, 123, 170, 168, 119,  58,   0,   0,   0,   0,   0,
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+};
+
 static void DrawAlphaMask(ImDrawList* dl, ImVec2 pos, float size, const unsigned char* mask, int w, int h, ImU32 baseCol) {
     const float pixelW = size / static_cast<float>(w);
     const float pixelH = size / static_cast<float>(h);
@@ -1913,8 +1933,9 @@ bool UrushiUI::Button(const std::string& label, float width, float height, Butto
     std::string vis = hashPos ? label.substr(0, hashPos - label.c_str()) : label;
 
     if (vis == "@refresh" || vis == "refresh" || vis == "\xe2\x86\xbb" || vis == "\xe2\x9f\xb3") {
-        ImVec2 center(pos.x + w * 0.5f, pos.y + height * 0.5f);
-        DrawRefreshIcon(dl, center, 5.5f * S, fg, std::max(1.2f, 1.5f * S));
+        const float iconSz = 14.0f * S;
+        ImVec2 ipos(pos.x + (w - iconSz) * 0.5f, pos.y + (height - iconSz) * 0.5f);
+        DrawAlphaMask(dl, ipos, iconSz, kLucideRefreshAlpha16, 16, 16, fg);
     } else if (vis == "@check" || vis == "\xe2\x9c\x93") {
         ImVec2 center(pos.x + w * 0.5f, pos.y + height * 0.5f);
         DrawCheckIcon(dl, center, 6.0f * S, fg, std::max(1.2f, 1.8f * S));
