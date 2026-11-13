@@ -1,3 +1,3 @@
 version=1.1.0
-link_time=1794535896
-notes=Release v1.1.0: Dynamic signature scans, instant live hot-reinject and dynamic keybinds hub
+link_time=1794536089
+notes=Automated release build v1.1.0: dynamic sigscans, Unity Transform cluster fixes, reactive config and live auto-updater
