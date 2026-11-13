@@ -644,8 +644,8 @@ static uint32_t InternalsPartOfMaterial(const char* name) {
     size_t n = 0;
     for (; name[n] && n + 1 < sizeof(l); ++n) l[n] = static_cast<char>(tolower(static_cast<unsigned char>(name[n])));
     auto has = [&](const char* s) { return strstr(l, s) != nullptr; };
-    if (has("car_body") || has("car_glass") || has("shadowcaster")) return 0;
-    if (has("rim") || has("yolo") || has("defaultdiffuse") || has("wheel_motion")) return CarFX::kPartWheels;
+    if (has("car_body") || has("car_glass") || has("shadowcaster") || has("wheel_motion")) return 0;
+    if (has("rim") || has("yolo") || has("defaultdiffuse")) return CarFX::kPartWheels;
     if (has("brakerotor") || has("caliper")) return CarFX::kPartBrakes;
     if (has("suspension")) return CarFX::kPartSuspension;
     if (has("engine") || has("j2z") || has("rs20") || has("aircleaner") || has("chrome") || has("plastic") ||
@@ -1916,6 +1916,20 @@ bool UnityBridge::Init() {
 
     pfn_GetMainCameraNative      = reinterpret_cast<t_GetMainCameraNative>(PatternScanner::FindOrFallback(hUnity, "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B 0D ? ? ? ? BA 05 00 00 00", 0x592900, "GetMainCameraNative"));
     pfn_InternalRaycast          = reinterpret_cast<t_InternalRaycast>(PatternScanner::FindOrFallback(hUnity, "48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 41 56 48 81 EC A0 00 00 00 48 8B 3D ? ? ? ? 49 8B D9 0F 29 70 E8 48 8B F2 0F 28 F2", 0x6B6140, "InternalRaycast"));
+
+    // Pre-cache all Unity icalls upfront during initialization to eliminate mid-game lazy pattern scans
+    GetInstanceIDToObjectFn(s_unityBase);
+    GetMatGetTextureFn(s_unityBase);
+    GetMatSetTextureFn(s_unityBase);
+    GetGfxCopyTextureFullFn(s_unityBase);
+    GetNativeTexPtrFn(s_unityBase);
+    GetMatGetRenderQueueFn(s_unityBase);
+    GetMatSetRenderQueueFn(s_unityBase);
+    GetMatSetShaderPassEnabledFn(s_unityBase);
+    GetOrAssignInstantiatedMatFn(s_unityBase);
+    GetRendererSetMat0Fn(s_unityBase);
+    GetGameObjectManagerPtr(s_unityBase);
+    GetGCHandleTargetPtr(s_unityBase);
 
     uintptr_t targetExecLoopVa = PatternScanner::FindOrFallback(hUnity, "48 89 5C 24 10 48 89 74 24 18 48 89 7C 24 20 55 41 56 41 57 48 8D AC 24 70 FF FF FF 48 81 EC 90 01 00 00 4C 8B F1", 0x5AC580, "ExecutePlayerLoop");
     void* targetExecLoop = reinterpret_cast<void*>(targetExecLoopVa);
