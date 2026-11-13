@@ -115,6 +115,11 @@ UrushiUI::Language s_language = []() {
 }();
 bool s_singleTabMode = false;
 
+// UI Element Introspection & Config Auto-Discovery
+static std::mutex s_uiElementMutex;
+static std::string s_currentRenderingWindow;
+static std::unordered_map<std::string, std::unordered_map<std::string, UrushiUI::UiElementDesc>> s_uiElements;
+
 // ---- dock order (user drag & drop), stored in urushi_dock.ini next to urushi_settings.ini ----
 constexpr int kDockMaxVisible = 12;   // more entries than this -> the list scrolls
 bool s_dockEdit = false;
@@ -910,6 +915,7 @@ static void RenderFloatingWindows(bool menuOpen, lua_State* L) {
                 if (ImGui::BeginChild("##body", ImVec2(childW, childH), ImGuiChildFlags_None, bodyFlags)) {
                     ImGui::BeginGroup();
                     {
+                        UrushiUI::SetCurrentRenderingWindow(w.id);
                         lua_rawgeti(L, LUA_REGISTRYINDEX, w.luaRenderRef);
                         if (lua_isfunction(L, -1)) {
                             lua_getglobal(L, "ui");
@@ -924,6 +930,7 @@ static void RenderFloatingWindows(bool menuOpen, lua_State* L) {
                         } else {
                             lua_pop(L, 1);
                         }
+                        UrushiUI::SetCurrentRenderingWindow("");
                     }
                     ImGui::EndGroup();
                     float measuredH = ImGui::GetItemRectSize().y;
@@ -1099,6 +1106,15 @@ void UrushiUI::BeginLuaReload() {
     for (auto& w : s_windows) {
         w.registeredInPass = false;
         w.luaRenderRef = -1;
+    }
+    {
+        std::lock_guard<std::mutex> elemLock(s_uiElementMutex);
+        for (auto& wPair : s_uiElements) {
+            for (auto& ePair : wPair.second) {
+                ePair.second.initialized = false;
+                ePair.second.changed = false;
+            }
+        }
     }
 }
 
@@ -2200,3 +2216,154 @@ void UrushiUI::Separator() {
 void UrushiUI::Spacing(float px) {
     ImGui::Dummy(ImVec2(0.0f, px));
 }
+
+// UI Element Introspection & Config Auto-Discovery
+void UrushiUI::SetCurrentRenderingWindow(const std::string& winId) {
+    std::lock_guard<std::mutex> lock(s_uiElementMutex);
+    s_currentRenderingWindow = winId;
+}
+
+std::string UrushiUI::GetCurrentRenderingWindow() {
+    std::lock_guard<std::mutex> lock(s_uiElementMutex);
+    return s_currentRenderingWindow;
+}
+
+void UrushiUI::ParseElementId(const std::string& input, std::string& outLabel, std::string& outId) {
+    size_t pos = input.find("##");
+    if (pos != std::string::npos) {
+        outLabel = input.substr(0, pos);
+        outId = input.substr(pos + 2);
+        if (outId.empty()) outId = outLabel;
+    } else {
+        outLabel = input;
+        outId = input;
+    }
+}
+
+void UrushiUI::RecordUiElement(const std::string& winId, const std::string& elemId, const std::string& label,
+                              const std::string& type, bool bVal, double nVal, const std::string& sVal, bool changed) {
+    std::lock_guard<std::mutex> lock(s_uiElementMutex);
+    std::string wKey = winId.empty() ? "general" : winId;
+    auto& elem = s_uiElements[wKey][elemId];
+    elem.id = elemId;
+    elem.label = label;
+    elem.type = type;
+    elem.boolValue = bVal;
+    elem.numValue = nVal;
+    elem.strValue = sVal;
+    elem.changed = changed;
+    elem.initialized = true;
+}
+
+bool UrushiUI::ConsumeStoredBool(const std::string& winId, const std::string& elemId, bool& val) {
+    std::lock_guard<std::mutex> lock(s_uiElementMutex);
+    std::string wKey = winId.empty() ? "general" : winId;
+    auto wIt = s_uiElements.find(wKey);
+    if (wIt != s_uiElements.end()) {
+        auto eIt = wIt->second.find(elemId);
+        if (eIt != wIt->second.end() && eIt->second.hasStored && !eIt->second.initialized) {
+            bool oldVal = val;
+            val = eIt->second.boolValue;
+            eIt->second.initialized = true;
+            return (val != oldVal);
+        }
+    }
+    return false;
+}
+
+bool UrushiUI::ConsumeStoredDouble(const std::string& winId, const std::string& elemId, double& val) {
+    std::lock_guard<std::mutex> lock(s_uiElementMutex);
+    std::string wKey = winId.empty() ? "general" : winId;
+    auto wIt = s_uiElements.find(wKey);
+    if (wIt != s_uiElements.end()) {
+        auto eIt = wIt->second.find(elemId);
+        if (eIt != wIt->second.end() && eIt->second.hasStored && !eIt->second.initialized) {
+            double oldVal = val;
+            val = eIt->second.numValue;
+            eIt->second.initialized = true;
+            return (std::abs(val - oldVal) > 0.0001);
+        }
+    }
+    return false;
+}
+
+bool UrushiUI::ConsumeStoredInt(const std::string& winId, const std::string& elemId, int& val) {
+    std::lock_guard<std::mutex> lock(s_uiElementMutex);
+    std::string wKey = winId.empty() ? "general" : winId;
+    auto wIt = s_uiElements.find(wKey);
+    if (wIt != s_uiElements.end()) {
+        auto eIt = wIt->second.find(elemId);
+        if (eIt != wIt->second.end() && eIt->second.hasStored && !eIt->second.initialized) {
+            int oldVal = val;
+            val = static_cast<int>(eIt->second.numValue);
+            eIt->second.initialized = true;
+            return (val != oldVal);
+        }
+    }
+    return false;
+}
+
+bool UrushiUI::ConsumeStoredString(const std::string& winId, const std::string& elemId, std::string& val) {
+    std::lock_guard<std::mutex> lock(s_uiElementMutex);
+    std::string wKey = winId.empty() ? "general" : winId;
+    auto wIt = s_uiElements.find(wKey);
+    if (wIt != s_uiElements.end()) {
+        auto eIt = wIt->second.find(elemId);
+        if (eIt != wIt->second.end() && eIt->second.hasStored && !eIt->second.initialized) {
+            std::string oldVal = val;
+            val = eIt->second.strValue;
+            eIt->second.initialized = true;
+            return (val != oldVal);
+        }
+    }
+    return false;
+}
+
+void UrushiUI::SetStoredUiElement(const std::string& winId, const std::string& elemId,
+                                  const std::string& type, bool bVal, double nVal, const std::string& sVal) {
+    std::lock_guard<std::mutex> lock(s_uiElementMutex);
+    std::string wKey = winId.empty() ? "general" : winId;
+    auto& elem = s_uiElements[wKey][elemId];
+    elem.id = elemId;
+    elem.type = type;
+    elem.boolValue = bVal;
+    elem.numValue = nVal;
+    elem.strValue = sVal;
+    elem.hasStored = true;
+    elem.initialized = false;
+}
+
+std::vector<std::pair<std::string, std::vector<UrushiUI::UiElementDesc>>> UrushiUI::GetAllUiElements() {
+    std::lock_guard<std::mutex> lock(s_uiElementMutex);
+    std::vector<std::pair<std::string, std::vector<UiElementDesc>>> result;
+    result.reserve(s_uiElements.size());
+    for (const auto& wPair : s_uiElements) {
+        std::vector<UiElementDesc> elems;
+        elems.reserve(wPair.second.size());
+        for (const auto& ePair : wPair.second) {
+            elems.push_back(ePair.second);
+        }
+        result.emplace_back(wPair.first, std::move(elems));
+    }
+    return result;
+}
+
+std::vector<UrushiUI::UiElementDesc> UrushiUI::GetWindowUiElements(const std::string& winId) {
+    std::lock_guard<std::mutex> lock(s_uiElementMutex);
+    std::vector<UiElementDesc> result;
+    std::string wKey = winId.empty() ? "general" : winId;
+    auto it = s_uiElements.find(wKey);
+    if (it != s_uiElements.end()) {
+        result.reserve(it->second.size());
+        for (const auto& pair : it->second) {
+            result.push_back(pair.second);
+        }
+    }
+    return result;
+}
+
+void UrushiUI::ClearUiElements() {
+    std::lock_guard<std::mutex> lock(s_uiElementMutex);
+    s_uiElements.clear();
+}
+

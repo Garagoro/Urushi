@@ -288,8 +288,17 @@ int Lua_UiEndCard(lua_State* /*L*/) {
 int Lua_UiToggle(lua_State* L) {
     const char* label = luaL_checkstring(L, 1);
     bool val = lua_toboolean(L, 2) != 0;
+
+    std::string winId = UrushiUI::GetCurrentRenderingWindow();
+    if (winId.empty()) winId = "general";
+    std::string cleanLabel, elemId;
+    UrushiUI::ParseElementId(label, cleanLabel, elemId);
+
+    bool forced = UrushiUI::ConsumeStoredBool(winId, elemId, val);
     bool ch = UrushiUI::Toggle(label, &val);
-    lua_pushboolean(L, ch ? 1 : 0);
+    UrushiUI::RecordUiElement(winId, elemId, cleanLabel, "toggle", val, 0.0, "", ch);
+
+    lua_pushboolean(L, (ch || forced) ? 1 : 0);
     lua_pushboolean(L, val ? 1 : 0);
     return 2;
 }
@@ -300,8 +309,20 @@ int Lua_UiSliderFloat(lua_State* L) {
     float minV = static_cast<float>(luaL_checknumber(L, 3));
     float maxV = static_cast<float>(luaL_checknumber(L, 4));
     const char* fmt = luaL_optstring(L, 5, "%.2f");
+
+    std::string winId = UrushiUI::GetCurrentRenderingWindow();
+    if (winId.empty()) winId = "general";
+    std::string cleanLabel, elemId;
+    UrushiUI::ParseElementId(label, cleanLabel, elemId);
+
+    double dVal = static_cast<double>(val);
+    bool forced = UrushiUI::ConsumeStoredDouble(winId, elemId, dVal);
+    if (forced) val = static_cast<float>(dVal);
+
     bool ch = UrushiUI::SliderFloat(label, &val, minV, maxV, fmt);
-    lua_pushboolean(L, ch ? 1 : 0);
+    UrushiUI::RecordUiElement(winId, elemId, cleanLabel, "slider_float", false, static_cast<double>(val), "", ch);
+
+    lua_pushboolean(L, (ch || forced) ? 1 : 0);
     lua_pushnumber(L, val);
     return 2;
 }
@@ -312,8 +333,18 @@ int Lua_UiSliderInt(lua_State* L) {
     int minV = static_cast<int>(luaL_checkinteger(L, 3));
     int maxV = static_cast<int>(luaL_checkinteger(L, 4));
     const char* fmt = luaL_optstring(L, 5, "%d");
+
+    std::string winId = UrushiUI::GetCurrentRenderingWindow();
+    if (winId.empty()) winId = "general";
+    std::string cleanLabel, elemId;
+    UrushiUI::ParseElementId(label, cleanLabel, elemId);
+
+    bool forced = UrushiUI::ConsumeStoredInt(winId, elemId, val);
+
     bool ch = UrushiUI::SliderInt(label, &val, minV, maxV, fmt);
-    lua_pushboolean(L, ch ? 1 : 0);
+    UrushiUI::RecordUiElement(winId, elemId, cleanLabel, "slider_int", false, static_cast<double>(val), "", ch);
+
+    lua_pushboolean(L, (ch || forced) ? 1 : 0);
     lua_pushinteger(L, val);
     return 2;
 }
@@ -334,8 +365,20 @@ int Lua_UiSegmented(lua_State* L) {
         opts.push_back(lua_isstring(L, -1) ? lua_tostring(L, -1) : "");
         lua_pop(L, 1);
     }
+
+    std::string winId = UrushiUI::GetCurrentRenderingWindow();
+    if (winId.empty()) winId = "general";
+    std::string cleanLabel, elemId;
+    UrushiUI::ParseElementId(id, cleanLabel, elemId);
+
+    int storedCur = cur + 1;
+    bool forced = UrushiUI::ConsumeStoredInt(winId, elemId, storedCur);
+    if (forced) cur = storedCur - 1;
+
     bool ch = UrushiUI::Segmented(id, &cur, opts);
-    lua_pushboolean(L, ch ? 1 : 0);
+    UrushiUI::RecordUiElement(winId, elemId, cleanLabel, "segmented", false, static_cast<double>(cur + 1), "", ch);
+
+    lua_pushboolean(L, (ch || forced) ? 1 : 0);
     lua_pushinteger(L, cur + 1);
     return 2;
 }
@@ -415,8 +458,20 @@ int Lua_UiCombo(lua_State* L) {
         items.push_back(lua_isstring(L, -1) ? lua_tostring(L, -1) : "");
         lua_pop(L, 1);
     }
+
+    std::string winId = UrushiUI::GetCurrentRenderingWindow();
+    if (winId.empty()) winId = "general";
+    std::string cleanLabel, elemId;
+    UrushiUI::ParseElementId(label, cleanLabel, elemId);
+
+    int storedCur = cur + 1;
+    bool forced = UrushiUI::ConsumeStoredInt(winId, elemId, storedCur);
+    if (forced) cur = storedCur - 1;
+
     bool ch = UrushiUI::Combo(label, &cur, items);
-    lua_pushboolean(L, ch ? 1 : 0);
+    UrushiUI::RecordUiElement(winId, elemId, cleanLabel, "combo", false, static_cast<double>(cur + 1), "", ch);
+
+    lua_pushboolean(L, (ch || forced) ? 1 : 0);
     lua_pushinteger(L, cur + 1);
     return 2;
 }
@@ -425,8 +480,18 @@ int Lua_UiInputText(lua_State* L) {
     const char* label = luaL_checkstring(L, 1);
     std::string text = luaL_optstring(L, 2, "");
     size_t maxLen = static_cast<size_t>(luaL_optinteger(L, 3, 256));
+
+    std::string winId = UrushiUI::GetCurrentRenderingWindow();
+    if (winId.empty()) winId = "general";
+    std::string cleanLabel, elemId;
+    UrushiUI::ParseElementId(label, cleanLabel, elemId);
+
+    bool forced = UrushiUI::ConsumeStoredString(winId, elemId, text);
+
     bool ch = UrushiUI::InputText(label, text, maxLen);
-    lua_pushboolean(L, ch ? 1 : 0);
+    UrushiUI::RecordUiElement(winId, elemId, cleanLabel, "input_text", false, 0.0, text, ch);
+
+    lua_pushboolean(L, (ch || forced) ? 1 : 0);
     lua_pushstring(L, text.c_str());
     return 2;
 }
@@ -880,6 +945,72 @@ int Lua_UrushiIsSafeMode(lua_State* L) {
     return 1;
 }
 
+static void PushUiElementTable(lua_State* L, const UrushiUI::UiElementDesc& desc) {
+    lua_createtable(L, 0, 7);
+    lua_pushstring(L, desc.id.c_str());
+    lua_setfield(L, -2, "id");
+    lua_pushstring(L, desc.label.c_str());
+    lua_setfield(L, -2, "label");
+    lua_pushstring(L, desc.type.c_str());
+    lua_setfield(L, -2, "type");
+    if (desc.type == "toggle") {
+        lua_pushboolean(L, desc.boolValue ? 1 : 0);
+        lua_setfield(L, -2, "value");
+    } else if (desc.type == "input_text" || desc.type == "keybind") {
+        lua_pushstring(L, desc.strValue.c_str());
+        lua_setfield(L, -2, "value");
+    } else {
+        lua_pushnumber(L, desc.numValue);
+        lua_setfield(L, -2, "value");
+    }
+    lua_pushboolean(L, desc.changed ? 1 : 0);
+    lua_setfield(L, -2, "changed");
+    lua_pushboolean(L, desc.hasStored ? 1 : 0);
+    lua_setfield(L, -2, "has_stored");
+}
+
+int Lua_UrushiGetUiElements(lua_State* L) {
+    if (lua_gettop(L) >= 1 && lua_isstring(L, 1)) {
+        std::string winId = lua_tostring(L, 1);
+        auto elems = UrushiUI::GetWindowUiElements(winId);
+        lua_createtable(L, 0, static_cast<int>(elems.size()));
+        for (const auto& el : elems) {
+            PushUiElementTable(L, el);
+            lua_setfield(L, -2, el.id.c_str());
+        }
+        return 1;
+    }
+
+    auto all = UrushiUI::GetAllUiElements();
+    lua_createtable(L, 0, static_cast<int>(all.size()));
+    for (const auto& wPair : all) {
+        lua_createtable(L, 0, static_cast<int>(wPair.second.size()));
+        for (const auto& el : wPair.second) {
+            PushUiElementTable(L, el);
+            lua_setfield(L, -2, el.id.c_str());
+        }
+        lua_setfield(L, -2, wPair.first.c_str());
+    }
+    return 1;
+}
+
+int Lua_UrushiSetUiElement(lua_State* L) {
+    const char* winId = luaL_checkstring(L, 1);
+    const char* elemId = luaL_checkstring(L, 2);
+    int valType = lua_type(L, 3);
+    if (valType == LUA_TBOOLEAN) {
+        bool b = lua_toboolean(L, 3) != 0;
+        UrushiUI::SetStoredUiElement(winId, elemId, "toggle", b, 0.0, "");
+    } else if (valType == LUA_TNUMBER) {
+        double d = lua_tonumber(L, 3);
+        UrushiUI::SetStoredUiElement(winId, elemId, "number", false, d, "");
+    } else if (valType == LUA_TSTRING) {
+        const char* s = lua_tostring(L, 3);
+        UrushiUI::SetStoredUiElement(winId, elemId, "string", false, 0.0, s ? s : "");
+    }
+    return 0;
+}
+
 const luaL_Reg kUrushiFuncs[] = {
     { "register_window", Lua_UrushiRegisterWindow },
     { "set_window_open", Lua_UrushiSetWindowOpen },
@@ -911,6 +1042,8 @@ const luaL_Reg kUrushiFuncs[] = {
     { "get_last_crash",  Lua_UrushiGetLastCrash },
     { "open_crash_dir",  Lua_UrushiOpenCrashDir },
     { "is_safe_mode",    Lua_UrushiIsSafeMode },
+    { "get_ui_elements", Lua_UrushiGetUiElements },
+    { "set_ui_element",  Lua_UrushiSetUiElement },
     { nullptr, nullptr }
 };
 
@@ -942,6 +1075,7 @@ const luaL_Reg kUiFuncs[] = {
     { "separator",    Lua_UiSeparator },
     { "spacing",      Lua_UiSpacing },
     { "avail_width",  Lua_UiAvailWidth },
+    { "get_elements", Lua_UrushiGetUiElements },
     { nullptr, nullptr }
 };
 

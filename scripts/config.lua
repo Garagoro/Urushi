@@ -422,6 +422,27 @@ function config.sync()
             end
         end
     end
+
+    -- Automatic introspection of all live C++ UI elements across all scripts & windows
+    if urushi and urushi.get_ui_elements then
+        local ok, ui_elems = pcall(urushi.get_ui_elements)
+        if ok and type(ui_elems) == "table" then
+            for win_id, elems in pairs(ui_elems) do
+                local sec = resolve_section(win_id)
+                if type(elems) == "table" then
+                    for elem_id, el in pairs(elems) do
+                        if type(el) == "table" and el.value ~= nil then
+                            if type(data[sec]) ~= "table" then data[sec] = {} end
+                            if el.changed or data[sec][elem_id] ~= el.value then
+                                data[sec][elem_id] = deep_copy(el.value)
+                                config.mark_dirty()
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
 end
 
 function config.get_all()
@@ -634,6 +655,20 @@ function config.reload()
             elseif type(reg.store) == "table" and type(saved) == "table" then
                 for k, v in pairs(saved) do
                     reg.store[k] = deep_copy(v)
+                end
+            end
+        end
+    end
+
+    -- Feed stored values into C++ UI introspection registry
+    if urushi and urushi.set_ui_element then
+        for sec, section_data in pairs(data) do
+            if type(section_data) == "table" and sec ~= "version" then
+                for elem_id, val in pairs(section_data) do
+                    local vt = type(val)
+                    if vt == "boolean" or vt == "number" or vt == "string" then
+                        pcall(urushi.set_ui_element, sec, elem_id, val)
+                    end
                 end
             end
         end

@@ -186,4 +186,34 @@ public:
     static void Spacing(float px = 6.0f);
 
     static float CurrentContentWidth();
+
+    // UI Element Introspection & Config Auto-Discovery
+    struct UiElementDesc {
+        std::string id;
+        std::string label;
+        std::string type; // "toggle", "slider_float", "slider_int", "segmented", "combo", "input_text"
+        double numValue = 0.0;
+        bool boolValue = false;
+        std::string strValue;
+        bool changed = false;
+        bool hasStored = false;
+        bool initialized = false;
+    };
+
+    static void SetCurrentRenderingWindow(const std::string& winId);
+    static std::string GetCurrentRenderingWindow();
+    static void ParseElementId(const std::string& input, std::string& outLabel, std::string& outId);
+
+    static void RecordUiElement(const std::string& winId, const std::string& elemId, const std::string& label,
+                                const std::string& type, bool bVal, double nVal, const std::string& sVal, bool changed);
+    static bool ConsumeStoredBool(const std::string& winId, const std::string& elemId, bool& val);
+    static bool ConsumeStoredDouble(const std::string& winId, const std::string& elemId, double& val);
+    static bool ConsumeStoredInt(const std::string& winId, const std::string& elemId, int& val);
+    static bool ConsumeStoredString(const std::string& winId, const std::string& elemId, std::string& val);
+
+    static void SetStoredUiElement(const std::string& winId, const std::string& elemId,
+                                   const std::string& type, bool bVal, double nVal, const std::string& sVal);
+    static std::vector<std::pair<std::string, std::vector<UiElementDesc>>> GetAllUiElements();
+    static std::vector<UiElementDesc> GetWindowUiElements(const std::string& winId);
+    static void ClearUiElements();
 };
