@@ -1,3 +1,3 @@
 version=1.2.0
-link_time=1794540408
+link_time=1794544859
 notes=Automated release build v1.2.0: dynamic sigscans, C++ UI introspection, auto-persistence and live auto-updater
