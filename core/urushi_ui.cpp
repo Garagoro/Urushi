@@ -353,6 +353,13 @@ static void DrawModuleIcon(ImDrawList* dl, ImVec2 center, const std::string& ico
         dl->AddLine(ImVec2(center.x - r, center.y), ImVec2(center.x - 1.9f * s, center.y), col, th);
         dl->AddLine(ImVec2(center.x + 1.9f * s, center.y), ImVec2(center.x + r, center.y), col, th);
         dl->AddLine(ImVec2(center.x, center.y + 1.9f * s), ImVec2(center.x, center.y + r), col, th);
+    } else if (icon == "keyboard") {
+        dl->AddRect(ImVec2(center.x - 6.5f * s, center.y - 4.5f * s),
+                    ImVec2(center.x + 6.5f * s, center.y + 4.5f * s), col, 1.5f * s, 0, th);
+        dl->AddLine(ImVec2(center.x - 4.0f * s, center.y - 2.0f * s), ImVec2(center.x - 2.5f * s, center.y - 2.0f * s), col, th);
+        dl->AddLine(ImVec2(center.x - 0.7f * s, center.y - 2.0f * s), ImVec2(center.x + 0.8f * s, center.y - 2.0f * s), col, th);
+        dl->AddLine(ImVec2(center.x + 2.5f * s, center.y - 2.0f * s), ImVec2(center.x + 4.0f * s, center.y - 2.0f * s), col, th);
+        dl->AddLine(ImVec2(center.x - 3.5f * s, center.y + 1.8f * s), ImVec2(center.x + 3.5f * s, center.y + 1.8f * s), col, th);
     } else {
         // settings / gear
         dl->AddCircle(center, 3.0f * s, col, 14, th);

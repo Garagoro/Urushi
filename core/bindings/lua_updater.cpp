@@ -21,6 +21,7 @@ const luaL_Reg kUpdaterFuncs[] = {
     { "get_status",    LuaUpdater::GetStatus },
     { "check",         LuaUpdater::Check },
     { "install",       LuaUpdater::Install },
+    { "reinject",      LuaUpdater::Reinject },
     { "set_dismissed", LuaUpdater::SetDismissed },
     { "restart_game",  LuaUpdater::RestartGame },
     { nullptr, nullptr }
@@ -85,6 +86,11 @@ int LuaUpdater::Check(lua_State* /*L*/) {
 
 int LuaUpdater::Install(lua_State* /*L*/) {
     Updater::StartInstallAsync();
+    return 0;
+}
+
+int LuaUpdater::Reinject(lua_State* /*L*/) {
+    Updater::Reinject();
     return 0;
 }
 

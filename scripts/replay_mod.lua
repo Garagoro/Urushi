@@ -266,6 +266,13 @@ local function toggle_pause()
     end
 end
 
+if keybinds and keybinds.register then
+    keybinds.register("replay_record", { label = T("Старт / стоп записи", "Start / stop record"), mod_name = T("3D Реплеи", "3D Replays"), order = 1 })
+    keybinds.register("replay_ghost",  { label = T("Старт / стоп призрака", "Start / stop ghost"), mod_name = T("3D Реплеи", "3D Replays"), order = 2 })
+    keybinds.register("dummy_ghost",   { label = T("3D-болванка", "3D Dummy"),                     mod_name = T("3D Реплеи", "3D Replays"), order = 3 })
+    keybinds.register("anticollision", { label = T("Анти-встречка", "Anti-Wrong-Way"),             mod_name = T("Анти-встречка", "Anti-Wrong-Way"), order = 1 })
+end
+
 events.on_key(function(key, is_down)
     if not is_down then return end
     if imgui and imgui.is_any_item_active and imgui.is_any_item_active() then return end

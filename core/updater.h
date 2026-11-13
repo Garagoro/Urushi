@@ -6,7 +6,7 @@
 #include <vector>
 
 #ifndef URUSHI_VERSION
-#define URUSHI_VERSION "0.3.1"
+#define URUSHI_VERSION "1.1.0"
 #endif
 
 namespace Updater {
@@ -58,6 +58,9 @@ void CheckAsync(bool userInitiated = false);
 
 // Downloads pending files atomically and triggers hot-reinject via Local\UrushiReload_<pid>.
 void StartInstallAsync();
+
+// Triggers hot-reinject via Local\UrushiReload_<pid> on demand.
+void Reinject();
 
 // Launches delayed Steam relaunch (AppID 1826420) and exits the current game process.
 void RestartGame();

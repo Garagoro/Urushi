@@ -13,6 +13,7 @@ public:
     static int GetStatus(lua_State* L);
     static int Check(lua_State* L);
     static int Install(lua_State* L);
+    static int Reinject(lua_State* L);
     static int SetDismissed(lua_State* L);
     static int RestartGame(lua_State* L);
 };

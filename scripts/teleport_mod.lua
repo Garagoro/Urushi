@@ -409,6 +409,11 @@ end
 
 -- ==================== Hotkeys ====================
 
+if keybinds and keybinds.register then
+    keybinds.register("tp_save",     { label = T("Запомнить точку (ТП)", "Save Checkpoint (TP)"), mod_name = T("Телепорт", "Teleport System"), order = 1 })
+    keybinds.register("tp_teleport", { label = T("Телепорт в точку", "Teleport to Point"),       mod_name = T("Телепорт", "Teleport System"), order = 2 })
+end
+
 events.on_key(function(vk, is_down)
     if not is_down or not state.hotkeys_enabled or is_typing() then return end
     if not keybinds then

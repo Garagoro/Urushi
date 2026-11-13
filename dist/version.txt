@@ -1,3 +1,3 @@
-version=0.3.1
-link_time=1794533760
-notes=Automated release build v0.3.1: dynamic sigscans, Unity Transform cluster fixes, reactive config and live auto-updater
+version=1.1.0
+link_time=1794535896
+notes=Release v1.1.0: Dynamic signature scans, instant live hot-reinject and dynamic keybinds hub

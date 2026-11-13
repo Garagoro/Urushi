@@ -211,6 +211,10 @@ if urushi and urushi.register_window then
     })
 end
 
+if keybinds and keybinds.register then
+    keybinds.register("perf_menu", { label = T("Оптимизатор FPS", "FPS Optimizer"), mod_name = T("Оптимизатор", "Optimizer"), order = 1 })
+end
+
 local register_perf_tick = events.on_main_update or events.on_update
 if register_perf_tick then
     register_perf_tick(function(dt)

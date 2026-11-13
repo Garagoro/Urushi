@@ -6,16 +6,18 @@ local DATA_FILE = "urushi_data/keybinds.json"          -- scripts may only write
 local LEGACY_FILE = "scripts/keybinds.json"            -- read-only fallback for older installs
 
 local DEFAULT_BINDS = {
-    menu_toggle    = { source = "keyboard", code = 0x73, mod = 0, name = "F4" },       -- F4
-    replay_record  = { source = "keyboard", code = 0x75, mod = 0, name = "F6" },       -- F6
-    replay_ghost   = { source = "keyboard", code = 0x76, mod = 0, name = "F7" },       -- F7
-    anticollision  = { source = "keyboard", code = 0x4A, mod = 0, name = "J" },        -- J
-    perf_menu      = { source = "keyboard", code = 0x74, mod = 0, name = "F5" },       -- F5
-    carfx_menu     = { source = "keyboard", code = 0x78, mod = 0, name = "F9" },       -- F9
-    dummy_ghost    = { source = "keyboard", code = 0x77, mod = 0, name = "F8" },       -- F8
-    tp_save        = { source = "keyboard", code = 0xDB, mod = 0, name = "[" },        -- [
-    tp_teleport    = { source = "keyboard", code = 0xDD, mod = 0, name = "]" },        -- ]
+    menu_toggle    = { source = "keyboard", code = 0x73, mod = 0, name = "F4", label = "Открыть / скрыть меню", mod_name = "URUSHI Core", order = 1 },
+    replay_record  = { source = "keyboard", code = 0x75, mod = 0, name = "F6", label = "Старт / стоп записи", mod_name = "3D Replay", order = 10 },
+    replay_ghost   = { source = "keyboard", code = 0x76, mod = 0, name = "F7", label = "Старт / стоп призрака", mod_name = "3D Replay", order = 11 },
+    dummy_ghost    = { source = "keyboard", code = 0x77, mod = 0, name = "F8", label = "3D-болванка", mod_name = "3D Replay", order = 12 },
+    anticollision  = { source = "keyboard", code = 0x4A, mod = 0, name = "J",  label = "Анти-встречка", mod_name = "Anti-Wrong-Way", order = 20 },
+    perf_menu      = { source = "keyboard", code = 0x74, mod = 0, name = "F5", label = "Оптимизатор FPS", mod_name = "Optimizer", order = 30 },
+    carfx_menu     = { source = "keyboard", code = 0x78, mod = 0, name = "F9", label = "CarFX шейдеры", mod_name = "CarFX Shaders", order = 40 },
+    tp_save        = { source = "keyboard", code = 0xDB, mod = 0, name = "[",  label = "Запомнить точку (ТП)", mod_name = "Teleport System", order = 50 },
+    tp_teleport    = { source = "keyboard", code = 0xDD, mod = 0, name = "]",  label = "Телепорт в точку", mod_name = "Teleport System", order = 51 },
 }
+
+local registered_actions = {}
 
 local current_binds = {}
 
@@ -272,6 +274,91 @@ function keybinds.render(widget_id, label, action_id)
         return true
     end
     return false
+end
+
+-- ==================== Dynamic Action Registry ====================
+
+function keybinds.register(action_id, opts)
+    if not action_id then return end
+    if type(opts) == "string" then
+        opts = { label = opts }
+    end
+    opts = opts or {}
+    local def = opts.default or DEFAULT_BINDS[action_id] or { source = "none", code = 0, mod = 0, name = "None" }
+    DEFAULT_BINDS[action_id] = def
+
+    registered_actions[action_id] = {
+        action_id = action_id,
+        label = opts.label or def.label or action_id,
+        mod_name = opts.mod_name or def.mod_name or "General",
+        order = opts.order or def.order or 100,
+    }
+
+    if not current_binds[action_id] then
+        current_binds[action_id] = {
+            source = def.source or "none",
+            code = def.code or 0,
+            mod = def.mod or 0,
+            name = def.name or "None",
+        }
+    end
+end
+
+function keybinds.get_grouped_actions()
+    -- Groups all registered and default actions by mod_name
+    local by_mod = {}
+    local mod_order = {}
+    local seen = {}
+
+    local function add_item(id, label, mod_name, order)
+        if seen[id] then return end
+        seen[id] = true
+        mod_name = mod_name or "General"
+        if not by_mod[mod_name] then
+            by_mod[mod_name] = {}
+            table.insert(mod_order, mod_name)
+        end
+        table.insert(by_mod[mod_name], {
+            action_id = id,
+            label = label or id,
+            order = order or 100,
+        })
+    end
+
+    -- First add explicitly registered actions
+    for id, info in pairs(registered_actions) do
+        add_item(id, info.label, info.mod_name, info.order)
+    end
+
+    -- Then add any defaults not yet registered
+    for id, def in pairs(DEFAULT_BINDS) do
+        add_item(id, def.label, def.mod_name, def.order)
+    end
+
+    -- Sort items inside each mod by order
+    for _, items in pairs(by_mod) do
+        table.sort(items, function(a, b)
+            if a.order ~= b.order then return a.order < b.order end
+            return a.action_id < b.action_id
+        end)
+    end
+
+    return by_mod, mod_order
+end
+
+function keybinds.reset_defaults()
+    for k, v in pairs(DEFAULT_BINDS) do
+        current_binds[k] = {
+            source = v.source,
+            code = v.code,
+            mod = v.mod,
+            name = v.name,
+        }
+        if k == "menu_toggle" and input and input.set_menu_toggle then
+            input.set_menu_toggle(current_binds[k])
+        end
+    end
+    keybinds.save()
 end
 
 -- Load bindings on module startup

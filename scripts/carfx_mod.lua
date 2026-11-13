@@ -135,6 +135,10 @@ if config and config.register then
     })
 end
 
+if keybinds and keybinds.register then
+    keybinds.register("carfx_menu", { label = T("CarFX шейдеры", "CarFX Shaders"), mod_name = T("CarFX Шейдеры", "CarFX Shaders"), order = 1 })
+end
+
 events.on_key(function(vk, is_down)
     if not keybinds and vk == VK_F9 and is_down then
         if imgui and imgui.is_any_item_active and imgui.is_any_item_active() then return end

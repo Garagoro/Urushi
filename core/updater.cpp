@@ -679,7 +679,7 @@ void InstallWorker() {
     wsprintfW(evName, L"Local\\UrushiReload_%lu", GetCurrentProcessId());
     HANDLE hReload = OpenEventW(EVENT_MODIFY_STATE, FALSE, evName);
 
-    if (hReload && !touchedProxy) {
+    if (hReload) {
         {
             std::lock_guard<std::mutex> lk(s_mtx);
             s_state = State::Reinjecting;
@@ -689,11 +689,6 @@ void InstallWorker() {
         SetEvent(hReload);
         CloseHandle(hReload);
         return;
-    }
-
-    if (hReload) {
-        // Core files can still hot-reinject, while version.dll needs a full restart to load the new proxy.
-        CloseHandle(hReload);
     }
 
     std::lock_guard<std::mutex> lk(s_mtx);
@@ -745,6 +740,24 @@ void StartInstallAsync() {
     }
     JoinFinishedWorkerLocked();
     s_worker = std::thread([]() { InstallWorker(); });
+}
+
+void Reinject() {
+    wchar_t evName[64] = {};
+    wsprintfW(evName, L"Local\\UrushiReload_%lu", GetCurrentProcessId());
+    HANDLE hReload = OpenEventW(EVENT_MODIFY_STATE, FALSE, evName);
+    if (hReload) {
+        Logger::Info("Manual hot-reinject requested. Signaling Local\\UrushiReload...");
+        {
+            std::lock_guard<std::mutex> lk(s_mtx);
+            s_state = State::Reinjecting;
+            s_statusText = L("Перезагрузка модулей URUSHI...", "Reloading URUSHI modules...");
+        }
+        SetEvent(hReload);
+        CloseHandle(hReload);
+    } else {
+        Logger::Warn("Manual hot-reinject failed: Local\\UrushiReload event not found.");
+    }
 }
 
 void RestartGame() {

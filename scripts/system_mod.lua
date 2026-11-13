@@ -225,6 +225,7 @@ end
 
 local last_check_time = os.clock()
 local install_triggered = false
+local manual_update_requested = false
 
 if events and events.on_update then
     events.on_update(function(dt)
@@ -243,9 +244,10 @@ if events and events.on_update then
 
         -- 2. Auto-install when update is ready
         local ust = updater.get_status()
-        if ust.state == "update_available" and upd_cfg.auto_install and not install_triggered then
+        if ust.state == "update_available" and (upd_cfg.auto_install or manual_update_requested) and not install_triggered then
             install_triggered = true
-            log.info(string.format("Auto-updater: update detected (v%s, %d files), auto-installing...",
+            manual_update_requested = false
+            log.info(string.format("Auto-updater: update detected (v%s, %d files), installing and reinjecting...",
                      tostring(ust.remote_version), ust.files_total or 0))
             updater.install()
         elseif ust.state ~= "update_available" then
@@ -363,45 +365,34 @@ local function render_system_window()
             ui.spacing(4)
             local bw = ui.avail_width()
             if ust.state == "update_available" then
-                if ui.button(T("Установить обновление##sys_upd_inst", "Install Update##sys_upd_inst"), bw, 30, "primary") then
+                if ui.button(T("Обновить##sys_upd_inst", "Update##sys_upd_inst"), bw, 32, "primary") then
                     updater.install()
                 end
             elseif ust.state == "restart_required" then
-                if ui.button(T("Перезапустить игру##sys_upd_rest", "Restart Game##sys_upd_rest"), bw, 30, "danger") then
+                if ui.button(T("Реинжектить на лету##sys_upd_reinj_live", "Reinject Live##sys_upd_reinj_live"), bw, 30, "accent") then
+                    if updater.reinject then updater.reinject() end
+                end
+                ui.spacing(2)
+                if ui.button(T("Перезапустить игру##sys_upd_rest", "Restart Game##sys_upd_rest"), bw, 26, "ghost") then
                     updater.restart_game()
                 end
-            elseif ust.state ~= "checking" and ust.state ~= "downloading" and ust.state ~= "reinjecting" then
-                if ui.button(T("Проверить обновления##sys_upd_chk", "Check for Updates##sys_upd_chk"), bw, 28) then
+            elseif ust.state == "downloading" or ust.state == "reinjecting" or ust.state == "checking" then
+                ui.text_dim(T("Пожалуйста, подождите...", "Please wait..."))
+            else
+                if ui.button(T("Обновить##sys_upd_chk", "Update##sys_upd_chk"), bw, 32, "primary") then
                     last_check_time = os.clock()
+                    manual_update_requested = true
                     updater.check()
+                end
+                ui.spacing(2)
+                if ui.button(T("Реинжектить DLL (Hot-Reload)##sys_upd_reinj", "Reinject DLL (Hot-Reload)##sys_upd_reinj"), bw, 26, "ghost") then
+                    if updater.reinject then updater.reinject() end
                 end
             end
         end)
     end
 
     render_stability_card()
-
-    ui.card(T("Горячие клавиши и управление", "Keybinds & Controls"), nil, function()
-        local gp_conn = input and input.is_gamepad_connected and input.is_gamepad_connected()
-        ui.badge(gp_conn and T("Геймпад: Подключен (XInput)", "Gamepad: Connected (XInput)") or T("Геймпад: Не обнаружен", "Gamepad: Not detected"), gp_conn and "green" or "muted")
-        ui.spacing(4)
-
-        if keybinds and keybinds.render then
-            keybinds.render("kb_menu",        T("Открыть / скрыть меню", "Toggle URUSHI menu"), "menu_toggle")
-            keybinds.render("kb_rec",         T("Старт / стоп записи", "Start / stop record"),  "replay_record")
-            keybinds.render("kb_ghost",       T("Старт / стоп призрака", "Start / stop ghost"), "replay_ghost")
-            keybinds.render("kb_anti",        T("Анти-встречка", "Anti-Wrong-Way"),             "anticollision")
-            keybinds.render("kb_tp_save",     T("Запомнить точку (ТП)", "Save point (TP)"),     "tp_save")
-            keybinds.render("kb_tp_go",       T("Телепорт в точку", "Teleport to point"),       "tp_teleport")
-            keybinds.render("kb_perf",        T("Оптимизатор FPS", "FPS Optimizer"),            "perf_menu")
-            keybinds.render("kb_carfx",       T("CarFX шейдеры", "CarFX Shaders"),              "carfx_menu")
-            keybinds.render("kb_dummy",       T("3D-болванка", "3D Dummy"),                     "dummy_ghost")
-        end
-
-        ui.spacing(4)
-        ui.text_dim(T("ЛКМ: нажать и переназначить на клавишу или кнопку геймпада\nПКМ / Del: сбросить · Esc: отмена",
-                      "LMB: click to rebind to key or gamepad button\nRMB / Del: clear · Esc: cancel"))
-    end)
 end
 
 if urushi and urushi.register_window then

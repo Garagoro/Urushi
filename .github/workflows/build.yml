@@ -52,7 +52,7 @@ jobs:
           $peOff = [BitConverter]::ToInt32($bytes, 60)
           $linkTime = [BitConverter]::ToUInt32($bytes, $peOff + 8)
 
-          $ver = "0.3.1"
+          $ver = "1.1.0"
           $notes = "Automated release build v${ver}: dynamic sigscans, Unity Transform cluster fixes, reactive config and live auto-updater"
           $manifest = @(
               "version=$ver"
@@ -69,7 +69,7 @@ jobs:
       - name: Package Release ZIP
         shell: pwsh
         run: |
-          $ver = "0.3.1"
+          $ver = "1.1.0"
           $root = $PWD.Path
           $distDir = Join-Path $root "dist"
           $pkgDir = Join-Path $root "Urushi-v$ver"
@@ -113,8 +113,50 @@ jobs:
           if ($diff) {
               Write-Host "Changes detected in dist/:"
               Write-Host $diff
-              git commit -m "chore(dist): auto-build release binaries v0.3.1 [skip ci]"
+              git commit -m "chore(dist): auto-build release binaries v1.1.0 [skip ci]"
               git push origin main
           } else {
               Write-Host "No changes in dist/ to commit."
+          }
+
+      - name: Publish GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ver = "1.1.0"
+          $tag = "v$ver"
+          $root = $PWD.Path
+          $distDir = Join-Path $root "dist"
+          $zipVer = Join-Path $root "Urushi-$tag.zip"
+          $zipLatest = Join-Path $root "Urushi-latest.zip"
+          $dllUrushi = Join-Path $distDir "urushi.dll"
+          $dllProxy = Join-Path $distDir "version.dll"
+
+          $title = "$tag — Dynamic Signature Scans, Hot-Reinject & Keybinds Hub"
+          $notes = @"
+### 🏎️ Features & Changes:
+- ⚡ **Dynamic Signature Scanning**: All critical game engine and Unity RVA offsets (Transform cluster, raycasts, engine tick) are now dynamically resolved via signature scans to survive game updates.
+- 🎯 **Wall Tap & Raycast Proximity Overhaul**: Fixed world raycasting and vehicle orientation math for robust collision detection and proximity telemetry.
+- 🎨 **CarFX Shaders**: Restored dynamic livery shaders (Holo, Tandem Angle, Chams) with automatic directory watcher.
+- 🔄 **Live Hot-Reinject & One-Click Update**: Zero-downtime updates — `urushi.dll` can be hot-reloaded live inside the running game process via `version.dll` event with a single click.
+- ⌨️ **Dynamic Keybinds Hub**: Dedicated Keybinds window aggregating all actions by active mod without hardcoded layouts.
+- 📦 **Automated CI/CD**: Automatic builds, release packaging, and live in-game auto-updater.
+"@
+
+          $exists = $false
+          try {
+              gh release view $tag 2>$null | Out-Null
+              if ($LASTEXITCODE -eq 0) { $exists = $true }
+          } catch {}
+
+          if ($exists) {
+              Write-Host "Updating release $tag assets..."
+              gh release upload $tag $zipVer $zipLatest $dllUrushi $dllProxy --clobber
+              gh release edit $tag --title $title --notes $notes
+          } else {
+              Write-Host "Creating new GitHub Release $tag..."
+              gh release create $tag $zipVer $zipLatest $dllUrushi $dllProxy --title $title --notes $notes --latest
           }

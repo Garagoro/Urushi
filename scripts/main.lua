@@ -146,6 +146,7 @@ local BUILTIN = {
     { id = "steer_assist_mod", ru = "Помощь руля (155°)",        en = "Steering Assist (155°)" },
     { id = "tires_mod",        ru = "Кузов и шины",              en = "Body & Tires" },
     { id = "perf_optimizer",   ru = "Оптимизатор FPS",           en = "FPS Optimizer" },
+    { id = "keybinds_mod",     ru = "Горячие клавиши",           en = "Keybinds & Controls" },
 }
 
 -- Files that are part of the framework and never listed as user scripts
