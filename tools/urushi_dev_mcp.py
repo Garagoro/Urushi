@@ -101,13 +101,10 @@ def _signal_dll_reload(pid=None):
 def _deploy_artifacts(game_dir=None):
     game_dir = game_dir or os.environ.get("URUSHI_GAME_DIR") or DEFAULT_GAME_DIR
     dll_src = os.path.join(REPO_DIR, "build", "core", "Release", "urushi.dll")
-    if not os.path.isfile(dll_src):
-        dll_src = os.path.join(REPO_DIR, "build", "core", "Release", "CarX2ScriptHook.dll")
     scripts_src = os.path.join(REPO_DIR, "scripts")
     copied = []
     if os.path.isfile(dll_src):
         shutil.copy2(dll_src, os.path.join(game_dir, "urushi.dll"))
-        shutil.copy2(dll_src, os.path.join(game_dir, "CarX2ScriptHook.dll"))
         copied.append("urushi.dll")
     if os.path.isdir(scripts_src):
         dst_scripts = os.path.join(game_dir, "scripts")

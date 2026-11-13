@@ -558,7 +558,7 @@ void CheckWorker(bool userInitiated) {
                     planned.push_back({ e, std::move(dest), false, false });
                     totalBytes += e.size;
                 }
-            } else if (e.path == "dist/urushi.dll" || e.path == "dist/CarX2ScriptHook.dll") {
+            } else if (e.path == "dist/urushi.dll") {
                 std::wstring dest = exeDir + L"\\urushi.dll";
                 if (!LocalFileMatchesGitBlob(dest, e)) {
                     planned.push_back({ e, std::move(dest), false, true });

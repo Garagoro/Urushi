@@ -173,7 +173,7 @@ static std::wstring GetShadowDirectory() {
 }
 
 static void SweepOldShadowFiles(const std::wstring& shadowDir) {
-    const wchar_t* patterns[] = { L"\\urushi_*.*", L"\\CarX2ScriptHook_*.*" };
+    const wchar_t* patterns[] = { L"\\urushi_*.*" };
     for (const auto* pat : patterns) {
         WIN32_FIND_DATAW fd = {};
         HANDLE hFind = FindFirstFileW((shadowDir + pat).c_str(), &fd);
@@ -214,9 +214,6 @@ static void LoadCoreShadow(const std::wstring& exeDir) {
     if (g_coreHookModule) return;
     std::wstring srcDll = exeDir + L"\\urushi.dll";
     if (GetFileAttributesW(srcDll.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        srcDll = exeDir + L"\\CarX2ScriptHook.dll";
-    }
-    if (GetFileAttributesW(srcDll.c_str()) == INVALID_FILE_ATTRIBUTES) {
         return;
     }
 
@@ -231,9 +228,6 @@ static void LoadCoreShadow(const std::wstring& exeDir) {
     // Shadow-copy so the game process NEVER locks <gameDir>\urushi.dll
     if (CopyFileW(srcDll.c_str(), shadowDll.c_str(), FALSE)) {
         std::wstring srcPdb = exeDir + L"\\urushi.pdb";
-        if (GetFileAttributesW(srcPdb.c_str()) == INVALID_FILE_ATTRIBUTES) {
-            srcPdb = exeDir + L"\\CarX2ScriptHook.pdb";
-        }
         if (GetFileAttributesW(srcPdb.c_str()) != INVALID_FILE_ATTRIBUTES &&
             CopyFileW(srcPdb.c_str(), shadowPdb.c_str(), FALSE)) {
             g_loadedShadowPdb = shadowPdb;
@@ -279,7 +273,7 @@ static DWORD WINAPI LoaderThread(LPVOID) {
     bool prevCtrlF10 = false;
     bool prevCtrlF11 = false;
 
-    // Ctrl+F10: cleanly detach/unload CarX2ScriptHook.dll from process
+    // Ctrl+F10: cleanly detach/unload urushi.dll from process
     // Ctrl+F11 or UrushiReload_<pid> event: hot-reinject fresh shadow copy from game folder
     while (g_running) {
         DWORD waitMs = g_reloadEvent ? WaitForSingleObject(g_reloadEvent, 50) : (Sleep(50), WAIT_TIMEOUT);

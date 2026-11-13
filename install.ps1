@@ -17,9 +17,6 @@ if (-not (Test-Path $GamePath)) {
 $BuildDir = Join-Path $ScriptDir "build"
 $VersionDll = Join-Path $BuildDir "proxy\Release\version.dll"
 $CoreDll = Join-Path $BuildDir "core\Release\urushi.dll"
-if (-not (Test-Path $CoreDll)) {
-    $CoreDll = Join-Path $BuildDir "core\Release\CarX2ScriptHook.dll"
-}
 $ScriptsSource = Join-Path $ScriptDir "scripts"
 $ShadersSource = Join-Path $ScriptDir "shaders"
 
@@ -37,8 +34,6 @@ Copy-Item -Path $VersionDll -Destination (Join-Path $GamePath "version.dll") -Fo
 
 Write-Host "Copying urushi.dll (Core Engine)..." -ForegroundColor Green
 Copy-Item -Path $CoreDll -Destination (Join-Path $GamePath "urushi.dll") -Force
-# Also copy CarX2ScriptHook.dll for backwards compatibility
-Copy-Item -Path $CoreDll -Destination (Join-Path $GamePath "CarX2ScriptHook.dll") -Force
 
 $DestScripts = Join-Path $GamePath "scripts"
 Write-Host "Deploying scripts to $DestScripts..." -ForegroundColor Green

@@ -713,9 +713,6 @@ bool CaptureSwapChainPng(IDXGISwapChain* swapChain, ID3D11Device* dev, ID3D11Dev
 
 std::string ReadLogTail(int maxLines) {
     std::wstring path = g_exeDir + L"\\urushi.log";
-    if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        path = g_exeDir + L"\\CarX2ScriptHook.log";
-    }
     std::ifstream f(path);
     if (!f.is_open()) return "";
     std::deque<std::string> lines;

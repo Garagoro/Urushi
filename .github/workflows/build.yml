@@ -45,7 +45,6 @@ jobs:
           New-Item -ItemType Directory -Force $distDir | Out-Null
 
           Copy-Item (Join-Path $root "build\core\Release\urushi.dll") (Join-Path $distDir "urushi.dll") -Force
-          Copy-Item (Join-Path $root "build\core\Release\urushi.dll") (Join-Path $distDir "CarX2ScriptHook.dll") -Force
           Copy-Item (Join-Path $root "build\proxy\Release\version.dll") (Join-Path $distDir "version.dll") -Force
 
           # Calculate PE timestamp for updater version comparison
@@ -91,7 +90,6 @@ jobs:
 
           Copy-Item (Join-Path $distDir "version.dll") $pkgDir -Force
           Copy-Item (Join-Path $distDir "urushi.dll") $pkgDir -Force
-          Copy-Item (Join-Path $distDir "CarX2ScriptHook.dll") $pkgDir -Force
           Copy-Item -Path (Join-Path $root "scripts") -Destination $pkgDir -Recurse -Force
           Copy-Item -Path (Join-Path $root "shaders") -Destination $pkgDir -Recurse -Force
           Copy-Item (Join-Path $distDir "version.txt") $pkgDir -Force
