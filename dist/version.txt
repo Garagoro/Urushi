@@ -1,3 +1,3 @@
 version=1.2.0
-link_time=1794537727
-notes=Automated release build v1.2.0: C++ UI element introspection, universal auto-persistence, dynamic sigscans and live auto-updater
+link_time=1794539996
+notes=Automated release build v1.2.0: dynamic sigscans, C++ UI introspection, auto-persistence and live auto-updater
