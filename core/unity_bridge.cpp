@@ -886,8 +886,9 @@ static void CollectCarRenderersOnMainThread(void* rootGo, std::vector<CarRendere
     out.resize(static_cast<size_t>(rCount));
 }
 
-// Diagnostic: log the player car hierarchy once (GameObject names + the materials of their renderers).
+    // Diagnostic: log the player car hierarchy once (GameObject names + the materials of their renderers).
 static void DumpCarHierarchyOnce(uintptr_t unityBase, void* rootGo) {
+    if (!Settings::GetBool("debug", "dump_hierarchy", false)) return;
     void* rootTf = UnityBridge::GetTransformOfGameObject(rootGo);
     if (!rootTf) return;
     Logger::Info("CarFX car hierarchy dump begin");
@@ -1583,18 +1584,8 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
     in.valid = (!in.albedoIsDefault || !in.packedIsDefault) &&
                ((in.nativeAlbedoPtr != nullptr) || (in.nativePackedPtr != nullptr));
 
-    static ULONGLONG s_lastDbgMs = 0;
-    if (nowMs - s_lastDbgMs > 2000) {
-        s_lastDbgMs = nowMs;
-        char dbg[300];
-        _snprintf_s(dbg, sizeof(dbg), _TRUNCATE,
-            "UpdateCarFX: rootGo=%p natAlb=%p natPack=%p pfnGetNatPtr=0x%llX albPtr=%p packPtr=%p albDef=%d packDef=%d valid=%d",
-            rootGo, natAlb, natPack, (unsigned long long)pfnGetNatPtr, in.nativeAlbedoPtr, in.nativePackedPtr, (int)albIsDef, (int)packIsDef, (int)in.valid);
-        Logger::Info(dbg);
-    }
-
     CarFX::SetPlayerTargetTextures(CarFX::kTargetBody, in);
-    s_nextUpdateMs = GetTickCount64() + 250;
+    s_nextUpdateMs = GetTickCount64() + (in.valid ? 2000 : 250);
 }
 
 static bool SafeReadPtr(const void* addr, void** outVal) {
