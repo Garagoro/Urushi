@@ -9,25 +9,12 @@ local function is_recommended_preset(cfg)
         and math.abs((cfg.center_scale or 0.0) - 0.30) < 0.01
 end
 
-if config and steer_assist and steer_assist.set_config then
-    local saved = config.get("steer_assist", "config")
-    if type(saved) == "table" then
-        steer_assist.set_config(saved)
-    end
+local sa_settings = (steer_assist and steer_assist.get_config and steer_assist.get_config()) or {}
+if config and config.bind then
+    sa_settings = config.bind("steer_assist", sa_settings)
 end
-
-if config and config.register then
-    config.register({
-        id = "steer_assist",
-        on_save = function()
-            return { config = steer_assist and steer_assist.get_config and steer_assist.get_config() or nil }
-        end,
-        on_load = function(saved)
-            if type(saved) == "table" and type(saved.config) == "table" and steer_assist and steer_assist.set_config then
-                steer_assist.set_config(saved.config)
-            end
-        end,
-    })
+if steer_assist and steer_assist.set_config and type(sa_settings) == "table" and sa_settings.enabled ~= nil then
+    steer_assist.set_config(sa_settings)
 end
 
 local function render_steer_assist_window()
@@ -38,7 +25,7 @@ local function render_steer_assist_window()
         return
     end
 
-    local cfg = steer_assist.get_config()
+    local cfg = sa_settings
     local st = steer_assist.get_stats()
     local dirty = false
 
@@ -65,7 +52,8 @@ local function render_steer_assist_window()
         local ch_en, val_en = ui.toggle(T("Включить фикс помощника##sa_en", "Enable Assist Fix##sa_en"), cfg.enabled == true)
         if ch_en then
             cfg.enabled = val_en
-            dirty = true
+            steer_assist.set_config(cfg)
+            if config then config.mark_dirty() end
         end
 
         ui.spacing(4)
@@ -75,16 +63,16 @@ local function render_steer_assist_window()
 
         if ui.button(T("155° Баквард##sa_p_rec", "155° Backwards##sa_p_rec"), bw, 28, is_rec and "primary" or "default") then
             steer_assist.set_recommended()
-            cfg = steer_assist.get_config()
-            if config then config.set("steer_assist", "config", cfg) end
-            dirty = false
+            local cur = steer_assist.get_config()
+            for k, v in pairs(cur) do sa_settings[k] = v end
+            if config then config.mark_dirty() end
         end
         ui.same_line(0, 6)
         if ui.button(T("Сток DR2##sa_p_van", "Stock DR2##sa_p_van"), bw, 28, is_van and "primary" or "default") then
             steer_assist.set_vanilla()
-            cfg = steer_assist.get_config()
-            if config then config.set("steer_assist", "config", cfg) end
-            dirty = false
+            local cur = steer_assist.get_config()
+            for k, v in pairs(cur) do sa_settings[k] = v end
+            if config then config.mark_dirty() end
         end
 
         ui.spacing(4)
@@ -105,7 +93,8 @@ local function render_steer_assist_window()
             if (cfg.early_steer_flip_deg or 135.0) > val_flip then
                 cfg.early_steer_flip_deg = val_flip
             end
-            dirty = true
+            steer_assist.set_config(cfg)
+            if config then config.mark_dirty() end
         end
 
         local ch_early, val_early = ui.toggle(
@@ -114,7 +103,8 @@ local function render_steer_assist_window()
         )
         if ch_early then
             cfg.disable_early_steer_flip = val_early
-            dirty = true
+            steer_assist.set_config(cfg)
+            if config then config.mark_dirty() end
         end
 
         if not cfg.disable_early_steer_flip then
@@ -124,7 +114,8 @@ local function render_steer_assist_window()
             )
             if ch_edeg then
                 cfg.early_steer_flip_deg = val_edeg
-                dirty = true
+                steer_assist.set_config(cfg)
+                if config then config.mark_dirty() end
             end
         end
 
@@ -134,7 +125,8 @@ local function render_steer_assist_window()
         )
         if ch_slip then
             cfg.fix_slip_gate = val_slip
-            dirty = true
+            steer_assist.set_config(cfg)
+            if config then config.mark_dirty() end
         end
 
         if ui.collapsing(T("Тонкая настройка##sa_adv", "Advanced##sa_adv"), false) then
@@ -144,13 +136,9 @@ local function render_steer_assist_window()
             )
             if ch_cs then
                 cfg.center_scale = val_cs
-                dirty = true
+                steer_assist.set_config(cfg)
+                if config then config.mark_dirty() end
             end
-        end
-
-        if dirty then
-            steer_assist.set_config(cfg)
-            if config then config.set("steer_assist", "config", cfg) end
         end
     end)
 
@@ -179,6 +167,7 @@ if urushi and urushi.register_window then
         x = 716,
         y = 24,
         width = 408,
+        settings = sa_settings,
         render = render_steer_assist_window,
     })
 end

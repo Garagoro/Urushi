@@ -214,13 +214,8 @@ local upd_cfg = {
     auto_install = true,
     check_interval = 180,
 }
-if config and config.bind_script_table then
-    upd_cfg = config.bind_script_table("updater", upd_cfg) or upd_cfg
-elseif config and config.get then
-    local ac = config.get("updater", "auto_check")
-    if ac ~= nil then upd_cfg.auto_check = ac end
-    local ai = config.get("updater", "auto_install")
-    if ai ~= nil then upd_cfg.auto_install = ai end
+if config and config.bind then
+    upd_cfg = config.bind("updater", upd_cfg)
 end
 
 local last_check_time = os.clock()
@@ -353,13 +348,13 @@ local function render_system_window()
             local ac_ch, ac_val = ui.toggle(T("Авто-проверка обновлений##sys_upd_ac", "Auto-check for updates##sys_upd_ac"), upd_cfg.auto_check)
             if ac_ch then
                 upd_cfg.auto_check = ac_val
-                if config then config.set("updater", "auto_check", ac_val) end
+                if config then config.mark_dirty() end
             end
 
             local ai_ch, ai_val = ui.toggle(T("Авто-установка на лету##sys_upd_ai", "Auto-install updates live##sys_upd_ai"), upd_cfg.auto_install)
             if ai_ch then
                 upd_cfg.auto_install = ai_val
-                if config then config.set("updater", "auto_install", ai_val) end
+                if config then config.mark_dirty() end
             end
 
             ui.spacing(4)

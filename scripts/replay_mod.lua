@@ -31,43 +31,46 @@ local state = {
     },
 }
 
-if config then
-    local saved = config.get("anticollision", "ghost_cfg")
-    if type(saved) == "table" then
-        for k, v in pairs(saved) do
-            if state.ghost_cfg[k] ~= nil then state.ghost_cfg[k] = v end
-        end
-    end
+local ghost_settings = {
+    enabled = true,
+    anti_wrong_way = true,
+    show_hud_alert = true,
+    min_speed_kmh = 10.0,
+    dot_threshold = -0.25,
+    max_distance = 120.0,
+}
+if config and config.bind then
+    ghost_settings = config.bind("anticollision", ghost_settings)
 end
+state.ghost_cfg = ghost_settings
+
+local replay_settings = {
+    playback_loop = false,
+    ghost_collision = false,
+    inherit_carfx = true,
+}
+if config and config.bind then
+    replay_settings = config.bind("replay", replay_settings)
+end
+state.playback_loop = replay_settings.playback_loop == true
 
 local function sync_selective_ghost_cfg()
     if carx.set_selective_ghost_config then
-        local synced = carx.set_selective_ghost_config(state.ghost_cfg)
+        local synced = carx.set_selective_ghost_config(ghost_settings)
         if type(synced) == "table" then
-            state.ghost_cfg = synced
+            for k, v in pairs(synced) do
+                ghost_settings[k] = v
+            end
         end
-    end
-    if config then
-        config.set("anticollision", "ghost_cfg", state.ghost_cfg)
     end
 end
 sync_selective_ghost_cfg()
 
-if config and config.register then
-    config.register({
-        id = "anticollision",
-        on_save = function()
-            return { ghost_cfg = state.ghost_cfg }
-        end,
-        on_load = function(saved)
-            if type(saved) == "table" and type(saved.ghost_cfg) == "table" then
-                for k, v in pairs(saved.ghost_cfg) do
-                    state.ghost_cfg[k] = v
-                end
-                sync_selective_ghost_cfg()
-            end
-        end,
-    })
+if replay_settings.ghost_collision ~= nil and carx and carx.set_ghost_collision then
+    carx.set_ghost_collision(replay_settings.ghost_collision)
+end
+if replay_settings.inherit_carfx ~= nil and replay and replay.set_ghost_mirror_carfx then
+    replay.set_ghost_mirror_carfx(replay_settings.inherit_carfx)
 end
 
 local function safe_get_cars()
@@ -609,11 +612,15 @@ local function render_replay_window()
                 local col_ch, col_new = ui.toggle(T("Коллизия призрака [K]##rep_col", "Ghost Collision [K]##rep_col"), col_cur)
                 if col_ch then
                     carx.set_ghost_collision(col_new)
+                    replay_settings.ghost_collision = col_new
                 end
             end
 
             local lp_ch, new_lp = ui.toggle(T("Зациклить (Loop)##rep_loop", "Loop Playback##rep_loop"), state.playback_loop)
-            if lp_ch then state.playback_loop = new_lp end
+            if lp_ch then
+                state.playback_loop = new_lp
+                replay_settings.playback_loop = new_lp
+            end
 
             local sp_ch, new_sp = ui.slider_float(T("Скорость##rep_spd", "Speed##rep_spd"), state.playback_speed, 0.25, 2.0, "%.2fx")
             if sp_ch then state.playback_speed = new_sp end
@@ -630,6 +637,7 @@ local function render_replay_window()
                     local m_ch, m_val = ui.toggle(T("Наследовать CarFX (если не записан)##rep_cfx_mir", "Use Active CarFX if Unsaved##rep_cfx_mir"), mir_cur)
                     if m_ch then
                         replay.set_ghost_mirror_carfx(m_val)
+                        replay_settings.inherit_carfx = m_val
                     end
                 end
 
@@ -767,6 +775,7 @@ if urushi and urushi.register_window then
         x = 264,
         y = 24,
         width = 416,
+        settings = replay_settings,
         render = render_replay_window,
     })
 
@@ -780,6 +789,7 @@ if urushi and urushi.register_window then
         x = 700,
         y = 24,
         width = 412,
+        settings = ghost_settings,
         render = render_anticollision_window,
     })
 end

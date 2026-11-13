@@ -33,17 +33,27 @@ local KNOWN_TRACKS = {
     { key = "la_block", name = "LA Block" },
 }
 
+local tp_settings = {
+    auto_track = true,
+    vel_mode = 1, -- 1=Stop, 2=Saved, 3=Keep
+    repair_on_tp = true,
+    hotkeys_enabled = true,
+}
+if config and config.bind then
+    tp_settings = config.bind("teleport", tp_settings)
+end
+
 local state = {
     current_track = "Fuji Speedway",
-    auto_track = true,
+    auto_track = tp_settings.auto_track ~= false,
     tracks = {},
     active_idx = 1,
     new_point_name = "",
     editing_idx = nil,
     edit_name_buf = "",
-    vel_mode = 1, -- 1=Stop, 2=Saved, 3=Keep
-    repair_on_tp = true,
-    hotkeys_enabled = true,
+    vel_mode = tp_settings.vel_mode or 1,
+    repair_on_tp = tp_settings.repair_on_tp ~= false,
+    hotkeys_enabled = tp_settings.hotkeys_enabled ~= false,
     last_track_check = 0,
     status_msg = "",
     status_tone = "muted",
@@ -584,6 +594,7 @@ local function render_teleport_window()
         local ch_vel, new_vel = ui.segmented("tp_vel_seg", state.vel_mode, vel_labels)
         if ch_vel then
             state.vel_mode = new_vel
+            tp_settings.vel_mode = new_vel
             save_to_disk()
         end
 
@@ -591,6 +602,7 @@ local function render_teleport_window()
         local hk_ch, hk_val = ui.toggle(T("Горячие клавиши##tp_hk", "Hotkeys##tp_hk"), state.hotkeys_enabled)
         if hk_ch then
             state.hotkeys_enabled = hk_val
+            tp_settings.hotkeys_enabled = hk_val
             save_to_disk()
         end
 
@@ -603,6 +615,7 @@ local function render_teleport_window()
         local rep_ch, rep_val = ui.toggle(T("Восстанавливать авто и шины при ТП##tp_rep", "Repair car & tires on teleport##tp_rep"), state.repair_on_tp == true)
         if rep_ch then
             state.repair_on_tp = rep_val
+            tp_settings.repair_on_tp = rep_val
             save_to_disk()
         end
 
@@ -688,6 +701,7 @@ if urushi and urushi.register_window then
         x = 710,
         y = 54,
         width = 380,
+        settings = tp_settings,
         render = render_teleport_window,
     })
 end

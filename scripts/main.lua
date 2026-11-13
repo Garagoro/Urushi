@@ -27,12 +27,45 @@ if urushi and urushi.register_window then
     local native_register_window = urushi.register_window
     urushi.register_window = function(opts)
         if type(opts) == "table" and opts.id then
-            local st = opts.settings or opts.config
-            if type(st) == "table" and config and config.bind_script_table then
-                config.bind_script_table(opts.id, st)
+            local st = opts.settings or opts.config or opts.state
+            if type(st) == "table" and config and config.bind then
+                opts.settings = config.bind(opts.id, st)
             end
         end
         return native_register_window(opts)
+    end
+end
+
+-- Reactive UI binding helpers for script authors
+if ui then
+    ui.bind_toggle = function(label, tbl, key)
+        if not tbl or not key then return false, false end
+        local ch, val = ui.toggle(label, tbl[key] == true)
+        if ch then
+            tbl[key] = val
+            if config and config.mark_dirty then config.mark_dirty() end
+        end
+        return ch, tbl[key]
+    end
+
+    ui.bind_slider_float = function(label, tbl, key, min_val, max_val, fmt)
+        if not tbl or not key then return false, 0 end
+        local ch, val = ui.slider_float(label, tbl[key] or min_val, min_val, max_val, fmt)
+        if ch then
+            tbl[key] = val
+            if config and config.mark_dirty then config.mark_dirty() end
+        end
+        return ch, tbl[key]
+    end
+
+    ui.bind_slider_int = function(label, tbl, key, min_val, max_val, fmt)
+        if not tbl or not key then return false, 0 end
+        local ch, val = ui.slider_int(label, tbl[key] or min_val, min_val, max_val, fmt)
+        if ch then
+            tbl[key] = val
+            if config and config.mark_dirty then config.mark_dirty() end
+        end
+        return ch, tbl[key]
     end
 end
 
@@ -166,31 +199,40 @@ local function load_entry(e)
     end
     if e.shader_only then e.status = "ok"; return end        -- shader pack: files are in shaders/cloud/<id>/, nothing to run
     local ok, res_or_err
+    local env = nil
     if e.cloud then
-        local env = make_env(e.id, e.cloud_id)
+        env = make_env(e.id, e.cloud_id)
         e.env = env
         ok, res_or_err = cloud.load(e.cloud_id, env)
-        if ok and config and config.bind_script_env then
-            config.bind_script_env(e.id, env)
-        end
     elseif e.user then
-        local env = make_env(e.id)
+        env = make_env(e.id)
         e.env = env
         ok, res_or_err = urushi.load_script(e.id, env)
-        if ok and config and config.bind_script_env then
-            config.bind_script_env(e.id, env)
-        end
     else
         ok, res_or_err = urushi.load_script(e.id)           -- trusted built-in
     end
 
     if ok then
         e.status = "ok"
-        if type(res_or_err) == "table" and config and config.bind_script_table then
-            local st = res_or_err.settings or res_or_err.config
-            if type(st) == "table" then
-                config.bind_script_table(e.id, st)
+
+        -- Auto-discover settings/state for loaded scripts:
+        local st = nil
+        if type(res_or_err) == "table" then
+            st = res_or_err.settings or res_or_err.config or res_or_err.state
+            if not st and res_or_err[1] == nil and next(res_or_err) ~= nil then
+                st = res_or_err
             end
+        end
+        if not st and env then
+            st = env.settings or env.SETTINGS or env.config or env.CONFIG or env.state or env.STATE
+        end
+        if not st and _G[e.id .. "_settings"] then
+            st = _G[e.id .. "_settings"]
+        end
+
+        if type(st) == "table" and config and config.bind then
+            config.bind(e.id, st)
+            log.info("core: auto-bound settings for script '" .. tostring(e.id) .. "'")
         end
     else
         e.status = "error"

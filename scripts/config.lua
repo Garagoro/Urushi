@@ -1,29 +1,29 @@
 -- scripts/config.lua
--- The universal configuration & persistence engine: single JSON file (urushi_data/config.json) with autosave.
+-- Universal Configuration & Persistence Engine for CarX2 URUSHI
+-- Stores all settings in urushi_data/config.json with atomic writes and autosave.
 --
 -- Features:
 --   1. Zero-Boilerplate for Scripts:
---      - Scripts can declare `settings = { ... }` or `SETTINGS = { ... }` in their environment:
---        The core automatically detects it, restores saved values from config.json, and auto-saves changes!
---      - Scripts can pass `settings = { ... }` to `urushi.register_window`:
---        The core automatically detects it and persists it.
---      - Scripts can call `local cfg = config.auto({ speed = 100, enabled = true })`:
---        Returns a reactive proxy table that auto-saves on any property mutation!
---      - Scripts can use lifecycle hooks: `config.register({ id = "my_mod", on_save = fn, on_load = fn })`.
+--      - Scripts can declare `settings = { ... }` or `state = { ... }`
+--      - Scripts can pass `settings = { ... }` to `urushi.register_window`
+--      - Scripts can return `{ settings = { ... } }` from the script file
+--      - Scripts can call `local cfg = config.bind([id], defaults)`
+--      - Core automatically detects settings, restores saved values, and persists all changes!
 --   2. Direct API:
---      - config.get(section, key, default)      read a value
---      - config.set(section, key, value)        write a value; debounced autosave ~2s
---      - config.auto([id], defaults)            reactive table proxy bound to config.json
---      - config.register(opts)                  register custom state provider (on_save, on_load, store)
---      - config.save()                          write to disk immediately
---      - config.reload()                        re-read from disk and notify all registered providers
---      - config.for_script(id)                  scoped config object for isolated script environments
+--      - config.bind(id, defaults)              bind table to config section, returns reactive proxy
+--      - config.auto(id, defaults)              alias for config.bind
+--      - config.get(section, [key], [default])  read value or entire section
+--      - config.set(section, key, value)        write value
+--      - config.save()                          immediate atomic flush to disk
+--      - config.reload()                        re-read from disk and notify all providers
+--      - config.for_script(id)                  scoped config helper for isolated scripts
+--      - config.get_all()                       returns entire config snapshot
 --
--- Safety: keeps previous good copy in config.bak.json. Atomic debounced flushing.
+-- Safety: keeps previous copy in config.bak.json. Debounced periodic flush (0.5s).
 
 local FILE = "urushi_data/config.json"
 local BACKUP = "urushi_data/config.bak.json"
-local SAVE_DELAY = 2.0          -- seconds after the last change
+local SAVE_DELAY = 0.5          -- seconds after the last change to flush to disk
 
 local config = {}
 local data = { version = 1 }
@@ -62,7 +62,15 @@ local function encode(v, depth)
         local raw = v._raw or v
         local parts = {}
         if next(raw) == nil or is_array(raw) then
-            for i = 1, #raw do parts[i] = encode(raw[i], depth + 1) end
+            for i = 1, #raw do
+                local val = raw[i]
+                local vt = type(val)
+                if vt ~= "function" and vt ~= "userdata" and vt ~= "thread" then
+                    parts[#parts + 1] = encode(val, depth + 1)
+                else
+                    parts[#parts + 1] = "null"
+                end
+            end
             return "[" .. table.concat(parts, ",") .. "]"
         end
         local keys = {}
@@ -71,7 +79,10 @@ local function encode(v, depth)
         for _, k in ipairs(keys) do
             local val = raw[k]
             if val == nil then val = raw[tonumber(k)] end
-            parts[#parts + 1] = '"' .. esc(k) .. '":' .. encode(val, depth + 1)
+            local vt = type(val)
+            if vt ~= "function" and vt ~= "userdata" and vt ~= "thread" and vt ~= "nil" then
+                parts[#parts + 1] = '"' .. esc(k) .. '":' .. encode(val, depth + 1)
+            end
         end
         return "{" .. table.concat(parts, ",") .. "}"
     end
@@ -196,7 +207,10 @@ local function deep_copy(v)
     local raw = v._raw or v
     local r = {}
     for k, sub in pairs(raw) do
-        r[k] = deep_copy(sub)
+        local st = type(sub)
+        if st ~= "function" and st ~= "userdata" and st ~= "thread" then
+            r[k] = deep_copy(sub)
+        end
     end
     return r
 end
@@ -207,10 +221,16 @@ local function tables_equal(a, b)
     local raw_a = a._raw or a
     local raw_b = b._raw or b
     for k, v in pairs(raw_a) do
-        if not tables_equal(v, raw_b[k]) then return false end
+        local vt = type(v)
+        if vt ~= "function" and vt ~= "userdata" and vt ~= "thread" then
+            if not tables_equal(v, raw_b[k]) then return false end
+        end
     end
-    for k in pairs(raw_b) do
-        if raw_a[k] == nil then return false end
+    for k, v in pairs(raw_b) do
+        local vt = type(v)
+        if vt ~= "function" and vt ~= "userdata" and vt ~= "thread" then
+            if raw_a[k] == nil then return false end
+        end
     end
     return true
 end
@@ -221,7 +241,7 @@ local function detect_caller_id(level)
     if info and info.short_src then
         local src = info.short_src
         local cloud_id = src:match("scripts[/\\]cloud[/\\]([^/\\]+)")
-        if cloud_id then return "cloud:" .. cloud_id end
+        if cloud_id then return cloud_id end
         local script_name = src:match("([^/\\]+)%.lua$")
         if script_name then return script_name end
     end
@@ -229,11 +249,11 @@ local function detect_caller_id(level)
 end
 
 local function resolve_section(id)
-    id = tostring(id)
-    if id:find("^script:") or id:find("^cloud:") then return id end
-    local known = { ui = true, carfx = true, steer_assist = true, optimizer = true, tires = true, anticollision = true }
-    if known[id] then return id end
-    return "script:" .. id
+    if not id then return "general" end
+    local s = tostring(id)
+    if s:sub(1, 7) == "script:" then s = s:sub(8) end
+    if s:sub(1, 6) == "cloud:" then s = s:sub(7) end
+    return s
 end
 
 -- ==================== Reactive Proxy ====================
@@ -297,17 +317,51 @@ function config.mark_dirty()
     dirty = true
 end
 
-function config.get(section, key, default)
-    local s = data[section]
+function config.get(a1, a2, a3)
+    local section, key, default
+    if a3 ~= nil then
+        section = resolve_section(a1)
+        key = a2
+        default = a3
+    elseif a2 ~= nil then
+        local sec = resolve_section(a1)
+        if data[sec] ~= nil or data["script:" .. sec] ~= nil then
+            section = sec
+            key = a2
+            default = nil
+        else
+            section = "general"
+            key = a1
+            default = a2
+        end
+    else
+        section = resolve_section(a1)
+        local s = data[section] or data["script:" .. section]
+        return type(s) == "table" and deep_copy(s) or nil
+    end
+
+    local s = data[section] or data["script:" .. section]
     if type(s) == "table" then
+        if key == nil then return deep_copy(s) end
         local v = s[key]
         if v ~= nil then return deep_copy(v) end
     end
     return deep_copy(default)
 end
 
-function config.set(section, key, value)
+function config.set(a1, a2, a3)
+    local section, key, value
+    if a3 ~= nil then
+        section = resolve_section(a1)
+        key = a2
+        value = a3
+    else
+        section = "general"
+        key = a1
+        value = a2
+    end
     if section == "version" then return end
+
     local s = data[section]
     if type(s) ~= "table" then
         if value == nil then return end
@@ -315,13 +369,22 @@ function config.set(section, key, value)
         data[section] = s
     end
     local raw_val = (type(value) == "table" and value._raw) and value._raw or value
-    if type(raw_val) ~= "table" and s[key] == raw_val then return end
     if raw_val == nil then
         s[key] = nil
     else
         s[key] = deep_copy(raw_val)
     end
-    if next(s) == nil then data[section] = nil end
+
+    -- Synchronize registered live store table if present
+    local reg = config.registry[section] or config.registry["script:" .. section]
+    if reg and type(reg.store) == "table" then
+        if raw_val == nil then
+            reg.store[key] = nil
+        else
+            reg.store[key] = deep_copy(raw_val)
+        end
+    end
+
     config.mark_dirty()
 end
 
@@ -333,12 +396,37 @@ function config.flush()
 end
 
 function config.section(name)
+    local sec = resolve_section(name)
     local out = {}
-    local s = data[name]
+    local s = data[sec] or data["script:" .. sec]
     if type(s) == "table" then
         for k, v in pairs(s) do out[k] = deep_copy(v) end
     end
     return out
+end
+
+function config.sync()
+    for section, reg in pairs(config.registry) do
+        local sec = resolve_section(section)
+        if reg.store then
+            if not tables_equal(reg.store, data[sec]) then
+                data[sec] = deep_copy(reg.store)
+                config.mark_dirty()
+            end
+        end
+        if reg.on_save then
+            local ok, res = pcall(reg.on_save)
+            if ok and type(res) == "table" and not tables_equal(res, data[sec]) then
+                data[sec] = deep_copy(res)
+                config.mark_dirty()
+            end
+        end
+    end
+end
+
+function config.get_all()
+    config.sync()
+    return deep_copy(data)
 end
 
 -- ==================== Provider Registration ====================
@@ -376,9 +464,9 @@ function config.register(opts)
     return reg
 end
 
--- ==================== Reactive Auto-Config ====================
+-- ==================== Reactive Auto-Config (bind) ====================
 
-function config.auto(arg1, arg2)
+function config.bind(arg1, arg2)
     local id, defaults
     if type(arg1) == "string" then
         id = arg1
@@ -390,21 +478,32 @@ function config.auto(arg1, arg2)
 
     local section = resolve_section(id)
 
-    -- If this is already a reactive proxy for this section, return it
-    if type(defaults) == "table" and defaults._raw then
-        return defaults
-    end
+    -- If defaults is already a reactive proxy, return its store
+    local store = (type(defaults) == "table" and defaults._raw) and defaults._raw or defaults
 
-    -- Mutate defaults directly in place so references stay synchronized
-    local store = defaults
-    local saved = data[section]
+    local saved = data[section] or data["script:" .. section]
+
+    -- Automatic migration of legacy nested configurations:
     if type(saved) == "table" then
+        if section == "optimizer" and type(saved.config) == "table" then
+            for k, v in pairs(saved.config) do saved[k] = v end
+            saved.config = nil
+        elseif section == "steer_assist" and type(saved.config) == "table" then
+            for k, v in pairs(saved.config) do saved[k] = v end
+            saved.config = nil
+        elseif section == "anticollision" and type(saved.ghost_cfg) == "table" then
+            for k, v in pairs(saved.ghost_cfg) do saved[k] = v end
+            saved.ghost_cfg = nil
+        end
+
+        -- Merge saved values into store in-place so defaults for any missing keys are preserved
         for k, v in pairs(saved) do
             store[k] = deep_copy(v)
         end
-    else
-        data[section] = deep_copy(store)
     end
+
+    -- Update authoritative data section
+    data[section] = deep_copy(store)
 
     local proxy = make_reactive(section, store, function(k, v)
         data[section] = deep_copy(store)
@@ -420,14 +519,8 @@ function config.auto(arg1, arg2)
 
     return proxy
 end
-config.bind = config.auto
-
--- ==================== Automatic Script Introspection ====================
-
-function config.bind_script_table(script_id, tbl)
-    if type(tbl) ~= "table" then return tbl end
-    return config.auto(script_id, tbl)
-end
+config.auto = config.bind
+config.bind_script_table = config.bind
 
 function config.bind_script_env(script_id, env)
     if type(env) ~= "table" then return false end
@@ -435,9 +528,9 @@ function config.bind_script_env(script_id, env)
     for _, name in ipairs(candidates) do
         local t = rawget(env, name)
         if type(t) == "table" and not t._raw then
-            local proxy = config.auto(script_id, t)
+            local proxy = config.bind(script_id, t)
             rawset(env, name, proxy)
-            log.info("config: auto-bound '" .. name .. "' (reactive) for script '" .. tostring(script_id) .. "'")
+            log.info("config: auto-bound '" .. name .. "' for script '" .. tostring(script_id) .. "'")
             return true
         end
     end
@@ -449,10 +542,24 @@ end
 function config.for_script(id)
     local section = resolve_section(id)
     return {
-        get = function(key, default) return config.get(section, key, default) end,
-        set = function(key, value) config.set(section, key, value) end,
-        auto = function(defaults) return config.auto(section, defaults) end,
-        bind = function(defaults) return config.auto(section, defaults) end,
+        get = function(a1, a2, a3)
+            if a3 ~= nil or (a2 ~= nil and type(a1) == "string" and data[a1]) then
+                return config.get(a1, a2, a3)
+            elseif a2 ~= nil then
+                return config.get(section, a1, a2)
+            else
+                return config.get(section, a1, nil)
+            end
+        end,
+        set = function(a1, a2, a3)
+            if a3 ~= nil then
+                return config.set(a1, a2, a3)
+            else
+                return config.set(section, a1, a2)
+            end
+        end,
+        auto = function(defaults) return config.bind(section, defaults) end,
+        bind = function(defaults) return config.bind(section, defaults) end,
         register = function(opts)
             opts = opts or {}
             opts.id = opts.id or id
@@ -472,13 +579,17 @@ end
 function config.save()
     -- Pull authoritative state from all registered providers
     for section, reg in pairs(config.registry) do
+        local sec = resolve_section(section)
         if reg.on_save then
             local ok, res = pcall(reg.on_save)
             if ok and type(res) == "table" then
-                data[section] = deep_copy(res)
+                if type(data[sec]) ~= "table" then data[sec] = {} end
+                for k, v in pairs(res) do
+                    data[sec][k] = deep_copy(v)
+                end
             end
         elseif reg.store then
-            data[section] = deep_copy(reg.store)
+            data[sec] = deep_copy(reg.store)
         end
     end
 
@@ -503,9 +614,20 @@ function config.reload()
     data.version = data.version or 1
     dirty = false
 
+    -- Normalize legacy "script:foo" to "foo"
+    for k, v in pairs(data) do
+        if type(k) == "string" and k:sub(1, 7) == "script:" then
+            local clean = k:sub(8)
+            if data[clean] == nil then
+                data[clean] = v
+            end
+        end
+    end
+
     -- Sync back to all live registered providers
     for section, reg in pairs(config.registry) do
-        local saved = data[section]
+        local sec = resolve_section(section)
+        local saved = data[sec]
         if saved ~= nil then
             if reg.on_load then
                 pcall(reg.on_load, deep_copy(saved))
@@ -518,7 +640,7 @@ function config.reload()
     end
 end
 
--- ==================== Autosave & Dirty Scanner ====================
+-- ==================== Autosave & Deep State Scanner ====================
 
 config.reload()
 
@@ -527,19 +649,13 @@ if events and events.on_update then
     events.on_update(function(dt)
         local now = os.clock()
 
-        -- Check registered plain tables for in-place mutations (e.g. settings.val = 5)
-        if now - last_table_check >= 1.0 then
+        -- Scan all registered script stores every 250ms for in-place table mutations
+        if now - last_table_check >= 0.25 then
             last_table_check = now
-            for section, reg in pairs(config.registry) do
-                if reg.store and not reg.proxy and not reg.on_save then
-                    if not tables_equal(reg.store, data[section]) then
-                        data[section] = deep_copy(reg.store)
-                        config.mark_dirty()
-                    end
-                end
-            end
+            config.sync()
         end
 
+        -- Debounced disk persistence
         if dirty and now - dirty_since >= SAVE_DELAY then
             config.save()
         end

@@ -4,37 +4,21 @@ local T = i18n.t
 
 local active_tab = "body_wear" -- "body_wear", "thermal", "telemetry"
 
-if config and carx then
-    local no_dam = config.get("tires", "no_damage")
-    if no_dam ~= nil and carx.set_no_damage then
-        carx.set_no_damage(no_dam)
-    end
-    local saved_cfg = config.get("tires", "tyre_config")
-    if type(saved_cfg) == "table" and carx.set_tyre_config then
-        carx.set_tyre_config(saved_cfg)
-    end
+local tire_settings = {
+    no_damage = true,
+    tyre_config = (carx and carx.get_tyre_config and carx.get_tyre_config()) or {},
+}
+if config and config.bind then
+    tire_settings = config.bind("tires", tire_settings)
 end
 
-if config and config.register then
-    config.register({
-        id = "tires",
-        on_save = function()
-            return {
-                no_damage = carx and carx.get_no_damage and carx.get_no_damage() or nil,
-                tyre_config = carx and carx.get_tyre_config and carx.get_tyre_config() or nil,
-            }
-        end,
-        on_load = function(saved)
-            if type(saved) == "table" then
-                if saved.no_damage ~= nil and carx and carx.set_no_damage then
-                    carx.set_no_damage(saved.no_damage)
-                end
-                if type(saved.tyre_config) == "table" and carx and carx.set_tyre_config then
-                    carx.set_tyre_config(saved.tyre_config)
-                end
-            end
-        end,
-    })
+if carx then
+    if tire_settings.no_damage ~= nil and carx.set_no_damage then
+        carx.set_no_damage(tire_settings.no_damage)
+    end
+    if type(tire_settings.tyre_config) == "table" and carx.set_tyre_config then
+        carx.set_tyre_config(tire_settings.tyre_config)
+    end
 end
 
 local function render_tires_window()
@@ -72,7 +56,8 @@ local function render_tires_window()
             local ch_dam, val_dam = ui.toggle(T("Без повреждений (кузов, бампера, подвеска)##t_no_dam", "No Damage (Body, Bumpers & Suspension)##t_no_dam"), no_dam)
             if ch_dam then
                 if carx and carx.set_no_damage then carx.set_no_damage(val_dam) end
-                if config then config.set("tires", "no_damage", val_dam) end
+                tire_settings.no_damage = val_dam
+                if config then config.mark_dirty() end
             end
 
             local opt_st = (optimizer and optimizer.get_stats) and optimizer.get_stats() or {}
@@ -265,7 +250,8 @@ local function render_tires_window()
 
     if dirty then
         carx.set_tyre_config(cfg)
-        if config then config.set("tires", "tyre_config", cfg) end
+        tire_settings.tyre_config = cfg
+        if config then config.mark_dirty() end
     end
 end
 
@@ -280,6 +266,7 @@ if urushi and urushi.register_window then
         x = 350,
         y = 30,
         width = 412,
+        settings = tire_settings,
         render = render_tires_window,
     })
 end

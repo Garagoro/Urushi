@@ -2,25 +2,12 @@
 local T = i18n.t
 local VK_F5 = 0x74
 
-if config and optimizer and optimizer.set_config then
-    local saved = config.get("optimizer", "config")
-    if type(saved) == "table" then
-        optimizer.set_config(saved)
-    end
+local opt_settings = (optimizer and optimizer.get_config and optimizer.get_config()) or {}
+if config and config.bind then
+    opt_settings = config.bind("optimizer", opt_settings)
 end
-
-if config and config.register then
-    config.register({
-        id = "optimizer",
-        on_save = function()
-            return { config = optimizer and optimizer.get_config and optimizer.get_config() or nil }
-        end,
-        on_load = function(saved)
-            if type(saved) == "table" and type(saved.config) == "table" and optimizer and optimizer.set_config then
-                optimizer.set_config(saved.config)
-            end
-        end,
-    })
+if optimizer and optimizer.set_config and type(opt_settings) == "table" and opt_settings.enabled ~= nil then
+    optimizer.set_config(opt_settings)
 end
 
 local function apply_preset(preset_name)
@@ -74,9 +61,9 @@ local function apply_preset(preset_name)
             remote_integration_steps = 1,
         })
     end
-    if config and optimizer and optimizer.get_config then
-        config.set("optimizer", "config", optimizer.get_config())
-    end
+    local cur = optimizer.get_config()
+    for k, v in pairs(cur) do opt_settings[k] = v end
+    if config then config.mark_dirty() end
 end
 
 local function detect_preset(cfg)
@@ -98,15 +85,15 @@ local function render_optimizer_window()
         return
     end
 
-    local cfg = optimizer.get_config()
+    local cfg = opt_settings
     local st = optimizer.get_stats()
-    local dirty = false
 
     ui.card(T("Физика мультиплеера", "MP Simulation"), nil, function()
         local en_ch, en_val = ui.toggle(T("Включить оптимизатор##opt_en", "Enable Optimizer##opt_en"), cfg.enabled == true)
         if en_ch then
             cfg.enabled = en_val
-            dirty = true
+            optimizer.set_config(cfg)
+            if config then config.mark_dirty() end
         end
 
         ui.spacing(4)
@@ -115,20 +102,14 @@ local function render_optimizer_window()
 
         if ui.button(T("Ваниль##opt_p_van", "Stock##opt_p_van"), bw, 28, active == "vanilla" and "primary" or "default") then
             apply_preset("vanilla")
-            cfg = optimizer.get_config()
-            dirty = false
         end
         ui.same_line(0, 6)
         if ui.button(T("Топ-3##opt_p_o3", "Top-3##opt_p_o3"), bw, 28, active == "optimal3" and "primary" or "default") then
             apply_preset("optimal3")
-            cfg = optimizer.get_config()
-            dirty = false
         end
         ui.same_line(0, 6)
         if ui.button(T("Макс FPS##opt_p_max", "Max FPS##opt_p_max"), bw, 28, active == "maxfps" and "primary" or "default") then
             apply_preset("maxfps")
-            cfg = optimizer.get_config()
-            dirty = false
         end
 
         ui.spacing(4)
@@ -146,7 +127,8 @@ local function render_optimizer_window()
         )
         if ch_max then
             cfg.max_full_sim_cars = val_max
-            dirty = true
+            optimizer.set_config(cfg)
+            if config then config.mark_dirty() end
         end
 
         local ch_dist, val_dist = ui.slider_float(
@@ -155,12 +137,8 @@ local function render_optimizer_window()
         )
         if ch_dist then
             cfg.max_full_sim_dist = val_dist
-            dirty = true
-        end
-
-        if dirty then
             optimizer.set_config(cfg)
-            if config then config.set("optimizer", "config", cfg) end
+            if config then config.mark_dirty() end
         end
     end)
 
@@ -207,6 +185,7 @@ if urushi and urushi.register_window then
         x = 264,
         y = 24,
         width = 396,
+        settings = opt_settings,
         render = render_optimizer_window,
     })
 end
