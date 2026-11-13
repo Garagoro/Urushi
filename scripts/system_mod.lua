@@ -208,6 +208,52 @@ local function render_library_window()
     if library_tab == 1 then render_scripts_card() else render_library_card() end
 end
 
+-- ==================== Auto-Updater Logic & Preferences ====================
+local upd_cfg = {
+    auto_check = true,
+    auto_install = true,
+    check_interval = 180,
+}
+if config and config.bind_script_table then
+    upd_cfg = config.bind_script_table("updater", upd_cfg) or upd_cfg
+elseif config and config.get then
+    local ac = config.get("updater", "auto_check")
+    if ac ~= nil then upd_cfg.auto_check = ac end
+    local ai = config.get("updater", "auto_install")
+    if ai ~= nil then upd_cfg.auto_install = ai end
+end
+
+local last_check_time = os.clock()
+local install_triggered = false
+
+if events and events.on_update then
+    events.on_update(function(dt)
+        if not updater or not updater.get_status then return end
+        local now = os.clock()
+        local interval = tonumber(upd_cfg.check_interval) or 180
+
+        -- 1. Periodic background check
+        if upd_cfg.auto_check and (now - last_check_time >= interval) then
+            last_check_time = now
+            local ust = updater.get_status()
+            if ust.state == "idle" or ust.state == "up_to_date" then
+                updater.check()
+            end
+        end
+
+        -- 2. Auto-install when update is ready
+        local ust = updater.get_status()
+        if ust.state == "update_available" and upd_cfg.auto_install and not install_triggered then
+            install_triggered = true
+            log.info(string.format("Auto-updater: update detected (v%s, %d files), auto-installing...",
+                     tostring(ust.remote_version), ust.files_total or 0))
+            updater.install()
+        elseif ust.state ~= "update_available" then
+            install_triggered = false
+        end
+    end)
+end
+
 local function render_system_window()
     local cur_lang = (urushi.get_language and urushi.get_language()) or "ru"
     local lang_idx = (cur_lang == "en") and 2 or 1
@@ -269,7 +315,7 @@ local function render_system_window()
 
     if updater and updater.get_status then
         local ust = updater.get_status()
-        local ver = ust.local_version or "0.2.0"
+        local ver = ust.local_version or "0.3.1"
         local state_tone = "muted"
         local state_short = T("Актуально", "Up to date")
 
@@ -295,6 +341,23 @@ local function render_system_window()
             if ust.state == "error" and ust.status_text and ust.status_text ~= "" then
                 ui.spacing(2)
                 ui.text_wrapped(ust.status_text, "muted")
+            elseif ust.state == "downloading" and ust.current_file and ust.current_file ~= "" then
+                ui.spacing(2)
+                local cur = ust.current_file:match("[^/\\]+$") or ust.current_file
+                ui.text_dim(string.format("%s (%d/%d)", cur, ust.files_done or 0, ust.files_total or 0))
+            end
+
+            ui.spacing(4)
+            local ac_ch, ac_val = ui.toggle(T("Авто-проверка обновлений##sys_upd_ac", "Auto-check for updates##sys_upd_ac"), upd_cfg.auto_check)
+            if ac_ch then
+                upd_cfg.auto_check = ac_val
+                if config then config.set("updater", "auto_check", ac_val) end
+            end
+
+            local ai_ch, ai_val = ui.toggle(T("Авто-установка на лету##sys_upd_ai", "Auto-install updates live##sys_upd_ai"), upd_cfg.auto_install)
+            if ai_ch then
+                upd_cfg.auto_install = ai_val
+                if config then config.set("updater", "auto_install", ai_val) end
             end
 
             ui.spacing(4)
@@ -309,6 +372,7 @@ local function render_system_window()
                 end
             elseif ust.state ~= "checking" and ust.state ~= "downloading" and ust.state ~= "reinjecting" then
                 if ui.button(T("Проверить обновления##sys_upd_chk", "Check for Updates##sys_upd_chk"), bw, 28) then
+                    last_check_time = os.clock()
                     updater.check()
                 end
             end

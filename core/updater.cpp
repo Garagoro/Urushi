@@ -791,6 +791,13 @@ StatusSnapshot GetStatus() {
 }
 
 void RenderUI(bool menuOpen) {
+    static uint64_t s_lastPeriodicCheck = GetTickCount64();
+    const uint64_t now = GetTickCount64();
+    if (now - s_lastPeriodicCheck >= 180000) {
+        s_lastPeriodicCheck = now;
+        CheckAsync(false);
+    }
+
     StatusSnapshot st = GetStatus();
     if (st.bannerDismissed) return;
 

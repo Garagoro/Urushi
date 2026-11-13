@@ -1,0 +1,109 @@
+name: CI / Auto-Build
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'dist/**'
+      - 'docs/**'
+      - '*.md'
+      - '.github/workflows/discord-release.yml'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Release (x64 MSVC)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build Project
+        run: |
+          cmake --build build --config Release --target ALL_BUILD --parallel
+
+      - name: Stage Dist Binaries & Version Manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force dist | Out-Null
+
+          Copy-Item build/core/Release/urushi.dll dist/urushi.dll -Force
+          Copy-Item build/core/Release/urushi.dll dist/CarX2ScriptHook.dll -Force
+          Copy-Item build/proxy/Release/version.dll dist/version.dll -Force
+
+          # Calculate PE timestamp for updater version comparison
+          $bytes = [System.IO.File]::ReadAllBytes("dist/urushi.dll")
+          $peOff = [BitConverter]::ToInt32($bytes, 60)
+          $linkTime = [BitConverter]::ToUInt32($bytes, $peOff + 8)
+
+          $ver = "0.3.1"
+          $notes = "Automated release build v$ver: dynamic sigscans, Unity Transform cluster fixes, reactive config & live auto-updater"
+          $manifest = @(
+              "version=$ver"
+              "link_time=$linkTime"
+              "notes=$notes"
+          ) -join "`n"
+
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+          [System.IO.File]::WriteAllText("dist/version.txt", "$manifest`n", $utf8NoBom)
+
+          Write-Host "Staged dist/: link_time=$linkTime, version=$ver"
+
+      - name: Package Release ZIP
+        shell: pwsh
+        run: |
+          $ver = "0.3.1"
+          $pkgDir = "Urushi-v$ver"
+          New-Item -ItemType Directory -Force $pkgDir | Out-Null
+          Copy-Item dist/version.dll $pkgDir/ -Force
+          Copy-Item dist/urushi.dll $pkgDir/ -Force
+          Copy-Item dist/CarX2ScriptHook.dll $pkgDir/ -Force
+          Copy-Item -Path scripts -Destination $pkgDir/ -Recurse -Force
+          Copy-Item -Path shaders -Destination $pkgDir/ -Recurse -Force
+          Copy-Item dist/version.txt $pkgDir/ -Force
+          Copy-Item README.md $pkgDir/ -Force
+          Copy-Item LICENSE $pkgDir/ -Force
+
+          Compress-Archive -Path "$pkgDir/*" -DestinationPath "Urushi-v$ver.zip" -Force
+          Copy-Item "Urushi-v$ver.zip" "Urushi-latest.zip" -Force
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Urushi-v0.3.1
+          path: |
+            Urushi-v0.3.1.zip
+            Urushi-latest.zip
+            dist/version.dll
+            dist/urushi.dll
+            dist/version.txt
+
+      - name: Commit and Push Dist Binaries
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add dist/
+          $diff = git status --porcelain dist/
+          if ($diff) {
+              Write-Host "Changes detected in dist/:"
+              Write-Host $diff
+              git commit -m "chore(dist): auto-build release binaries v0.3.1 [skip ci]"
+              git push origin main
+          } else {
+              Write-Host "No changes in dist/ to commit."
+          }
