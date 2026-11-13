@@ -67,7 +67,7 @@ std::vector<Installed> ListInstalled();
 bool ResolveEntry(const std::string& id, std::wstring& outFile, std::wstring& outDir);
 
 // ---- Script Updates for local scripts ----
-void CheckScriptUpdatesAsync();
+void CheckScriptUpdatesAsync(const std::string& singleScript = "");
 void UpdateScriptAsync(const std::string& scriptId);
 ScriptUpdatesSnapshot GetScriptUpdatesSnapshot();
 void SetScriptIgnored(const std::string& scriptId, bool ignored);

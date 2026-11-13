@@ -105,8 +105,14 @@ local function render_scripts_card()
 
         if up_snap.checking then
             ui.text(T("Проверка обновлений на GitHub...", "Checking for script updates on GitHub..."), "accent")
-            ui.spacing(2)
+        else
+            if ui.button(T("Проверить все обновления##chk_all_scr", "Check All Updates##chk_all_scr"), avail_w, 28, "ghost") then
+                if cloud and cloud.check_script_updates then
+                    cloud.check_script_updates()
+                end
+            end
         end
+        ui.spacing(4)
 
         for _, e in ipairs(urushi_scripts.list) do
             local title
@@ -122,88 +128,73 @@ local function render_scripts_card()
             local is_upd_ing = it and (it.state == "updating")
             local is_upd_ed = it and (it.state == "updated")
             local is_ign = it and (it.state == "ignored")
+            local is_chk = it and (it.state == "checking")
 
-            -- Update button to the left of the checkbox
-            local btn_w = has_upd and 76 or 26
-            local btn_h = 24
-            local btn_label
-            local btn_style = "ghost"
+            local sw_w = 40
+            local gap = 6
+            local actions_w = has_upd and (76 + 4 + 22) or (is_upd_ing and 76 or 26)
+            local right_pos = avail_w - sw_w - gap - actions_w
+
+            -- 1. Script title on the left
+            ui.text(title)
+
+            -- 2. Action button(s) right before the switch
+            ui.same_line(right_pos, 0)
 
             if has_upd then
-                btn_label = T("Обновить##upd_", "Update##upd_") .. e.id
-                btn_style = "primary"
-            elseif is_upd_ing then
-                btn_label = "...##upd_" .. e.id
-                btn_style = "accent"
-            elseif is_upd_ed then
-                btn_label = "✓##upd_" .. e.id
-                btn_style = "ghost"
-            elseif up_snap.checking then
-                btn_label = "...##upd_" .. e.id
-                btn_style = "ghost"
-            elseif is_ign then
-                btn_label = "—##upd_" .. e.id
-                btn_style = "ghost"
-            else
-                btn_label = "↻##upd_" .. e.id
-                btn_style = "ghost"
-            end
-
-            if ui.button(btn_label, btn_w, btn_h, btn_style) then
-                if has_upd then
+                if ui.button(T("Обновить##upd_", "Update##upd_") .. e.id, 76, 24, "primary") then
                     if cloud and cloud.update_script then
                         cloud.update_script(e.id)
                         urushi_scripts.dirty = true
                     end
-                elseif is_ign then
-                    if cloud and cloud.toggle_script_ignore then
-                        cloud.toggle_script_ignore(e.id)
-                    end
-                else
-                    if cloud and cloud.check_script_updates then
-                        cloud.check_script_updates()
-                    end
                 end
-            end
-
-            -- Tooltip on hover
-            if ui.tooltip then
-                if has_upd then
+                if ui.tooltip then
                     ui.tooltip(T("Доступна новая версия на GitHub! Нажмите для обновления", "New version available on GitHub! Click to update"))
-                elseif is_upd_ing then
-                    ui.tooltip(T("Загрузка обновления...", "Downloading update..."))
-                elseif is_upd_ed then
-                    ui.tooltip(T("Обновлено! Нажмите 'Перезагрузить скрипты' ниже", "Updated! Click 'Reload scripts' below"))
-                elseif is_ign then
-                    ui.tooltip(T("Обновления игнорируются. Нажмите, чтобы включить проверку", "Updates ignored. Click to enable checks"))
-                elseif up_snap.checking then
-                    ui.tooltip(T("Проверка обновлений...", "Checking updates..."))
-                elseif it and it.state == "up_to_date" then
-                    ui.tooltip(T("Скрипт актуален. Нажмите для повторной проверки", "Script is up to date. Click to recheck"))
-                else
-                    ui.tooltip(T("Проверить наличие новой версии на GitHub", "Check for newer version on GitHub"))
                 end
-            end
-
-            local used_w = btn_w
-            if has_upd then
                 ui.same_line(0, 4)
-                if ui.button("✕##ign_" .. e.id, 22, btn_h, "ghost") then
+                if ui.button("@close##ign_" .. e.id, 22, 24, "ghost") then
                     if cloud and cloud.toggle_script_ignore then
                         cloud.toggle_script_ignore(e.id)
                     end
                 end
                 if ui.tooltip then
-                    ui.tooltip(T("Игнорировать обновление этого скрипта", "Ignore updates for this script"))
+                    ui.tooltip(T("Игнорировать обновления этого скрипта", "Ignore updates for this script"))
                 end
-                used_w = used_w + 4 + 22
+            elseif is_upd_ing then
+                ui.button(T("...##upd_", "...##upd_") .. e.id, 76, 24, "accent")
+                if ui.tooltip then ui.tooltip(T("Загрузка обновления...", "Downloading update...")) end
+            elseif is_upd_ed then
+                ui.button("@check##upd_" .. e.id, 26, 24, "ghost")
+                if ui.tooltip then ui.tooltip(T("Обновлен! Перезагрузите скрипты", "Updated! Reload scripts")) end
+            elseif is_chk then
+                ui.button("...##upd_" .. e.id, 26, 24, "ghost")
+                if ui.tooltip then ui.tooltip(T("Проверка...", "Checking...")) end
+            elseif is_ign then
+                if ui.button("—##upd_" .. e.id, 26, 24, "ghost") then
+                    if cloud and cloud.toggle_script_ignore then
+                        cloud.toggle_script_ignore(e.id)
+                    end
+                end
+                if ui.tooltip then ui.tooltip(T("Игнорируется. Нажмите, чтобы включить проверку", "Ignored. Click to enable checks")) end
+            else
+                -- Idle / up to date: vector refresh icon button, checks THIS single script
+                if ui.button("@refresh##upd_" .. e.id, 26, 24, "ghost") then
+                    if cloud and cloud.check_script_updates then
+                        cloud.check_script_updates(e.id)
+                    end
+                end
+                if ui.tooltip then
+                    if it and it.state == "up_to_date" then
+                        ui.tooltip(T("Скрипт актуален. Нажмите для проверки", "Script is up to date. Click to check"))
+                    else
+                        ui.tooltip(T("Проверить обновление для этого скрипта", "Check update for this script"))
+                    end
+                end
             end
 
-            ui.same_line(0, 6)
-
-            -- Checkbox / toggle taking remaining width
-            local toggle_w = math.max(60, avail_w - used_w - 6)
-            local ch, val = ui.toggle(title .. "##scr_" .. e.id, e.enabled, toggle_w)
+            -- 3. Toggle switch on the far right
+            ui.same_line(avail_w - sw_w, 0)
+            local ch, val = ui.toggle("##sw_" .. e.id, e.enabled, sw_w)
             if ch then
                 e.enabled = val
                 urushi.set_setting("scripts", e.id, val)
@@ -215,6 +206,7 @@ local function render_scripts_card()
             elseif e.user and not e.enabled then
                 ui.text_dim(T("Пользовательский скрипт (выключен)", "User script (off)"))
             end
+            ui.spacing(2)
         end
 
         ui.spacing(4)

@@ -134,8 +134,12 @@ int Lua_CloudInclude(lua_State* L) {
     return 1;
 }
 
-int Lua_CloudCheckScriptUpdates(lua_State*) {
-    CloudScripts::CheckScriptUpdatesAsync();
+int Lua_CloudCheckScriptUpdates(lua_State* L) {
+    std::string id;
+    if (lua_isstring(L, 1)) {
+        id = lua_tostring(L, 1);
+    }
+    CloudScripts::CheckScriptUpdatesAsync(id);
     return 0;
 }
 

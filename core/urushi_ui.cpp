@@ -1830,6 +1830,41 @@ bool UrushiUI::Segmented(const std::string& id, int* currentIdx, const std::vect
     return changed;
 }
 
+static void DrawRefreshIcon(ImDrawList* dl, ImVec2 center, float r, ImU32 col, float th) {
+    // 300 degree clockwise circular arc
+    dl->PathArcTo(center, r, -2.4f, 2.3f, 20);
+    dl->PathStroke(col, ImDrawFlags_None, th);
+    // Arrowhead at the end (angle ~ 2.3f)
+    const float a = 2.3f;
+    const float tx = center.x + r * cosf(a);
+    const float ty = center.y + r * sinf(a);
+    const float nx = -sinf(a);
+    const float ny = cosf(a);
+    const float px = -ny;
+    const float py = nx;
+    const float arrowLen = 3.6f * (th / 1.5f);
+    const float arrowWidth = 2.8f * (th / 1.5f);
+    ImVec2 pTip(tx, ty);
+    ImVec2 pBase(tx - nx * arrowLen, ty - ny * arrowLen);
+    ImVec2 p1(pBase.x + px * arrowWidth, pBase.y + py * arrowWidth);
+    ImVec2 p2(pBase.x - px * arrowWidth, pBase.y - py * arrowWidth);
+    dl->AddTriangleFilled(pTip, p1, p2, col);
+}
+
+static void DrawCheckIcon(ImDrawList* dl, ImVec2 center, float r, ImU32 col, float th) {
+    ImVec2 p1(center.x - r * 0.7f, center.y);
+    ImVec2 p2(center.x - r * 0.15f, center.y + r * 0.55f);
+    ImVec2 p3(center.x + r * 0.75f, center.y - r * 0.55f);
+    dl->AddLine(p1, p2, col, th);
+    dl->AddLine(p2, p3, col, th);
+}
+
+static void DrawCloseIcon(ImDrawList* dl, ImVec2 center, float r, ImU32 col, float th) {
+    const float sz = r * 0.75f;
+    dl->AddLine(ImVec2(center.x - sz, center.y - sz), ImVec2(center.x + sz, center.y + sz), col, th);
+    dl->AddLine(ImVec2(center.x + sz, center.y - sz), ImVec2(center.x - sz, center.y + sz), col, th);
+}
+
 bool UrushiUI::Button(const std::string& label, float width, float height, ButtonStyle style) {
     const float S = s_uiScale;
     float w = (width <= 0.0f) ? CurrentContentWidth() : width;
@@ -1876,11 +1911,23 @@ bool UrushiUI::Button(const std::string& label, float width, float height, Butto
 
     const char* hashPos = strstr(label.c_str(), "##");
     std::string vis = hashPos ? label.substr(0, hashPos - label.c_str()) : label;
-    ImVec2 tSz = ImGui::CalcTextSize(vis.c_str());
-    dl->PushClipRect(ImVec2(bMin.x + 4.0f * S, bMin.y + 1.0f * S), ImVec2(bMax.x - 4.0f * S, bMax.y - 1.0f * S), true);
-    float tx = pos.x + (std::max)(6.0f * S, (w - tSz.x) * 0.5f);
-    dl->AddText(ImVec2(tx, pos.y + (height - tSz.y) * 0.5f), fg, vis.c_str());
-    dl->PopClipRect();
+
+    if (vis == "@refresh" || vis == "refresh" || vis == "\xe2\x86\xbb" || vis == "\xe2\x9f\xb3") {
+        ImVec2 center(pos.x + w * 0.5f, pos.y + height * 0.5f);
+        DrawRefreshIcon(dl, center, 5.5f * S, fg, std::max(1.2f, 1.5f * S));
+    } else if (vis == "@check" || vis == "\xe2\x9c\x93") {
+        ImVec2 center(pos.x + w * 0.5f, pos.y + height * 0.5f);
+        DrawCheckIcon(dl, center, 6.0f * S, fg, std::max(1.2f, 1.8f * S));
+    } else if (vis == "@close" || vis == "\xe2\x9c\x95" || vis == "✕") {
+        ImVec2 center(pos.x + w * 0.5f, pos.y + height * 0.5f);
+        DrawCloseIcon(dl, center, 4.5f * S, fg, std::max(1.2f, 1.6f * S));
+    } else {
+        ImVec2 tSz = ImGui::CalcTextSize(vis.c_str());
+        dl->PushClipRect(ImVec2(bMin.x + 4.0f * S, bMin.y + 1.0f * S), ImVec2(bMax.x - 4.0f * S, bMax.y - 1.0f * S), true);
+        float tx = pos.x + (std::max)(6.0f * S, (w - tSz.x) * 0.5f);
+        dl->AddText(ImVec2(tx, pos.y + (height - tSz.y) * 0.5f), fg, vis.c_str());
+        dl->PopClipRect();
+    }
 
     return clicked;
 }

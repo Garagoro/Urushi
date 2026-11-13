@@ -637,23 +637,27 @@ void SetScriptIgnored(const std::string& scriptId, bool ignored) {
     }
 }
 
-void CheckScriptUpdatesAsync() {
+void CheckScriptUpdatesAsync(const std::string& singleScript) {
     if (g_scriptChecking.exchange(true)) return;
-    std::thread([exeDir = g_exeDir]() {
+    std::thread([exeDir = g_exeDir, singleScript]() {
         std::wstring scriptsDir = exeDir + L"\\scripts";
-        WIN32_FIND_DATAW fd;
-        HANDLE h = FindFirstFileW((scriptsDir + L"\\*.lua").c_str(), &fd);
         std::vector<std::string> names;
-        if (h != INVALID_HANDLE_VALUE) {
-            do {
-                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-                    std::string fn = Logger::ToNarrow(fd.cFileName);
-                    if (fn.size() > 4 && fn.substr(fn.size() - 4) == ".lua") {
-                        names.push_back(fn.substr(0, fn.size() - 4));
+        if (!singleScript.empty()) {
+            names.push_back(singleScript);
+        } else {
+            WIN32_FIND_DATAW fd;
+            HANDLE h = FindFirstFileW((scriptsDir + L"\\*.lua").c_str(), &fd);
+            if (h != INVALID_HANDLE_VALUE) {
+                do {
+                    if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                        std::string fn = Logger::ToNarrow(fd.cFileName);
+                        if (fn.size() > 4 && fn.substr(fn.size() - 4) == ".lua") {
+                            names.push_back(fn.substr(0, fn.size() - 4));
+                        }
                     }
-                }
-            } while (FindNextFileW(h, &fd));
-            FindClose(h);
+                } while (FindNextFileW(h, &fd));
+                FindClose(h);
+            }
         }
 
         {
