@@ -28,11 +28,11 @@ jobs:
 
       - name: Configure CMake
         shell: cmd
-        run: cmake -B build -G "Visual Studio 17 2022" -A x64
+        run: cmake -B build -A x64
 
       - name: Build Project
         shell: cmd
-        run: cmake --build build --config Release --target ALL_BUILD --parallel
+        run: cmake --build build --config Release --parallel
 
       - name: Stage Dist Binaries & Version Manifest
         shell: pwsh
