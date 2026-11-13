@@ -24,9 +24,7 @@ static uintptr_t s_rvaIl2CppVirtualInvokeData       = 0x9238B0;
 static uintptr_t s_rvaCarBehaviourSetEffectsEnabled = 0x23D1440; // fallback beta RVA (vanilla 0x1E00F50)
 
 // CarX.DeformationPhysics
-static uintptr_t s_rvaApplyForceToDeformUpdate       = 0xEBF350;
-static uintptr_t s_rvaBreakPhysicsJointUpdate        = 0xEC1DC0;
-static uintptr_t s_rvaBaseCollisionEffectApply       = 0xEA0450;
+static uintptr_t s_rvaBaseCollisionEffectApply       = 0x1362FD0;
 
 static uintptr_t s_rvaINetworkCarContainerTypeInfo  = 0x843A128;
 static uintptr_t s_rvaDeformSleepTypeInfoGlobal     = 0x83E7018;
@@ -117,8 +115,6 @@ std::vector<CarSimOptimizer::CarEntry> s_netCarsSnapshot;
 uintptr_t s_gaBase = 0;
 t_SwitchingUpdate s_origSwitchingUpdate = nullptr;
 t_IsFarCar s_origIsFarCar = nullptr;
-t_SystemOnUpdate s_origApplyForceOnUpdate = nullptr;
-t_SystemOnUpdate s_origBreakPhysicsJointOnUpdate = nullptr;
 t_BaseCollisionEffectApply s_origBaseCollisionEffectApply = nullptr;
 bool s_noDamageOverride = false;
 t_ProviderGetTransform pfn_ProviderGetTransform = nullptr;
@@ -279,6 +275,26 @@ static uintptr_t LookupTypeClass(const char* expectedName, const char* expectedN
         }
     }
     return 0;
+}
+
+static void* LookupClassMethod(uintptr_t klass, const char* methodName) {
+    if (!klass || !methodName) return nullptr;
+    uintptr_t methodsPtr = 0;
+    uint16_t methodCount = 0;
+    if (!SafeRead(klass + 0x98, &methodsPtr) || !SafeRead(klass + 0x118, &methodCount)) return nullptr;
+    if (!methodsPtr || methodCount == 0 || methodCount > 512) return nullptr;
+    for (uint16_t i = 0; i < methodCount; ++i) {
+        uintptr_t mi = 0;
+        if (!SafeRead(methodsPtr + static_cast<size_t>(i) * sizeof(uintptr_t), &mi) || !mi) continue;
+        uintptr_t namePtr = 0;
+        uintptr_t fnPtr = 0;
+        if (!SafeRead(mi + 0x18, &namePtr) || !SafeRead(mi + 0x00, &fnPtr)) continue;
+        char nameBuf[64] = {};
+        if (SafeReadCString(namePtr, nameBuf, sizeof(nameBuf)) && strcmp(nameBuf, methodName) == 0) {
+            return reinterpret_cast<void*>(fnPtr);
+        }
+    }
+    return nullptr;
 }
 
 static bool LookupInterfaceSlotSEH(void* obj, void* ifaceTypeInfo, uint32_t slot, void** outFn, void** outMethodInfo) {
@@ -803,50 +819,6 @@ static void UpdateNativeCarPhysicsOnMainThread(const CarSimOptimizer::Config& cf
 
 // ==================== Hook Detours ====================
 
-static void __fastcall Hooked_ApplyForceOnUpdate(void* self, void* method) {
-    HookManager::ScopedHookGuard guard;
-    if (HookManager::IsUnloading() || !s_origApplyForceOnUpdate) {
-        if (s_origApplyForceOnUpdate) s_origApplyForceOnUpdate(self, method);
-        return;
-    }
-    if (!NativeCarX::IsInSessionFast()) {
-        s_origApplyForceOnUpdate(self, method);
-        return;
-    }
-    bool block = false;
-    {
-        std::lock_guard<std::recursive_mutex> lock(s_mutex);
-        block = s_cfg.disableDamage || s_noDamageOverride;
-    }
-    if (block) {
-        s_stats.damageBlocks++;
-        return; // Body mesh deformation blocked!
-    }
-    s_origApplyForceOnUpdate(self, method);
-}
-
-static void __fastcall Hooked_BreakPhysicsJointOnUpdate(void* self, void* method) {
-    HookManager::ScopedHookGuard guard;
-    if (HookManager::IsUnloading() || !s_origBreakPhysicsJointOnUpdate) {
-        if (s_origBreakPhysicsJointOnUpdate) s_origBreakPhysicsJointOnUpdate(self, method);
-        return;
-    }
-    if (!NativeCarX::IsInSessionFast()) {
-        s_origBreakPhysicsJointOnUpdate(self, method);
-        return;
-    }
-    bool block = false;
-    {
-        std::lock_guard<std::recursive_mutex> lock(s_mutex);
-        block = s_cfg.disableDamage || s_noDamageOverride;
-    }
-    if (block) {
-        s_stats.jointBreakBlocks++;
-        return; // Part detaching blocked!
-    }
-    s_origBreakPhysicsJointOnUpdate(self, method);
-}
-
 static void __fastcall Hooked_BaseCollisionEffectApply(void* self, void* a2, void* a3, void* a4) {
     HookManager::ScopedHookGuard guard;
     if (HookManager::IsUnloading() || !s_origBaseCollisionEffectApply) {
@@ -864,6 +836,7 @@ static void __fastcall Hooked_BaseCollisionEffectApply(void* self, void* a2, voi
     }
     if (block) {
         s_stats.damageBlocks++;
+        UnityBridge::RequestRepairPlayerCar();
         return; // Headlights breaking, cracked glass & collision mesh replacement blocked!
     }
     s_origBaseCollisionEffectApply(self, a2, a3, a4);
@@ -1155,6 +1128,22 @@ bool CarSimOptimizer::Init() {
         s_rvaIsFarCar = vaIsFar - s_gaBase;
     }
 
+    // 4. Scan for BaseCollisionEffectBehaviour::Apply
+    uintptr_t vaEffectApply = PatternScanner::FindOrFallback(
+        hGA,
+        "80 79 20 00 75 1E 80 79 21 00 C6 41 20 01 74 14 48 8B 11 48 8B 82 B8 01 00 00",
+        s_rvaBaseCollisionEffectApply,
+        "BaseCollisionEffect_Apply");
+    if (vaEffectApply && vaEffectApply >= s_gaBase) {
+        s_rvaBaseCollisionEffectApply = vaEffectApply - s_gaBase;
+    }
+
+    uintptr_t kEffect = LookupTypeClass("BaseCollisionEffectBehaviour", "CarX.DeformationPhysics");
+    void* fnEffect = LookupClassMethod(kEffect, "Apply");
+    if (fnEffect && reinterpret_cast<uintptr_t>(fnEffect) >= s_gaBase) {
+        s_rvaBaseCollisionEffectApply = reinterpret_cast<uintptr_t>(fnEffect) - s_gaBase;
+    }
+
     pfn_ProviderGetTransform = s_rvaProviderGetTransform ? reinterpret_cast<t_ProviderGetTransform>(s_gaBase + s_rvaProviderGetTransform) : nullptr;
     pfn_TransformGetPos = s_rvaTransformGetPosInjected ? reinterpret_cast<t_TransformGetPos>(s_gaBase + s_rvaTransformGetPosInjected) : nullptr;
     pfn_LookupVirtualInvoke = s_rvaIl2CppVirtualInvokeData ? reinterpret_cast<t_LookupVirtualInvoke>(s_gaBase + s_rvaIl2CppVirtualInvokeData) : nullptr;
@@ -1162,8 +1151,6 @@ bool CarSimOptimizer::Init() {
 
     void* targetSwitching = s_rvaSwitchingUpdate ? reinterpret_cast<void*>(s_gaBase + s_rvaSwitchingUpdate) : nullptr;
     void* targetIsFar = s_rvaIsFarCar ? reinterpret_cast<void*>(s_gaBase + s_rvaIsFarCar) : nullptr;
-    void* targetApplyForce = s_rvaApplyForceToDeformUpdate ? reinterpret_cast<void*>(s_gaBase + s_rvaApplyForceToDeformUpdate) : nullptr;
-    void* targetBreakJoint = s_rvaBreakPhysicsJointUpdate ? reinterpret_cast<void*>(s_gaBase + s_rvaBreakPhysicsJointUpdate) : nullptr;
     void* targetEffectApply = s_rvaBaseCollisionEffectApply ? reinterpret_cast<void*>(s_gaBase + s_rvaBaseCollisionEffectApply) : nullptr;
 
     bool okSwitch = false;
@@ -1184,24 +1171,6 @@ bool CarSimOptimizer::Init() {
             "DistanceBasedPhysicsSwitchingSubController::IsFarCar");
     }
 
-    bool okApply = false;
-    if (targetApplyForce) {
-        okApply = HookManager::CreateHook(
-            targetApplyForce,
-            reinterpret_cast<void*>(Hooked_ApplyForceOnUpdate),
-            reinterpret_cast<void**>(&s_origApplyForceOnUpdate),
-            "ApplyForceToDeformationSkeletonSystem::OnUpdate");
-    }
-
-    bool okBreak = false;
-    if (targetBreakJoint) {
-        okBreak = HookManager::CreateHook(
-            targetBreakJoint,
-            reinterpret_cast<void*>(Hooked_BreakPhysicsJointOnUpdate),
-            reinterpret_cast<void**>(&s_origBreakPhysicsJointOnUpdate),
-            "BreakPhysicsJointSystem::OnUpdate");
-    }
-
     bool okEffect = false;
     if (targetEffectApply) {
         okEffect = HookManager::CreateHook(
@@ -1214,7 +1183,7 @@ bool CarSimOptimizer::Init() {
     ResolveNativeExportsIfNeeded();
     ResolveStaticsIfNeeded();
 
-    s_stats.hooksInstalled = (okSwitch || okFar || okApply || okBreak || okEffect);
+    s_stats.hooksInstalled = (okSwitch || okFar || okEffect);
     s_stats.initialized = true;
 
     Logger::Info(std::string("CarSimOptimizer initialized (hooks=") +
@@ -1330,6 +1299,15 @@ void CarSimOptimizer::UpdateOnMainThread(float /*dt*/, const std::vector<LiveCar
         s_stats.vanillaSmallHideDist = s_renderBase.smallHideDist;
         s_stats.vanillaSmallRadius = s_renderBase.smallRadius;
         s_stats.vanillaTinyRadius = s_renderBase.tinyRadius;
+    }
+
+    if (s_stats.noDamageActive && NativeCarX::IsInSessionFast()) {
+        static ULONGLONG s_lastAutoRepairMs = 0;
+        const ULONGLONG nowMs = GetTickCount64();
+        if (nowMs - s_lastAutoRepairMs >= 1000) {
+            s_lastAutoRepairMs = nowMs;
+            UnityBridge::RequestRepairPlayerCar();
+        }
     }
 }
 

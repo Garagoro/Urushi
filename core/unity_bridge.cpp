@@ -676,8 +676,9 @@ static bool SafeIsBodyMaterialIdSEH(uintptr_t unityBase, int32_t matId, bool all
     if (!allowSharedAsset && matId >= 0) return false;
     char matName[64] = {};
     if (!SafeReadMatNameSEH(unityBase, matId, matName, sizeof(matName))) return false;
-    if (strcmp(matName, "car_body(Clone)") == 0) return true;
-    return allowSharedAsset && strcmp(matName, "car_body") == 0;
+    // Matches "car_body", "car_body(Clone)", "car_body (Instance)", "car_body(Clone) (Instance)"
+    if (strncmp(matName, "car_body", 8) == 0) return true;
+    return false;
 }
 
 static bool SafeResolveMatAndQueueSEH(uintptr_t unityBase, int32_t matId, void** outNatMat, int32_t* outQueue) {
@@ -712,7 +713,7 @@ static int SafeClassifyMaterialSEH(uintptr_t unityBase, int32_t matId, int32_t* 
         const char* matName = *reinterpret_cast<const char* const*>(mAddr + 0x20);
         if (!IsReadableMem(reinterpret_cast<uintptr_t>(matName), 16)) return kMatSkip;
 
-        if (strcmp(matName, "car_body(Clone)") == 0) return kMatBody;
+        if (strncmp(matName, "car_body", 8) == 0) return kMatBody;
         if (strncmp(matName, "car_glass", 9) == 0 || strncmp(matName, "shadowcaster", 12) == 0) {
             return kMatSkip;
         }
@@ -1000,7 +1001,7 @@ static bool SafeSyncMaterialQueueAndDepthSEH(uintptr_t unityBase, int32_t matId,
 
         const char* matName = *reinterpret_cast<const char* const*>(mAddr + 0x20);
         if (!IsReadableMem(reinterpret_cast<uintptr_t>(matName), 16)) return false;
-        if (requireBodyName && strcmp(matName, "car_body(Clone)") != 0) return false;
+        if (requireBodyName && strncmp(matName, "car_body", 8) != 0) return false;
 
         const int32_t curQ = pfnGetRq(natMat);
         static const wchar_t kDepthOnlyW[] = L"DepthOnly";
@@ -1429,7 +1430,8 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
     bool packIsDef = IsDefaultNativeTex(natPack, s_natWhite, s_natBlack, s_natNormal);
     void* forcedPackSrv = nullptr;
 
-    if (!albIsDef || !packIsDef) {
+    const bool hasIso = (s_playerIsoPackTex != nullptr && s_playerIsoPackSrv != nullptr);
+    if (!albIsDef && !hasIso) {
         if (natPack != s_playerIsoPackTex) {
             releasePlayerIsoPackTex();
         }
@@ -1478,21 +1480,13 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
                 albId = SafeReadNativeTexIdSEH(natAlb);
                 albIsDef = false;
             }
-            if (matPackIsReal) {
-                if (s_playerIsoPackTex && matPack == s_playerIsoPackTex && s_playerIsoPackSrv) {
-                    natPack = s_playerIsoPackTex;
-                    packId = s_playerIsoPackId;
-                    forcedPackSrv = s_playerIsoPackSrv;
-                    packIsDef = false;
-                } else {
-                    natPack = matPack;
-                    packId = SafeReadNativeTexIdSEH(natPack);
-                    packIsDef = false;
-                    releasePlayerIsoPackTex();
-                }
+            if (matPackIsReal && !hasIso) {
+                natPack = matPack;
+                packId = SafeReadNativeTexIdSEH(natPack);
+                packIsDef = false;
+                releasePlayerIsoPackTex();
             }
 
-            const bool hasIso = (s_playerIsoPackTex != nullptr && s_playerIsoPackSrv != nullptr);
             if ((albIsDef && packIsDef) || hasIso) {
                 bool copyOk = false;
                 if (!hasIso) {
@@ -1550,12 +1544,10 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
                             }
                         }
                     }
-                    if (assignedSlots > 0) {
-                        natPack = s_playerIsoPackTex;
-                        packId = s_playerIsoPackId;
-                        forcedPackSrv = s_playerIsoPackSrv;
-                        packIsDef = false;
-                    }
+                    natPack = s_playerIsoPackTex;
+                    packId = s_playerIsoPackId;
+                    forcedPackSrv = s_playerIsoPackSrv;
+                    packIsDef = false;
                 }
 
                 if (s_loggedDefRootGo != rootGo) {

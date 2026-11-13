@@ -104,15 +104,20 @@ local function render_scripts_card()
         local avail_w = ui.avail_width()
 
         if up_snap.checking then
-            ui.text(T("Проверка обновлений на GitHub...", "Checking for script updates on GitHub..."), "accent")
+            ui.text(T("Проверка обновлений...", "Checking updates..."), "accent")
+            ui.spacing(4)
         else
-            if ui.button(T("Проверить все обновления##chk_all_scr", "Check All Updates##chk_all_scr"), avail_w, 28, "ghost") then
+            local chk_w = math.min(140, avail_w)
+            if ui.button(T("Проверить все##chk_all_scr", "Check All##chk_all_scr"), chk_w, 24, "ghost") then
                 if cloud and cloud.check_script_updates then
                     cloud.check_script_updates()
                 end
             end
+            if ui.tooltip then
+                ui.tooltip(T("Проверить обновления для всех скриптов на GitHub", "Check updates for all scripts on GitHub"))
+            end
+            ui.spacing(4)
         end
-        ui.spacing(4)
 
         for _, e in ipairs(urushi_scripts.list) do
             local title
