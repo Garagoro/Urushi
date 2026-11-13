@@ -104,11 +104,12 @@ int Lua_CloudLoad(lua_State* L) {
     (void)dirUtf8;
     // optional 2nd argument: environment table (scripts from the cloud always run isolated, see scripts/main.lua)
     int st = LuaSandbox::LoadFileText(L, fileUtf8.c_str(), lua_istable(L, 2) ? 2 : 0);
-    if (st == LUA_OK) st = LuaSandbox::PCall(L, 0, 0, "cloud_script", 8000);
+    if (st == LUA_OK) st = LuaSandbox::PCall(L, 0, 1, "cloud_script", 8000);
 
     if (st == LUA_OK) {
         lua_pushboolean(L, 1);
-        return 1;
+        lua_insert(L, -2);
+        return 2;
     }
     lua_pushboolean(L, 0);
     lua_insert(L, -2);

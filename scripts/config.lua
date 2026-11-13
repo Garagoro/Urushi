@@ -1,19 +1,25 @@
 -- scripts/config.lua
--- The one and only config system: a single JSON file (urushi_data/config.json) with autosave.
--- Deliberately tiny. Want profiles / presets / per-car configs / import-export? Build them on top of this module
--- (or replace this file): everything goes through config.get / config.set / config.save.
+-- The universal configuration & persistence engine: single JSON file (urushi_data/config.json) with autosave.
 --
---   config.get(section, key, default)      read a value (default if missing)
---   config.set(section, key, value)        write a value (nil removes it); autosaved ~2 s later
---   config.section(name)                   table with all keys of a section (read-only copy)
---   config.save()                          write now (also happens automatically)
---   config.reload()                        re-read the file from disk
---   config.for_script(id)                  { get(key, default), set(key, value) } fixed to section "script:<id>"
---                                          (this is what isolated / cloud scripts get as `config`)
+-- Features:
+--   1. Zero-Boilerplate for Scripts:
+--      - Scripts can declare `settings = { ... }` or `SETTINGS = { ... }` in their environment:
+--        The core automatically detects it, restores saved values from config.json, and auto-saves changes!
+--      - Scripts can pass `settings = { ... }` to `urushi.register_window`:
+--        The core automatically detects it and persists it.
+--      - Scripts can call `local cfg = config.auto({ speed = 100, enabled = true })`:
+--        Returns a reactive proxy table that auto-saves on any property mutation!
+--      - Scripts can use lifecycle hooks: `config.register({ id = "my_mod", on_save = fn, on_load = fn })`.
+--   2. Direct API:
+--      - config.get(section, key, default)      read a value
+--      - config.set(section, key, value)        write a value; debounced autosave ~2s
+--      - config.auto([id], defaults)            reactive table proxy bound to config.json
+--      - config.register(opts)                  register custom state provider (on_save, on_load, store)
+--      - config.save()                          write to disk immediately
+--      - config.reload()                        re-read from disk and notify all registered providers
+--      - config.for_script(id)                  scoped config object for isolated script environments
 --
--- File format: { "version": 1, "<section>": { "<key>": <json value> } }
--- Only values that were actually changed are stored, so new settings in updates need no migration.
--- Safety: the previous good file is kept as config.bak.json and used if config.json is missing or corrupt.
+-- Safety: keeps previous good copy in config.bak.json. Atomic debounced flushing.
 
 local FILE = "urushi_data/config.json"
 local BACKUP = "urushi_data/config.bak.json"
@@ -23,6 +29,8 @@ local config = {}
 local data = { version = 1 }
 local dirty = false
 local dirty_since = 0
+
+config.registry = {}
 
 -- ==================== tiny JSON ====================
 
@@ -51,17 +59,18 @@ local function encode(v, depth)
         return string.format("%.9g", v)
     elseif t == "string" then return '"' .. esc(v) .. '"'
     elseif t == "table" then
+        local raw = v._raw or v
         local parts = {}
-        if next(v) == nil or is_array(v) then
-            for i = 1, #v do parts[i] = encode(v[i], depth + 1) end
+        if next(raw) == nil or is_array(raw) then
+            for i = 1, #raw do parts[i] = encode(raw[i], depth + 1) end
             return "[" .. table.concat(parts, ",") .. "]"
         end
         local keys = {}
-        for k in pairs(v) do keys[#keys + 1] = tostring(k) end
+        for k in pairs(raw) do keys[#keys + 1] = tostring(k) end
         table.sort(keys)
         for _, k in ipairs(keys) do
-            local val = v[k]
-            if val == nil then val = v[tonumber(k)] end
+            local val = raw[k]
+            if val == nil then val = raw[tonumber(k)] end
             parts[#parts + 1] = '"' .. esc(k) .. '":' .. encode(val, depth + 1)
         end
         return "{" .. table.concat(parts, ",") .. "}"
@@ -164,7 +173,7 @@ local function read_file(path)
     return text
 end
 
-local function write_file(path, text)
+local function write_file_content(path, text)
     local f = io.open(path, "w")
     if not f then return false end
     f:write(text)
@@ -180,39 +189,121 @@ local function try_load(path)
     return nil
 end
 
-function config.reload()
-    local t = try_load(FILE)
-    if not t then
-        t = try_load(BACKUP)
-        if t then log.warn("config.json missing or corrupt, restored from config.bak.json") end
+-- ==================== Table Helpers ====================
+
+local function deep_copy(v)
+    if type(v) ~= "table" then return v end
+    local raw = v._raw or v
+    local r = {}
+    for k, sub in pairs(raw) do
+        r[k] = deep_copy(sub)
     end
-    data = t or { version = 1 }
-    data.version = data.version or 1
-    dirty = false
+    return r
 end
 
-function config.save()
-    local text = encode(data)
-    -- keep the last good copy first; if we crash while writing config.json, the backup is used on next start
-    local old = read_file(FILE)
-    if old and old ~= "" and pcall(decode, old) then write_file(BACKUP, old) end
-    if write_file(FILE, text) then
-        dirty = false
-        return true
+local function tables_equal(a, b)
+    if a == b then return true end
+    if type(a) ~= "table" or type(b) ~= "table" then return false end
+    local raw_a = a._raw or a
+    local raw_b = b._raw or b
+    for k, v in pairs(raw_a) do
+        if not tables_equal(v, raw_b[k]) then return false end
     end
-    log.warn("config: cannot write " .. FILE)
-    return false
+    for k in pairs(raw_b) do
+        if raw_a[k] == nil then return false end
+    end
+    return true
 end
 
--- ==================== API ====================
+local function detect_caller_id(level)
+    level = level or 2
+    local info = debug and debug.getinfo and debug.getinfo(level, "S")
+    if info and info.short_src then
+        local src = info.short_src
+        local cloud_id = src:match("scripts[/\\]cloud[/\\]([^/\\]+)")
+        if cloud_id then return "cloud:" .. cloud_id end
+        local script_name = src:match("([^/\\]+)%.lua$")
+        if script_name then return script_name end
+    end
+    return "general"
+end
+
+local function resolve_section(id)
+    id = tostring(id)
+    if id:find("^script:") or id:find("^cloud:") then return id end
+    local known = { ui = true, carfx = true, steer_assist = true, optimizer = true, tires = true, anticollision = true }
+    if known[id] then return id end
+    return "script:" .. id
+end
+
+-- ==================== Reactive Proxy ====================
+
+local function make_reactive(section, store, on_change, prefix)
+    prefix = prefix or ""
+    local proxy = {}
+    local sub_proxies = {}
+
+    local mt = {
+        __index = function(_, k)
+            if k == "_raw" then return store end
+            local v = store[k]
+            if type(v) == "table" then
+                if not sub_proxies[k] then
+                    sub_proxies[k] = make_reactive(section, v, on_change, prefix .. tostring(k) .. ".")
+                end
+                return sub_proxies[k]
+            end
+            return v
+        end,
+
+        __newindex = function(_, k, v)
+            local raw_val = (type(v) == "table" and v._raw) and v._raw or v
+            if store[k] == raw_val and type(raw_val) ~= "table" then return end
+            sub_proxies[k] = nil
+            if raw_val == nil then
+                store[k] = nil
+            else
+                store[k] = deep_copy(raw_val)
+            end
+            if on_change then
+                on_change(k, raw_val)
+            end
+        end,
+
+        __pairs = function(_)
+            return pairs(store)
+        end,
+
+        __ipairs = function(_)
+            return ipairs(store)
+        end,
+
+        __len = function(_)
+            return #store
+        end,
+
+        __tostring = function(_)
+            return "config_proxy(" .. section .. (prefix ~= "" and (":" .. prefix) or "") .. ")"
+        end,
+    }
+
+    return setmetatable(proxy, mt)
+end
+
+-- ==================== Persistence API ====================
+
+function config.mark_dirty()
+    if not dirty then dirty_since = os.clock() end
+    dirty = true
+end
 
 function config.get(section, key, default)
     local s = data[section]
     if type(s) == "table" then
         local v = s[key]
-        if v ~= nil then return v end
+        if v ~= nil then return deep_copy(v) end
     end
-    return default
+    return deep_copy(default)
 end
 
 function config.set(section, key, value)
@@ -223,38 +314,233 @@ function config.set(section, key, value)
         s = {}
         data[section] = s
     end
-    if s[key] == value then return end          -- no-op writes do not touch the disk
-    s[key] = value
+    local raw_val = (type(value) == "table" and value._raw) and value._raw or value
+    if type(raw_val) ~= "table" and s[key] == raw_val then return end
+    if raw_val == nil then
+        s[key] = nil
+    else
+        s[key] = deep_copy(raw_val)
+    end
     if next(s) == nil then data[section] = nil end
-    if not dirty then dirty_since = os.clock() end
-    dirty = true
+    config.mark_dirty()
+end
+
+function config.flush()
+    if dirty then
+        return config.save()
+    end
+    return true
 end
 
 function config.section(name)
     local out = {}
     local s = data[name]
     if type(s) == "table" then
-        for k, v in pairs(s) do out[k] = v end
+        for k, v in pairs(s) do out[k] = deep_copy(v) end
     end
     return out
 end
 
+-- ==================== Provider Registration ====================
+
+function config.register(opts)
+    if type(opts) ~= "table" then return end
+    local id = opts.id or detect_caller_id(3)
+    local section = opts.section or resolve_section(id)
+
+    local reg = {
+        id = id,
+        section = section,
+        store = opts.store or opts.settings or opts.config,
+        on_save = opts.on_save,
+        on_load = opts.on_load,
+    }
+
+    local saved = data[section]
+    if saved ~= nil then
+        if reg.on_load then
+            pcall(reg.on_load, deep_copy(saved))
+        elseif type(reg.store) == "table" and type(saved) == "table" then
+            for k, v in pairs(saved) do
+                reg.store[k] = deep_copy(v)
+            end
+        end
+    elseif type(opts.defaults) == "table" and type(reg.store) == "table" then
+        for k, v in pairs(opts.defaults) do
+            if reg.store[k] == nil then reg.store[k] = deep_copy(v) end
+        end
+        data[section] = deep_copy(reg.store)
+    end
+
+    config.registry[section] = reg
+    return reg
+end
+
+-- ==================== Reactive Auto-Config ====================
+
+function config.auto(arg1, arg2)
+    local id, defaults
+    if type(arg1) == "string" then
+        id = arg1
+        defaults = type(arg2) == "table" and arg2 or {}
+    else
+        defaults = type(arg1) == "table" and arg1 or {}
+        id = detect_caller_id(3)
+    end
+
+    local section = resolve_section(id)
+
+    -- If this is already a reactive proxy for this section, return it
+    if type(defaults) == "table" and defaults._raw then
+        return defaults
+    end
+
+    -- Mutate defaults directly in place so references stay synchronized
+    local store = defaults
+    local saved = data[section]
+    if type(saved) == "table" then
+        for k, v in pairs(saved) do
+            store[k] = deep_copy(v)
+        end
+    else
+        data[section] = deep_copy(store)
+    end
+
+    local proxy = make_reactive(section, store, function(k, v)
+        data[section] = deep_copy(store)
+        config.mark_dirty()
+    end)
+
+    config.registry[section] = {
+        id = id,
+        section = section,
+        store = store,
+        proxy = proxy,
+    }
+
+    return proxy
+end
+config.bind = config.auto
+
+-- ==================== Automatic Script Introspection ====================
+
+function config.bind_script_table(script_id, tbl)
+    if type(tbl) ~= "table" then return tbl end
+    return config.auto(script_id, tbl)
+end
+
+function config.bind_script_env(script_id, env)
+    if type(env) ~= "table" then return false end
+    local candidates = { "settings", "SETTINGS", "config_data", "CONFIG", "state", "STATE" }
+    for _, name in ipairs(candidates) do
+        local t = rawget(env, name)
+        if type(t) == "table" and not t._raw then
+            local proxy = config.auto(script_id, t)
+            rawset(env, name, proxy)
+            log.info("config: auto-bound '" .. name .. "' (reactive) for script '" .. tostring(script_id) .. "'")
+            return true
+        end
+    end
+    return false
+end
+
+-- ==================== Scoped Environment Binding ====================
+
 function config.for_script(id)
-    local section = "script:" .. tostring(id)
+    local section = resolve_section(id)
     return {
         get = function(key, default) return config.get(section, key, default) end,
         set = function(key, value) config.set(section, key, value) end,
+        auto = function(defaults) return config.auto(section, defaults) end,
+        bind = function(defaults) return config.auto(section, defaults) end,
+        register = function(opts)
+            opts = opts or {}
+            opts.id = opts.id or id
+            opts.section = opts.section or section
+            return config.register(opts)
+        end,
         save = config.save,
+        reload = config.reload,
+        flush = config.flush,
+        section = function() return config.section(section) end,
+        mark_dirty = config.mark_dirty,
     }
 end
 
--- ==================== autosave ====================
+-- ==================== Save & Reload Engine ====================
+
+function config.save()
+    -- Pull authoritative state from all registered providers
+    for section, reg in pairs(config.registry) do
+        if reg.on_save then
+            local ok, res = pcall(reg.on_save)
+            if ok and type(res) == "table" then
+                data[section] = deep_copy(res)
+            end
+        elseif reg.store then
+            data[section] = deep_copy(reg.store)
+        end
+    end
+
+    local text = encode(data)
+    local old = read_file(FILE)
+    if old and old ~= "" and pcall(decode, old) then write_file_content(BACKUP, old) end
+    if write_file_content(FILE, text) then
+        dirty = false
+        return true
+    end
+    log.warn("config: cannot write " .. FILE)
+    return false
+end
+
+function config.reload()
+    local t = try_load(FILE)
+    if not t then
+        t = try_load(BACKUP)
+        if t then log.warn("config.json missing or corrupt, restored from config.bak.json") end
+    end
+    data = t or { version = 1 }
+    data.version = data.version or 1
+    dirty = false
+
+    -- Sync back to all live registered providers
+    for section, reg in pairs(config.registry) do
+        local saved = data[section]
+        if saved ~= nil then
+            if reg.on_load then
+                pcall(reg.on_load, deep_copy(saved))
+            elseif type(reg.store) == "table" and type(saved) == "table" then
+                for k, v in pairs(saved) do
+                    reg.store[k] = deep_copy(v)
+                end
+            end
+        end
+    end
+end
+
+-- ==================== Autosave & Dirty Scanner ====================
 
 config.reload()
 
+local last_table_check = 0
 if events and events.on_update then
-    events.on_update(function()
-        if dirty and os.clock() - dirty_since >= SAVE_DELAY then
+    events.on_update(function(dt)
+        local now = os.clock()
+
+        -- Check registered plain tables for in-place mutations (e.g. settings.val = 5)
+        if now - last_table_check >= 1.0 then
+            last_table_check = now
+            for section, reg in pairs(config.registry) do
+                if reg.store and not reg.proxy and not reg.on_save then
+                    if not tables_equal(reg.store, data[section]) then
+                        data[section] = deep_copy(reg.store)
+                        config.mark_dirty()
+                    end
+                end
+            end
+        end
+
+        if dirty and now - dirty_since >= SAVE_DELAY then
             config.save()
         end
     end)

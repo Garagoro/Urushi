@@ -1,4 +1,5 @@
 #include "car_sim_optimizer.h"
+#include "pattern_scanner.h"
 #include "unity_bridge.h"
 #include "native_carx.h"
 #include "hook_manager.h"
@@ -14,21 +15,21 @@
 
 namespace {
 
-// Verified RVAs in GameAssembly.dll
-constexpr uintptr_t kRvaSwitchingUpdate               = 0xE4FA70;
-constexpr uintptr_t kRvaIsFarCar                      = 0xE4F880;
-constexpr uintptr_t kRvaProviderGetTransform          = 0xE57BA0;
-constexpr uintptr_t kRvaTransformGetPosInjected       = 0x5F72710;
-constexpr uintptr_t kRvaIl2CppVirtualInvokeData       = 0x9238B0;
-constexpr uintptr_t kRvaCarBehaviourSetEffectsEnabled = 0x1E02570;
+// Dynamic RVAs inside GameAssembly.dll (fallback default RVAs, resolved dynamically via PatternScanner)
+static uintptr_t s_rvaSwitchingUpdate               = 0x1311B90; // fallback beta RVA (vanilla 0xE4F8B0)
+static uintptr_t s_rvaIsFarCar                      = 0x1310E50; // fallback beta RVA (vanilla 0xE4F160)
+static uintptr_t s_rvaProviderGetTransform          = 0xE57BA0;
+static uintptr_t s_rvaTransformGetPosInjected       = 0x5F72710;
+static uintptr_t s_rvaIl2CppVirtualInvokeData       = 0x9238B0;
+static uintptr_t s_rvaCarBehaviourSetEffectsEnabled = 0x23D1440; // fallback beta RVA (vanilla 0x1E00F50)
 
 // CarX.DeformationPhysics.Systems
-constexpr uintptr_t kRvaApplyForceToDeformUpdate       = 0xEBF340;
-constexpr uintptr_t kRvaBreakPhysicsJointUpdate        = 0xEC2440;
+static uintptr_t s_rvaApplyForceToDeformUpdate       = 0xEBF1E0;
+static uintptr_t s_rvaBreakPhysicsJointUpdate        = 0xEC2020;
 
-constexpr uintptr_t kRvaINetworkCarContainerTypeInfo  = 0x843A128;
-constexpr uintptr_t kRvaDeformSleepTypeInfoGlobal     = 0x83E7018;
-constexpr uintptr_t kRvaTypeInfoDefinitionTable       = 0x87EAEA0;
+static uintptr_t s_rvaINetworkCarContainerTypeInfo  = 0x843A128;
+static uintptr_t s_rvaDeformSleepTypeInfoGlobal     = 0x83E7018;
+static uintptr_t s_rvaTypeInfoDefinitionTable       = 0x9C2E9C0; // fallback beta RVA (vanilla 0x87EA348)
 
 // Verified s_TypeInfoDefinitionTable indices
 constexpr uint32_t kIdxOptimizeCarGeometry = 24088;
@@ -221,12 +222,23 @@ static void* ResolveStaticFieldsFromTypeInfo(uintptr_t klassPtr, const char* exp
 }
 
 static void* LookupTypeStaticFields(uint32_t typeIdx, const char* expectedName, const char* expectedNs, uintptr_t fallbackGlobalRva = 0) {
-    if (!s_gaBase) return nullptr;
+    if (!s_gaBase || !s_rvaTypeInfoDefinitionTable) return nullptr;
     uintptr_t tablePtr = 0;
-    if (SafeRead(s_gaBase + kRvaTypeInfoDefinitionTable, &tablePtr) && IsCanonPtr(tablePtr, sizeof(uintptr_t))) {
+    if (SafeRead(s_gaBase + s_rvaTypeInfoDefinitionTable, &tablePtr) && IsCanonPtr(tablePtr, sizeof(uintptr_t))) {
+        // Fast path: try hint index first
         uintptr_t klassPtr = 0;
-        if (SafeRead(tablePtr + static_cast<uintptr_t>(typeIdx) * sizeof(uintptr_t), &klassPtr)) {
+        if (typeIdx > 0 && SafeRead(tablePtr + static_cast<uintptr_t>(typeIdx) * sizeof(uintptr_t), &klassPtr)) {
             if (void* sf = ResolveStaticFieldsFromTypeInfo(klassPtr, expectedName, expectedNs)) {
+                return sf;
+            }
+        }
+        // Dynamic scan path: scan types if hint index shifted after game update
+        for (uint32_t i = 1; i < 65536; ++i) {
+            if (i == typeIdx) continue;
+            uintptr_t k = 0;
+            if (!SafeRead(tablePtr + static_cast<uintptr_t>(i) * sizeof(uintptr_t), &k) || !k) continue;
+            if (void* sf = ResolveStaticFieldsFromTypeInfo(k, expectedName, expectedNs)) {
+                Logger::Info(std::string("CarSimOptimizer: dynamically found ") + expectedName + " at type index " + std::to_string(i));
                 return sf;
             }
         }
@@ -238,6 +250,32 @@ static void* LookupTypeStaticFields(uint32_t typeIdx, const char* expectedName, 
         }
     }
     return nullptr;
+}
+
+static uintptr_t LookupTypeClass(const char* expectedName, const char* expectedNs, uintptr_t fallbackGlobalRva = 0) {
+    if (!s_gaBase || !s_rvaTypeInfoDefinitionTable) return 0;
+    uintptr_t tablePtr = 0;
+    if (SafeRead(s_gaBase + s_rvaTypeInfoDefinitionTable, &tablePtr) && IsCanonPtr(tablePtr, sizeof(uintptr_t))) {
+        for (uint32_t i = 1; i < 65536; ++i) {
+            uintptr_t k = 0;
+            if (!SafeRead(tablePtr + static_cast<uintptr_t>(i) * sizeof(uintptr_t), &k) || !IsCanonPtr(k, 0xC0)) continue;
+            uintptr_t namePtr = 0, nsPtr = 0;
+            if (!SafeRead(k + 0x10, &namePtr) || !SafeRead(k + 0x18, &nsPtr)) continue;
+            char nameBuf[96] = {}, nsBuf[96] = {};
+            if (SafeReadCString(namePtr, nameBuf, sizeof(nameBuf)) && SafeReadCString(nsPtr, nsBuf, sizeof(nsBuf))) {
+                if (strcmp(nameBuf, expectedName) == 0 && strcmp(nsBuf, expectedNs) == 0) {
+                    return k;
+                }
+            }
+        }
+    }
+    if (fallbackGlobalRva != 0) {
+        uintptr_t klassPtr = 0;
+        if (SafeRead(s_gaBase + fallbackGlobalRva, &klassPtr) && IsCanonPtr(klassPtr, 0xC0)) {
+            return klassPtr;
+        }
+    }
+    return 0;
 }
 
 static bool LookupInterfaceSlotSEH(void* obj, void* ifaceTypeInfo, uint32_t slot, void** outFn, void** outMethodInfo) {
@@ -291,7 +329,7 @@ static bool LookupInterfaceSlotSEH(void* obj, void* ifaceTypeInfo, uint32_t slot
 }
 
 static bool SafeGetPlayerPosFromController(void* switchingCtrl, UnityVector3* outPos) {
-    if (!switchingCtrl || !outPos || !pfn_ProviderGetTransform || !pfn_TransformGetPos) return false;
+    if (!switchingCtrl || !outPos || !pfn_ProviderGetTransform) return false;
     uintptr_t provider = 0;
     if (!SafeRead(reinterpret_cast<uintptr_t>(switchingCtrl) + 0x20, &provider) || !IsCanonPtr(provider, 0x20)) {
         return false;
@@ -300,10 +338,18 @@ static bool SafeGetPlayerPosFromController(void* switchingCtrl, UnityVector3* ou
         void* tf = pfn_ProviderGetTransform(reinterpret_cast<void*>(provider), nullptr);
         if (!IsCanonPtr(reinterpret_cast<uintptr_t>(tf), 0x18)) return false;
         UnityVector3 tmp{};
-        UnityVector3* ret = pfn_TransformGetPos(&tmp, tf, nullptr);
-        if (!ret) return false;
-        *outPos = *ret;
-        return std::isfinite(outPos->x) && std::isfinite(outPos->y) && std::isfinite(outPos->z);
+        if (pfn_TransformGetPos) {
+            UnityVector3* ret = pfn_TransformGetPos(&tmp, tf, nullptr);
+            if (ret && std::isfinite(ret->x) && std::isfinite(ret->y) && std::isfinite(ret->z)) {
+                *outPos = *ret;
+                return true;
+            }
+        }
+        if (UnityBridge::GetTransformHierarchyPosition(tf, tmp)) {
+            *outPos = tmp;
+            return std::isfinite(outPos->x) && std::isfinite(outPos->y) && std::isfinite(outPos->z);
+        }
+        return false;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
@@ -311,8 +357,15 @@ static bool SafeGetPlayerPosFromController(void* switchingCtrl, UnityVector3* ou
 
 static bool SafeQueryNetCarState(void* netCar, UnityVector3* outPos, int32_t* outId, bool* outKinematic) {
     if (!netCar || !s_gaBase) return false;
-    uintptr_t ifaceTypeInfo = 0;
-    if (!SafeRead(s_gaBase + kRvaINetworkCarContainerTypeInfo, &ifaceTypeInfo) || !IsCanonPtr(ifaceTypeInfo, 0x40)) {
+    static uintptr_t s_cachedIfaceTypeInfo = 0;
+    if (!s_cachedIfaceTypeInfo) {
+        s_cachedIfaceTypeInfo = LookupTypeClass("INetworkCarContainer", "CarX.Common.RealtimeMultiplayer.Core", s_rvaINetworkCarContainerTypeInfo);
+    }
+    uintptr_t ifaceTypeInfo = s_cachedIfaceTypeInfo;
+    if (!ifaceTypeInfo && s_rvaINetworkCarContainerTypeInfo) {
+        SafeRead(s_gaBase + s_rvaINetworkCarContainerTypeInfo, &ifaceTypeInfo);
+    }
+    if (!ifaceTypeInfo || !IsCanonPtr(ifaceTypeInfo, 0x40)) {
         return false;
     }
     void* ifacePtr = reinterpret_cast<void*>(ifaceTypeInfo);
@@ -443,7 +496,7 @@ static void ResolveStaticsIfNeeded() {
     if (!s_sfDeformSleep) {
         s_sfDeformSleep = LookupTypeStaticFields(
             kIdxDeformSkeletonSleep, "DeformationSkeletonSleepSystem",
-            "CarX.DeformationPhysics.Systems", kRvaDeformSleepTypeInfoGlobal);
+            "CarX.DeformationPhysics.Systems", s_rvaDeformSleepTypeInfoGlobal);
         if (s_sfDeformSleep && !s_deformBase.captured) {
             uintptr_t p = reinterpret_cast<uintptr_t>(s_sfDeformSleep);
             uint8_t en = 1;
@@ -1046,44 +1099,87 @@ bool CarSimOptimizer::Init() {
     }
     s_gaBase = reinterpret_cast<uintptr_t>(hGA);
 
-    pfn_ProviderGetTransform = reinterpret_cast<t_ProviderGetTransform>(s_gaBase + kRvaProviderGetTransform);
-    pfn_TransformGetPos = reinterpret_cast<t_TransformGetPos>(s_gaBase + kRvaTransformGetPosInjected);
-    pfn_LookupVirtualInvoke = reinterpret_cast<t_LookupVirtualInvoke>(s_gaBase + kRvaIl2CppVirtualInvokeData);
-    pfn_SetCarEffectsEnabled = reinterpret_cast<t_SetCarEffectsEnabled>(s_gaBase + kRvaCarBehaviourSetEffectsEnabled);
+    // Dynamic signature scans inside GameAssembly.dll
+    // 1. Scan for TypeInfoDefinitionTable
+    uintptr_t vaTable = PatternScanner::Find(hGA, "48 63 C8 48 8B 05 ? ? ? ? 48 8B 04 C8 C3", "TypeInfoDefinitionTable");
+    if (vaTable) {
+        uintptr_t tablePtr = PatternScanner::ResolveRip(vaTable + 3, 7, 3);
+        if (tablePtr >= s_gaBase) {
+            s_rvaTypeInfoDefinitionTable = tablePtr - s_gaBase;
+        }
+    }
 
-    void* targetSwitching = reinterpret_cast<void*>(s_gaBase + kRvaSwitchingUpdate);
-    void* targetIsFar = reinterpret_cast<void*>(s_gaBase + kRvaIsFarCar);
-    void* targetApplyForce = reinterpret_cast<void*>(s_gaBase + kRvaApplyForceToDeformUpdate);
-    void* targetBreakJoint = reinterpret_cast<void*>(s_gaBase + kRvaBreakPhysicsJointUpdate);
+    // 2. Scan for CarBehaviour::SetEffectsEnabled
+    uintptr_t vaEffects = PatternScanner::FindFunctionEntryOrFallback(
+        hGA,
+        "48 8B 89 68 01 00 00 48 85 C9 74 ? 45 33 C0 E8 ? ? ? ? 48 8B BF 70 01 00 00",
+        s_rvaCarBehaviourSetEffectsEnabled,
+        256,
+        "CarBehaviour_SetEffectsEnabled");
+    if (vaEffects && vaEffects >= s_gaBase) {
+        s_rvaCarBehaviourSetEffectsEnabled = vaEffects - s_gaBase;
+    }
 
-    bool okSwitch = HookManager::CreateHook(
-        targetSwitching,
-        reinterpret_cast<void*>(Hooked_SwitchingUpdate),
-        reinterpret_cast<void**>(&s_origSwitchingUpdate),
-        "DistanceBasedPhysicsSwitchingSubController::Update");
+    // 3. Scan for DistanceBasedPhysicsSwitchingSubController::IsFarCar
+    uintptr_t vaIsFar = PatternScanner::FindOrFallback(
+        hGA,
+        "48 89 5C 24 10 48 89 74 24 18 57 41 54 41 55 41 56 41 57 48 81 EC B0 01 00 00 4C 8B E9",
+        s_rvaIsFarCar,
+        "DistanceBasedSwitching_IsFarCar");
+    if (vaIsFar && vaIsFar >= s_gaBase) {
+        s_rvaIsFarCar = vaIsFar - s_gaBase;
+    }
 
-    bool okFar = HookManager::CreateHook(
-        targetIsFar,
-        reinterpret_cast<void*>(Hooked_IsFarCar),
-        reinterpret_cast<void**>(&s_origIsFarCar),
-        "DistanceBasedPhysicsSwitchingSubController::IsFarCar");
+    pfn_ProviderGetTransform = s_rvaProviderGetTransform ? reinterpret_cast<t_ProviderGetTransform>(s_gaBase + s_rvaProviderGetTransform) : nullptr;
+    pfn_TransformGetPos = s_rvaTransformGetPosInjected ? reinterpret_cast<t_TransformGetPos>(s_gaBase + s_rvaTransformGetPosInjected) : nullptr;
+    pfn_LookupVirtualInvoke = s_rvaIl2CppVirtualInvokeData ? reinterpret_cast<t_LookupVirtualInvoke>(s_gaBase + s_rvaIl2CppVirtualInvokeData) : nullptr;
+    pfn_SetCarEffectsEnabled = s_rvaCarBehaviourSetEffectsEnabled ? reinterpret_cast<t_SetCarEffectsEnabled>(s_gaBase + s_rvaCarBehaviourSetEffectsEnabled) : nullptr;
 
-    bool okApply = HookManager::CreateHook(
-        targetApplyForce,
-        reinterpret_cast<void*>(Hooked_ApplyForceOnUpdate),
-        reinterpret_cast<void**>(&s_origApplyForceOnUpdate),
-        "ApplyForceToDeformationSkeletonSystem::OnUpdate");
+    void* targetSwitching = s_rvaSwitchingUpdate ? reinterpret_cast<void*>(s_gaBase + s_rvaSwitchingUpdate) : nullptr;
+    void* targetIsFar = s_rvaIsFarCar ? reinterpret_cast<void*>(s_gaBase + s_rvaIsFarCar) : nullptr;
+    void* targetApplyForce = s_rvaApplyForceToDeformUpdate ? reinterpret_cast<void*>(s_gaBase + s_rvaApplyForceToDeformUpdate) : nullptr;
+    void* targetBreakJoint = s_rvaBreakPhysicsJointUpdate ? reinterpret_cast<void*>(s_gaBase + s_rvaBreakPhysicsJointUpdate) : nullptr;
 
-    bool okBreak = HookManager::CreateHook(
-        targetBreakJoint,
-        reinterpret_cast<void*>(Hooked_BreakPhysicsJointOnUpdate),
-        reinterpret_cast<void**>(&s_origBreakPhysicsJointOnUpdate),
-        "BreakPhysicsJointSystem::OnUpdate");
+    bool okSwitch = false;
+    if (targetSwitching) {
+        okSwitch = HookManager::CreateHook(
+            targetSwitching,
+            reinterpret_cast<void*>(Hooked_SwitchingUpdate),
+            reinterpret_cast<void**>(&s_origSwitchingUpdate),
+            "DistanceBasedPhysicsSwitchingSubController::Update");
+    }
+
+    bool okFar = false;
+    if (targetIsFar) {
+        okFar = HookManager::CreateHook(
+            targetIsFar,
+            reinterpret_cast<void*>(Hooked_IsFarCar),
+            reinterpret_cast<void**>(&s_origIsFarCar),
+            "DistanceBasedPhysicsSwitchingSubController::IsFarCar");
+    }
+
+    bool okApply = false;
+    if (targetApplyForce) {
+        okApply = HookManager::CreateHook(
+            targetApplyForce,
+            reinterpret_cast<void*>(Hooked_ApplyForceOnUpdate),
+            reinterpret_cast<void**>(&s_origApplyForceOnUpdate),
+            "ApplyForceToDeformationSkeletonSystem::OnUpdate");
+    }
+
+    bool okBreak = false;
+    if (targetBreakJoint) {
+        okBreak = HookManager::CreateHook(
+            targetBreakJoint,
+            reinterpret_cast<void*>(Hooked_BreakPhysicsJointOnUpdate),
+            reinterpret_cast<void**>(&s_origBreakPhysicsJointOnUpdate),
+            "BreakPhysicsJointSystem::OnUpdate");
+    }
 
     ResolveNativeExportsIfNeeded();
     ResolveStaticsIfNeeded();
 
-    s_stats.hooksInstalled = okSwitch && okFar && okApply && okBreak;
+    s_stats.hooksInstalled = (okSwitch || okFar || okApply || okBreak);
     s_stats.initialized = true;
 
     Logger::Info(std::string("CarSimOptimizer initialized (hooks=") +
@@ -1230,8 +1326,13 @@ void CarSimOptimizer::SetConfig(const Config& cfg) {
         s_lastSwapTime = {};
         s_slotEnteredAt.clear();
     }
+    if (s_noDamageOverride) {
+        clamped.disableDamage = true;
+    }
     s_cfg = clamped;
-    NativeCarX::SetNoDamage(clamped.disableDamage);
+    if (!s_noDamageOverride) {
+        NativeCarX::SetNoDamage(clamped.disableDamage);
+    }
     NativeCarX::SetNoTireWear(clamped.disableTireWear);
     if (clamped.disableDamage) {
         UnityBridge::RequestRepairPlayerCar();

@@ -1,4 +1,5 @@
 #include "unity_bridge.h"
+#include "pattern_scanner.h"
 #include "carfx.h"
 #include "ecs_collision.h"
 #include "car_sim_optimizer.h"
@@ -144,9 +145,140 @@ static bool SafeCallGetNativeTexPtr(uintptr_t fnAddr, void* nativeTex, void** ou
     }
 }
 
+struct UnityManagedSpanWrapper {
+    const wchar_t* begin;
+    int32_t length;
+};
+
 typedef void* (*t_UP_MatGetTexture)(void* natMat, int32_t propId);
 typedef void  (*t_UP_MatSetTexture)(void* natMat, int32_t propId, void* natTex);
 typedef void  (*t_UP_GfxCopyTextureFull)(void* srcNatTex, void* dstNatTex);
+typedef void* (*t_UP_InstanceIDToObject)(const int32_t* instanceId);
+typedef int32_t (*t_UP_MatGetRenderQueue)(void* natMat);
+typedef void (*t_UP_MatSetRenderQueue)(void* natMat, int32_t queue);
+typedef void (*t_UP_MatSetShaderPassEnabled)(void* natMat, const UnityManagedSpanWrapper* passName, bool enabled);
+typedef void* (*t_UP_GetOrAssignInstantiatedMat)(void* natRenderer, int32_t slotIdx);
+typedef void (*t_UP_RendererSetMat0)(void* natRenderer, void* natMat);
+typedef void (*t_UP_RendererSetMatAt)(void* natRenderer, const int32_t* matId, uint32_t slot);
+
+static t_UP_InstanceIDToObject GetInstanceIDToObjectFn(uintptr_t unityBase) {
+    static t_UP_InstanceIDToObject s_cached = nullptr;
+    if (!s_cached && unityBase) {
+        uintptr_t va = PatternScanner::FindOrFallback(reinterpret_cast<HMODULE>(unityBase),
+            "40 56 48 83 EC 20 83 39 00 48 8B F1 75 08 33 C0", 0x107480, "InstanceIDToObject");
+        s_cached = reinterpret_cast<t_UP_InstanceIDToObject>(va);
+    }
+    return s_cached;
+}
+
+static t_UP_MatGetRenderQueue GetMatGetRenderQueueFn(uintptr_t unityBase) {
+    static t_UP_MatGetRenderQueue s_cached = nullptr;
+    if (!s_cached && unityBase) {
+        uintptr_t va = PatternScanner::FindOrFallback(reinterpret_cast<HMODULE>(unityBase),
+            "48 83 EC 28 83 79 2C 00 7C ? 8B 41 2C 48 83 C4 28 C3", 0x95EB0, "MatGetRenderQueue");
+        s_cached = reinterpret_cast<t_UP_MatGetRenderQueue>(va);
+    }
+    return s_cached;
+}
+
+static t_UP_MatSetRenderQueue GetMatSetRenderQueueFn(uintptr_t unityBase) {
+    static t_UP_MatSetRenderQueue s_cached = nullptr;
+    if (!s_cached && unityBase) {
+        uintptr_t va = PatternScanner::FindOrFallback(reinterpret_cast<HMODULE>(unityBase),
+            "40 57 48 83 EC 20 48 8B F9 39 51 2C 74 ? 80 3D ? ? ? ? 00 89 51 2C", 0x95EF0, "MatSetRenderQueue");
+        s_cached = reinterpret_cast<t_UP_MatSetRenderQueue>(va);
+    }
+    return s_cached;
+}
+
+static t_UP_MatSetShaderPassEnabled GetMatSetShaderPassEnabledFn(uintptr_t unityBase) {
+    static t_UP_MatSetShaderPassEnabled s_cached = nullptr;
+    if (!s_cached && unityBase) {
+        uintptr_t va = PatternScanner::FindOrFallback(reinterpret_cast<HMODULE>(unityBase),
+            "40 53 57 48 83 EC 68 48 8B F9 C6 44 24 30 00", 0x98530, "MatSetShaderPassEnabled");
+        s_cached = reinterpret_cast<t_UP_MatSetShaderPassEnabled>(va);
+    }
+    return s_cached;
+}
+
+static t_UP_GetOrAssignInstantiatedMat GetOrAssignInstantiatedMatFn(uintptr_t unityBase) {
+    static t_UP_GetOrAssignInstantiatedMat s_cached = nullptr;
+    if (!s_cached && unityBase) {
+        uintptr_t va = PatternScanner::FindOrFallback(reinterpret_cast<HMODULE>(unityBase),
+            "48 89 5C 24 10 48 89 6C 24 20 44 88 44 24 18 56 41 56 41 57", 0x47AA00, "GetOrAssignInstantiatedMat");
+        s_cached = reinterpret_cast<t_UP_GetOrAssignInstantiatedMat>(va);
+    }
+    return s_cached;
+}
+
+static t_UP_RendererSetMat0 GetRendererSetMat0Fn(uintptr_t unityBase) {
+    static t_UP_RendererSetMat0 s_cached = nullptr;
+    if (!s_cached && unityBase) {
+        uintptr_t va = PatternScanner::FindOrFallback(reinterpret_cast<HMODULE>(unityBase),
+            "48 89 5C 24 10 48 89 74 24 18 57 48 83 EC 20 48 8B 01 48 8B F9 48 8B F2", 0x8CE50, "RendererSetMat0");
+        s_cached = reinterpret_cast<t_UP_RendererSetMat0>(va);
+    }
+    return s_cached;
+}
+
+static uintptr_t GetNativeTexPtrFn(uintptr_t unityBase) {
+    static uintptr_t s_cached = 0;
+    if (!s_cached && unityBase) {
+        s_cached = PatternScanner::FindOrFallback(reinterpret_cast<HMODULE>(unityBase),
+            "48 89 5C 24 08 57 48 83 EC 20 48 8B 99 10 01 00 00", 0x4824F0, "GetNativeTexturePtr");
+    }
+    return s_cached;
+}
+
+static t_UP_MatGetTexture GetMatGetTextureFn(uintptr_t unityBase) {
+    static t_UP_MatGetTexture s_cached = nullptr;
+    if (!s_cached && unityBase) {
+        uintptr_t va = PatternScanner::FindOrFallback(reinterpret_cast<HMODULE>(unityBase),
+            "89 54 24 10 55 56 48 8D 6C 24 B1 48 81 EC D8 00 00 00 48 8B 41 48", 0x603830, "MatGetTexture");
+        s_cached = reinterpret_cast<t_UP_MatGetTexture>(va);
+    }
+    return s_cached;
+}
+
+static t_UP_MatSetTexture GetMatSetTextureFn(uintptr_t unityBase) {
+    static t_UP_MatSetTexture s_cached = nullptr;
+    if (!s_cached && unityBase) {
+        uintptr_t va = PatternScanner::FindOrFallback(reinterpret_cast<HMODULE>(unityBase),
+            "48 8B C4 89 50 10 55 53 56 48 8D 68 A1 48 81 EC F0 00 00 00", 0x602EB0, "MatSetTexture");
+        s_cached = reinterpret_cast<t_UP_MatSetTexture>(va);
+    }
+    return s_cached;
+}
+
+static t_UP_GfxCopyTextureFull GetGfxCopyTextureFullFn(uintptr_t unityBase) {
+    static t_UP_GfxCopyTextureFull s_cached = nullptr;
+    if (!s_cached && unityBase) {
+        uintptr_t va = PatternScanner::FindOrFallback(reinterpret_cast<HMODULE>(unityBase),
+            "48 89 5C 24 10 48 89 74 24 18 4C 89 74 24 20 55 48 8D 6C 24 A9 48 81 EC D0 00 00 00", 0x7E620, "GfxCopyTextureFull");
+        s_cached = reinterpret_cast<t_UP_GfxCopyTextureFull>(va);
+    }
+    return s_cached;
+}
+
+static void* GetGameObjectManagerPtr(uintptr_t unityBase) {
+    static void* s_cached = nullptr;
+    if (!s_cached && unityBase) {
+        uintptr_t va = PatternScanner::FindRipOrFallback(reinterpret_cast<HMODULE>(unityBase),
+            "B8 FF FF FF FF 48 8B 0D ? ? ? ? 8B D0", 7, 3, 0x2232770, 5, "GameObjectManager");
+        s_cached = reinterpret_cast<void*>(va);
+    }
+    return s_cached;
+}
+
+static void* GetGCHandleTargetPtr(uintptr_t unityBase) {
+    static void* s_cached = nullptr;
+    if (!s_cached && unityBase) {
+        uintptr_t va = PatternScanner::FindRipOrFallback(reinterpret_cast<HMODULE>(unityBase),
+            "C3 48 8B 05 ? ? ? ? 48 8B 49 18 FF D0", 7, 3, 0x22339F0, 1, "GCHandleTarget");
+        s_cached = reinterpret_cast<void*>(va);
+    }
+    return s_cached;
+}
 
 static void GetBuiltinNativeTextures(uintptr_t unityBase, void** outWhite, void** outBlack, void** outNormal) {
     static void* s_natWhite = nullptr;
@@ -171,7 +303,8 @@ static bool IsDefaultNativeTex(void* natTex, void* natWhite, void* natBlack, voi
 static void* SafeGetMatTextureSEH(uintptr_t unityBase, void* natMat, int32_t propId) {
     if (!unityBase || !natMat) return nullptr;
     if (!IsReadableMem(reinterpret_cast<uintptr_t>(natMat), 0x58)) return nullptr;
-    const auto pfnGetTex = reinterpret_cast<t_UP_MatGetTexture>(unityBase + 0x603830);
+    const auto pfnGetTex = GetMatGetTextureFn(unityBase);
+    if (!pfnGetTex) return nullptr;
     __try {
         return pfnGetTex(natMat, propId);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -183,7 +316,8 @@ static bool SafeSetMatTextureSEH(uintptr_t unityBase, void* natMat, int32_t prop
     if (!unityBase || !natMat) return false;
     if (!IsReadableMem(reinterpret_cast<uintptr_t>(natMat), 0x58)) return false;
     if (natTex && !IsReadableMem(reinterpret_cast<uintptr_t>(natTex), 0x44)) return false;
-    const auto pfnSetTex = reinterpret_cast<t_UP_MatSetTexture>(unityBase + 0x9AE10);
+    const auto pfnSetTex = GetMatSetTextureFn(unityBase);
+    if (!pfnSetTex) return false;
     __try {
         pfnSetTex(natMat, propId, natTex);
         return true;
@@ -200,7 +334,8 @@ static bool SafeCopyTextureFullSEH(uintptr_t unityBase, void* srcNatTex, void* d
     const uintptr_t sGfx = *reinterpret_cast<const uintptr_t*>(sAddr + 0x110);
     const uintptr_t dGfx = *reinterpret_cast<const uintptr_t*>(dAddr + 0x110);
     if (!IsReadableMemVQ(sGfx, 0x18) || !IsReadableMemVQ(dGfx, 0x18)) return false;
-    const auto pfnCopy = reinterpret_cast<t_UP_GfxCopyTextureFull>(unityBase + 0x7E620);
+    const auto pfnCopy = GetGfxCopyTextureFullFn(unityBase);
+    if (!pfnCopy) return false;
     __try {
         pfnCopy(srcNatTex, dstNatTex);
         return true;
@@ -339,16 +474,29 @@ static bool SafeCallRaceCarTeleportSEH(uintptr_t gaBase, void* raceCarPtr,
             return false;
         }
 
-        // Verified RVAs in GameAssembly.dll (Framework.Models.Cars.RaceCars.RaceCar [idx=29997]):
-        //   0x1DCE130: ForceVelocityChange(Vector3 velocity, Vector3 angularVelocity)
-        //   0x1DCE0B0: ForceTransformChange(float4x4 localToWorld)
+        // Dynamically resolved RVAs in GameAssembly.dll (RaceCar):
+        //   ForceVelocityChange(Vector3 velocity, Vector3 angularVelocity)
+        //   ForceTransformChange(float4x4 localToWorld)
         using t_ForceVelocityChange = void(__fastcall*)(void*, const UnityVector3*, const UnityVector3*, void*);
         using t_ForceTransformChangeMat = void(__fastcall*)(void*, const Float4x4*, void*);
-        auto pfnVel = reinterpret_cast<t_ForceVelocityChange>(gaBase + 0x1DCE130);
-        auto pfnTf  = reinterpret_cast<t_ForceTransformChangeMat>(gaBase + 0x1DCE0B0);
 
-        pfnVel(raceCarPtr, linVel, angVel, nullptr);
-        pfnTf(raceCarPtr, mat, nullptr);
+        static uintptr_t s_rvaVel = 0;
+        static uintptr_t s_rvaTf = 0;
+        if (!s_rvaVel && gaBase) {
+            uintptr_t vaVel = PatternScanner::FindOrFallback(reinterpret_cast<HMODULE>(gaBase),
+                "48 83 EC 38 4C 8B 89 48 01 00 00 4D 85 C9 ? ? F2 0F 10 02", 0x239D160, "ForceVelocityChange");
+            s_rvaVel = vaVel ? (vaVel - gaBase) : 0x239D160;
+
+            uintptr_t vaTf = PatternScanner::FindOrFallback(reinterpret_cast<HMODULE>(gaBase),
+                "48 89 5C 24 08 57 48 83 EC 60 48 8B F9 48 8B DA 48 8B 89 40 01 00 00", 0x239D0E0, "ForceTransformChangeMat");
+            s_rvaTf = vaTf ? (vaTf - gaBase) : 0x239D0E0;
+        }
+
+        auto pfnVel = reinterpret_cast<t_ForceVelocityChange>(gaBase + s_rvaVel);
+        auto pfnTf  = reinterpret_cast<t_ForceTransformChangeMat>(gaBase + s_rvaTf);
+
+        if (pfnVel) pfnVel(raceCarPtr, linVel, angVel, nullptr);
+        if (pfnTf) pfnTf(raceCarPtr, mat, nullptr);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -456,19 +604,6 @@ static bool SafeCheckNativeRootGo(void* rootTf, void** outRootGo) {
     }
 }
 
-struct UnityManagedSpanWrapper {
-    const wchar_t* begin;
-    int32_t length;
-};
-
-typedef void* (*t_UP_InstanceIDToObject)(const int32_t* instanceId);
-typedef int32_t (*t_UP_MatGetRenderQueue)(void* nativeMat);
-typedef void (*t_UP_MatSetRenderQueue)(void* nativeMat, int32_t rq);
-typedef void (*t_UP_MatSetShaderPassEnabled)(void* nativeMat, const UnityManagedSpanWrapper* passName, bool enabled);
-typedef void* (*t_UP_GetOrAssignInstantiatedMat)(void* nativeRenderer, int32_t slotIdx);
-typedef void (*t_UP_RendererSetMat0)(void* nativeRenderer, void* nativeMat);
-typedef void (*t_UP_RendererSetMatAt)(void* nativeRenderer, const int32_t* pMatId, uint32_t slotIdx);
-
 struct CarRendererRef {
     int32_t instanceId = 0;
     int32_t matIds[16] = {};
@@ -489,7 +624,8 @@ enum CarMatCategory : int {
 
 static void* SafeIdToObjectSEH(uintptr_t unityBase, int32_t id) {
     if (!unityBase || id == 0) return nullptr;
-    const auto pfn = reinterpret_cast<t_UP_InstanceIDToObject>(unityBase + 0x107480);
+    const auto pfn = GetInstanceIDToObjectFn(unityBase);
+    if (!pfn) return nullptr;
     __try {
         return pfn(&id);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -517,7 +653,8 @@ static uint32_t InternalsPartOfMaterial(const char* name) {
 static bool SafeReadMatNameSEH(uintptr_t unityBase, int32_t matId, char* outName, size_t maxLen) {
     if (!unityBase || matId == 0 || !outName || maxLen == 0) return false;
     outName[0] = '\0';
-    const auto pfnIdToObj = reinterpret_cast<t_UP_InstanceIDToObject>(unityBase + 0x107480);
+    const auto pfnIdToObj = GetInstanceIDToObjectFn(unityBase);
+    if (!pfnIdToObj) return false;
     __try {
         void* natMat = pfnIdToObj(&matId);
         const uintptr_t mAddr = reinterpret_cast<uintptr_t>(natMat);
@@ -545,8 +682,9 @@ static bool SafeResolveMatAndQueueSEH(uintptr_t unityBase, int32_t matId, void**
     if (!unityBase || matId == 0 || !outNatMat) return false;
     *outNatMat = nullptr;
     if (outQueue) *outQueue = 2200;
-    const auto pfnIdToObj = reinterpret_cast<t_UP_InstanceIDToObject>(unityBase + 0x107480);
-    const auto pfnGetRq = reinterpret_cast<t_UP_MatGetRenderQueue>(unityBase + 0x95eb0);
+    const auto pfnIdToObj = GetInstanceIDToObjectFn(unityBase);
+    const auto pfnGetRq = GetMatGetRenderQueueFn(unityBase);
+    if (!pfnIdToObj || !pfnGetRq) return false;
     __try {
         void* natMat = pfnIdToObj(&matId);
         if (!natMat || !IsReadableMem(reinterpret_cast<uintptr_t>(natMat), 0x58)) return false;
@@ -562,8 +700,9 @@ static bool SafeResolveMatAndQueueSEH(uintptr_t unityBase, int32_t matId, void**
 static int SafeClassifyMaterialSEH(uintptr_t unityBase, int32_t matId, int32_t* outCurQueue) {
     if (outCurQueue) *outCurQueue = 0;
     if (!unityBase || matId == 0) return kMatSkip;
-    const auto pfnIdToObj = reinterpret_cast<t_UP_InstanceIDToObject>(unityBase + 0x107480);
-    const auto pfnGetRq = reinterpret_cast<t_UP_MatGetRenderQueue>(unityBase + 0x95eb0);
+    const auto pfnIdToObj = GetInstanceIDToObjectFn(unityBase);
+    const auto pfnGetRq = GetMatGetRenderQueueFn(unityBase);
+    if (!pfnIdToObj || !pfnGetRq) return kMatSkip;
     __try {
         void* natMat = pfnIdToObj(&matId);
         const uintptr_t mAddr = reinterpret_cast<uintptr_t>(natMat);
@@ -589,9 +728,10 @@ static bool SafeCloneOrAssignRendererMatSEH(uintptr_t unityBase, int32_t rInstId
                                             int32_t existingCloneMatId, int32_t* outNewCloneMatId) {
     if (outNewCloneMatId) *outNewCloneMatId = 0;
     if (!unityBase || rInstId == 0 || slotIdx < 0) return false;
-    const auto pfnIdToObj = reinterpret_cast<t_UP_InstanceIDToObject>(unityBase + 0x107480);
-    const auto pfnGetOrClone = reinterpret_cast<t_UP_GetOrAssignInstantiatedMat>(unityBase + 0x47aa00);
-    const auto pfnSetMat0 = reinterpret_cast<t_UP_RendererSetMat0>(unityBase + 0x8ce50);
+    const auto pfnIdToObj = GetInstanceIDToObjectFn(unityBase);
+    const auto pfnGetOrClone = GetOrAssignInstantiatedMatFn(unityBase);
+    const auto pfnSetMat0 = GetRendererSetMat0Fn(unityBase);
+    if (!pfnIdToObj || !pfnGetOrClone || !pfnSetMat0) return false;
 
     __try {
         void* natR = pfnIdToObj(&rInstId);
@@ -625,8 +765,9 @@ static bool SafeCloneOrAssignRendererMatSEH(uintptr_t unityBase, int32_t rInstId
 
 static bool SafeRestoreRendererMatSEH(uintptr_t unityBase, int32_t rInstId, int32_t slotIdx, int32_t origAssetMatId) {
     if (!unityBase || rInstId == 0 || origAssetMatId == 0) return false;
-    const auto pfnIdToObj = reinterpret_cast<t_UP_InstanceIDToObject>(unityBase + 0x107480);
-    const auto pfnSetMat0 = reinterpret_cast<t_UP_RendererSetMat0>(unityBase + 0x8ce50);
+    const auto pfnIdToObj = GetInstanceIDToObjectFn(unityBase);
+    const auto pfnSetMat0 = GetRendererSetMat0Fn(unityBase);
+    if (!pfnIdToObj || !pfnSetMat0) return false;
     __try {
         void* natR = pfnIdToObj(&rInstId);
         void* origMat = pfnIdToObj(&origAssetMatId);
@@ -844,10 +985,11 @@ static bool SafeSyncMaterialQueueAndDepthSEH(uintptr_t unityBase, int32_t matId,
     if (outOrigQueue) *outOrigQueue = savedOrigQueue;
     if (!unityBase || matId >= 0) return false;
 
-    const auto pfnIdToObj = reinterpret_cast<t_UP_InstanceIDToObject>(unityBase + 0x107480);
-    const auto pfnGetRq = reinterpret_cast<t_UP_MatGetRenderQueue>(unityBase + 0x95eb0);
-    const auto pfnSetRq = reinterpret_cast<t_UP_MatSetRenderQueue>(unityBase + 0x95ef0);
-    const auto pfnSetPass = reinterpret_cast<t_UP_MatSetShaderPassEnabled>(unityBase + 0x98530);
+    const auto pfnIdToObj = GetInstanceIDToObjectFn(unityBase);
+    const auto pfnGetRq = GetMatGetRenderQueueFn(unityBase);
+    const auto pfnSetRq = GetMatSetRenderQueueFn(unityBase);
+    const auto pfnSetPass = GetMatSetShaderPassEnabledFn(unityBase);
+    if (!pfnIdToObj || !pfnGetRq || !pfnSetRq || !pfnSetPass) return false;
 
     __try {
         void* natMat = pfnIdToObj(&matId);
@@ -923,7 +1065,7 @@ void* UnityBridge::CreateIsolatedPackedTexture(void* origPack, bool /*packIsDef*
     if (outCopyOk) *outCopyOk = false;
     if (!s_unityBase) return nullptr;
 
-    const uintptr_t pfnGetNatPtr = s_unityBase + 0xA8710;
+    const uintptr_t pfnGetNatPtr = GetNativeTexPtrFn(s_unityBase);
     void* srcPack = origPack ? origPack : (natBlack ? natBlack : natWhite);
     void* clonedPack = srcPack ? CloneGameObjectDirect(srcPack) : nullptr;
     void* packSrvPtr = nullptr;
@@ -1065,6 +1207,11 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
         if (rootTf) SafeCheckNativeRootGo(rootTf, &rootGo);
     }
     if (!rootGo) {
+        static ULONGLONG s_lastNoRootMs = 0;
+        if (nowMs - s_lastNoRootMs > 2000) {
+            s_lastNoRootMs = nowMs;
+            Logger::Warn("UpdateCarFX: rootGo is null (liveSnapshot size=" + std::to_string(liveSnapshot.size()) + ")");
+        }
         s_nextUpdateMs = GetTickCount64() + 250;
         return;
     }
@@ -1107,7 +1254,7 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
                     void* alb = SafeGetMatTextureSEH(unityBase, natMat, 380);
                     if (alb && !IsDefaultNativeTex(alb, s_natWhite, s_natBlack, s_natNormal)) {
                         void* d3dPtr = nullptr;   // Unity Texture object -> the D3D11 view/resource behind it
-                        SafeCallGetNativeTexPtr(unityBase + 0xA8710, alb, &d3dPtr);
+                        SafeCallGetNativeTexPtr(GetNativeTexPtrFn(unityBase), alb, &d3dPtr);
                         if (d3dPtr) intTex.push_back(d3dPtr);
                     }
                 }
@@ -1417,7 +1564,7 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
         }
     }
 
-    const uintptr_t pfnGetNatPtr = unityBase + 0xA8710; // UnityEngine.Texture::GetNativeTexturePtr_Injected
+    const uintptr_t pfnGetNatPtr = GetNativeTexPtrFn(unityBase); // UnityEngine.Texture::GetNativeTexturePtr
     CarFX::TargetTexturesInput in{};
     in.albedoTexId = albId;
     in.packedTexId = packId;
@@ -1432,6 +1579,16 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
     }
     in.valid = (!in.albedoIsDefault || !in.packedIsDefault) &&
                ((in.nativeAlbedoPtr != nullptr) || (in.nativePackedPtr != nullptr));
+
+    static ULONGLONG s_lastDbgMs = 0;
+    if (nowMs - s_lastDbgMs > 2000) {
+        s_lastDbgMs = nowMs;
+        char dbg[300];
+        _snprintf_s(dbg, sizeof(dbg), _TRUNCATE,
+            "UpdateCarFX: rootGo=%p natAlb=%p natPack=%p pfnGetNatPtr=0x%llX albPtr=%p packPtr=%p albDef=%d packDef=%d valid=%d",
+            rootGo, natAlb, natPack, (unsigned long long)pfnGetNatPtr, in.nativeAlbedoPtr, in.nativePackedPtr, (int)albIsDef, (int)packIsDef, (int)in.valid);
+        Logger::Info(dbg);
+    }
 
     CarFX::SetPlayerTargetTextures(CarFX::kTargetBody, in);
     s_nextUpdateMs = GetTickCount64() + 250;
@@ -1725,21 +1882,49 @@ bool UnityBridge::Init() {
     s_unityBase = reinterpret_cast<uintptr_t>(hUnity);
     s_unitySize = mi.SizeOfImage;
 
-    // Exact Unity 6000.3.19f1 icall RVAs extracted from UnityPlayer.dll
-    pfn_Find                     = reinterpret_cast<t_Find>(s_unityBase + 0x669CE0);
-    pfn_CloneSingle              = reinterpret_cast<t_Internal_CloneSingle>(s_unityBase + 0xC4230);
-    pfn_Destroy                  = reinterpret_cast<t_Destroy>(s_unityBase + 0xC3A30);
-    pfn_SetActive                = reinterpret_cast<t_SetActive>(s_unityBase + 0xBDFC0);
-    pfn_SetLayer                 = reinterpret_cast<t_SetLayer>(s_unityBase + 0xBDFA0);
-    pfn_GameObject_get_transform = reinterpret_cast<t_GameObject_get_transform>(s_unityBase + 0xBDEC0);
-    pfn_Transform_get_position   = reinterpret_cast<t_Transform_get_position>(s_unityBase + 0xCCA20);
-    pfn_Transform_set_position   = reinterpret_cast<t_Transform_set_position>(s_unityBase + 0xCCA50);
-    pfn_Transform_get_rotation   = reinterpret_cast<t_Transform_get_rotation>(s_unityBase + 0xCCB40);
-    pfn_Transform_set_rotation   = reinterpret_cast<t_Transform_set_rotation>(s_unityBase + 0xCCB90);
-    pfn_GetMainCameraNative      = reinterpret_cast<t_GetMainCameraNative>(s_unityBase + 0x592900);
-    pfn_InternalRaycast          = reinterpret_cast<t_InternalRaycast>(s_unityBase + 0x12E080);
+    // Dynamically resolve Unity icall pointers via pattern signatures with safe fallbacks
+    pfn_Find                     = reinterpret_cast<t_Find>(PatternScanner::FindOrFallback(hUnity, "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 56 41 57 48 83 EC 20 80 39", 0x669CE0, "Find"));
+    pfn_CloneSingle              = reinterpret_cast<t_Internal_CloneSingle>(PatternScanner::FindOrFallback(hUnity, "40 53 48 83 EC 20 E8 ? ? ? ? 48 8B D8 48 85 C0 74 20 48 8B 40 18 48 85 C0 75 17 48 8B D3 48 8D 4C 24 30 E8 ? ? ? ? 48 8B 43 18 48 83 C4 20 5B C3 48 83 C4 20 5B C3 CC CC CC CC CC CC CC 40 53 48 83 EC 20 8B 12 48 8B D9", 0xC4230, "CloneSingle"));
+    pfn_Destroy                  = reinterpret_cast<t_Destroy>(PatternScanner::FindOrFallback(hUnity, "40 53 48 83 EC 30 33 DB 0F 29 74 24 20 0F 28 F1 48 85 C9", 0xC3A30, "Destroy"));
+    pfn_SetActive                = reinterpret_cast<t_SetActive>(PatternScanner::FindOrFallback(hUnity, "40 57 48 83 EC 20 48 8B F9 84 D2 74 0A 48 83 C4 20 5F E9", 0xBDFC0, "SetActive"));
+    pfn_SetLayer                 = reinterpret_cast<t_SetLayer>(PatternScanner::FindOrFallback(hUnity, "4C 8B DC 57 48 81 EC B0 00 00 00 48 8B F9 39 51", 0x2F9270, "SetLayer"));
+    pfn_GameObject_get_transform = reinterpret_cast<t_GameObject_get_transform>(PatternScanner::FindOrFallback(hUnity, "40 53 48 83 EC 20 48 8B 41 20 48 8B 58 08 48 83 7B 18 00", 0xBDEC0, "GameObject_get_transform"));
 
-    void* targetExecLoop = reinterpret_cast<void*>(s_unityBase + 0x5AC580);
+    // Transform property accessors in UnityPlayer (cluster: 0xCCA20..0xCCB90)
+    // 1. Unique 46-byte pattern for Transform_Get_Custom_PropRotation (0xCCB40)
+    uintptr_t getRotVa = PatternScanner::FindOrFallback(
+        hUnity,
+        "40 53 48 83 EC 30 48 83 79 38 00 48 8B DA 75 19 8B 41 08 89 44 24 28 48 8D 41 28 48 89 44 24 20 0F 10 44 24 20 0F 11 41 38 4C 8D 41 28 48",
+        0xCCB40,
+        "Transform_get_rotation"
+    );
+    pfn_Transform_get_rotation = reinterpret_cast<t_Transform_get_rotation>(getRotVa);
+    pfn_Transform_set_rotation = reinterpret_cast<t_Transform_set_rotation>(getRotVa + 0x50);
+    pfn_Transform_get_position = reinterpret_cast<t_Transform_get_position>(getRotVa - 0x120);
+    pfn_Transform_set_position = reinterpret_cast<t_Transform_set_position>(getRotVa - 0xF0);
+
+    // 2. Cross-verify with anchor pattern for Transform_Get_Custom_PropPosition (0xCCA20)
+    uintptr_t anchorGetPos = PatternScanner::Find(
+        hUnity,
+        "88 81 F2 00 00 00 C3 CC CC CC CC E9 ? ? ? ? CC CC CC CC CC CC CC CC CC CC CC 40 53 48 83 EC 30 48 8B DA 48 8D 54 24 20"
+    );
+    if (anchorGetPos) {
+        uintptr_t posVa = anchorGetPos + 27;
+        pfn_Transform_get_position = reinterpret_cast<t_Transform_get_position>(posVa);
+        pfn_Transform_set_position = reinterpret_cast<t_Transform_set_position>(posVa + 0x30);
+    }
+    char tfDbg[256];
+    _snprintf_s(tfDbg, sizeof(tfDbg), _TRUNCATE,
+                "Transform icalls resolved: get_pos=%p set_pos=%p get_rot=%p set_rot=%p",
+                pfn_Transform_get_position, pfn_Transform_set_position,
+                pfn_Transform_get_rotation, pfn_Transform_set_rotation);
+    Logger::Info(tfDbg);
+
+    pfn_GetMainCameraNative      = reinterpret_cast<t_GetMainCameraNative>(PatternScanner::FindOrFallback(hUnity, "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B 0D ? ? ? ? BA 05 00 00 00", 0x592900, "GetMainCameraNative"));
+    pfn_InternalRaycast          = reinterpret_cast<t_InternalRaycast>(PatternScanner::FindOrFallback(hUnity, "48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 41 56 48 81 EC A0 00 00 00 48 8B 3D ? ? ? ? 49 8B D9 0F 29 70 E8 48 8B F2 0F 28 F2", 0x6B6140, "InternalRaycast"));
+
+    uintptr_t targetExecLoopVa = PatternScanner::FindOrFallback(hUnity, "48 89 5C 24 10 48 89 74 24 18 48 89 7C 24 20 55 41 56 41 57 48 8D AC 24 70 FF FF FF 48 81 EC 90 01 00 00 4C 8B F1", 0x5AC580, "ExecutePlayerLoop");
+    void* targetExecLoop = reinterpret_cast<void*>(targetExecLoopVa);
     bool hookOk = HookManager::CreateHook(
         targetExecLoop,
         reinterpret_cast<void*>(Hooked_ExecutePlayerLoop),
@@ -1805,7 +1990,15 @@ void UnityBridge::Hooked_ExecutePlayerLoop(void* playerLoopSystem) {
     static auto s_lastTick = std::chrono::steady_clock::now();
 
     void* rootLoop = nullptr;
-    SafeReadPtr(reinterpret_cast<void*>(s_unityBase + 0x2232F50), &rootLoop);
+    static void* s_rootLoopSlot = nullptr;
+    if (!s_rootLoopSlot && s_unityBase) {
+        uintptr_t va = PatternScanner::FindRipOrFallback(reinterpret_cast<HMODULE>(s_unityBase),
+            "48 89 35 ? ? ? ? 48 89 3D ? ? ? ? EB 07 48 8B 35", 7, 3, 0x2232F50, "rootLoop");
+        s_rootLoopSlot = reinterpret_cast<void*>(va);
+    }
+    if (s_rootLoopSlot) {
+        SafeReadPtr(s_rootLoopSlot, &rootLoop);
+    }
 
     bool isTopLevel = !s_inTopLevelLoop && (rootLoop == nullptr || playerLoopSystem == rootLoop);
     if (isTopLevel) {
@@ -1994,7 +2187,8 @@ void* UnityBridge::UnwrapScriptingPtrToNative(void* gcOrObj) {
         SafeReadPtr(gcOrObj, &csObj);
     } else {
         void* pfnTarget = nullptr;
-        if (SafeReadPtr(reinterpret_cast<void*>(s_unityBase + 0x22339F0), &pfnTarget) && pfnTarget) {
+        void* targetSlot = GetGCHandleTargetPtr(s_unityBase);
+        if (targetSlot && SafeReadPtr(targetSlot, &pfnTarget) && pfnTarget) {
             csObj = SafeCallGCHandleTarget(pfnTarget, raw);
         }
     }
@@ -2081,7 +2275,8 @@ std::vector<UnityObjectEntry> UnityBridge::GetAllGameObjects(int maxObjects) {
     if (!s_unityBase) return result;
 
     void* mgr = nullptr;
-    if (!SafeReadPtr(reinterpret_cast<void*>(s_unityBase + 0x2232770), &mgr) || !mgr) {
+    void* mgrSlot = GetGameObjectManagerPtr(s_unityBase);
+    if (!mgrSlot || !SafeReadPtr(mgrSlot, &mgr) || !mgr) {
         return result;
     }
 
@@ -2963,7 +3158,7 @@ void UnityBridge::IsolateGhostSlotCarFXTextures(size_t slotIdx, GhostSlot& slot)
     const bool albIsDef = IsDefaultNativeTex(origAlb, natWhite, natBlack, natNormal);
     const bool packIsDef = IsDefaultNativeTex(origPack, natWhite, natBlack, natNormal);
 
-    const uintptr_t pfnGetNatPtr = s_unityBase + 0xA8710;
+    const uintptr_t pfnGetNatPtr = GetNativeTexPtrFn(s_unityBase);
     void* albSrvPtr = nullptr;
     if (origAlb) SafeCallGetNativeTexPtr(pfnGetNatPtr, origAlb, &albSrvPtr);
 
@@ -3391,10 +3586,18 @@ static bool SafeGetMainCameraPosSEH(void* fnGetCam, void* fnTfGetPos, UnityVecto
 static bool SafePhysicsRaycastSEH(void* fnRaycast, const UnityRay* ray, float maxDist, UnityRaycastHit* outHit, int layerMask) {
     if (!fnRaycast || !ray || !outHit) return false;
     __try {
-        using t_Ray = bool (*)(const uint64_t*, const void*, float, void*, int, int);
-        uint64_t sceneHandle = 0;
         memset(outHit, 0, sizeof(*outHit));
-        return reinterpret_cast<t_Ray>(fnRaycast)(&sceneHandle, ray, maxDist, outHit, layerMask, 1);
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(fnRaycast);
+        if (p[0] == 0x48 && p[1] == 0x8B && p[2] == 0x09) {
+            // Unity icall thunk (PhysicsScene_CUSTOM_Internal_Raycast): expects pointer &sceneHandle
+            using t_RayThunk = bool (*)(const uint64_t*, const void*, float, void*, int, int);
+            uint64_t sceneHandle = 0;
+            return reinterpret_cast<t_RayThunk>(fnRaycast)(&sceneHandle, ray, maxDist, outHit, layerMask, 1);
+        } else {
+            // Direct Physics::Raycast: expects sceneHandle by value (0)
+            using t_RayDirect = bool (*)(uint64_t, const void*, float, void*, int, int);
+            return reinterpret_cast<t_RayDirect>(fnRaycast)(0, ray, maxDist, outHit, layerMask, 1);
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
@@ -4044,16 +4247,33 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
         }
     }
     if (localRootTf && GetTransformPosRotDirect(localRootTf, pPos, pRot)) {
-        hasLocal = true;
+        if (!std::isnan(pPos.x) && !std::isnan(pPos.y) && !std::isnan(pPos.z)) {
+            hasLocal = true;
+        }
+    }
+
+    CarTelemetry player = NativeCarX::GetPlayerCarTelemetry();
+    if (!hasLocal && player.carPtr) {
+        pPos = { player.posX, player.posY, player.posZ };
+        if (!std::isnan(pPos.x) && !std::isnan(pPos.y) && !std::isnan(pPos.z) &&
+            (fabsf(pPos.x) + fabsf(pPos.y) + fabsf(pPos.z) > 0.1f)) {
+            hasLocal = true;
+        }
     }
 
     UnityVector3 pRight{ 1, 0, 0 }, pUp{ 0, 1, 0 }, pFwd{ 0, 0, 1 };
     float halfW = 0.96f, halfL = 2.20f, halfH = 0.65f;
     float frontAxleZ = halfL * 0.62f;
     float rearAxleZ  = -halfL * 0.62f;
-    CarTelemetry player{};
     if (hasLocal) {
-        QuatToAxes(pRot, pRight, pUp, pFwd);
+        if (localRootTf && (fabsf(pRot.x) + fabsf(pRot.y) + fabsf(pRot.z) + fabsf(pRot.w) > 0.01f)) {
+            QuatToAxes(pRot, pRight, pUp, pFwd);
+        } else if (player.carPtr) {
+            const float* pm = player.transformMatrix.data();
+            pRight = VecNormalize({ pm[0], pm[1], pm[2] });
+            pUp    = VecNormalize({ pm[4], pm[5], pm[6] });
+            pFwd   = VecNormalize({ pm[8], pm[9], pm[10] });
+        }
         player = NativeCarX::GetPlayerCarTelemetry();
         if (player.carPtr) {
             float wheelMats[4][16];
@@ -4822,9 +5042,20 @@ void UnityBridge::ApplyRepairPlayerCarInternal() {
     typedef void (__fastcall *t_VisualRepair)(void* carModel, void* method);
     typedef void (__fastcall *t_FullCarRepair)(void* list, void* method);
 
-    static t_CarRepair pfn_CarRepair = hGA ? reinterpret_cast<t_CarRepair>((uintptr_t)hGA + 0x12FEC20) : nullptr;
-    static t_VisualRepair pfn_VisualRepair = hGA ? reinterpret_cast<t_VisualRepair>((uintptr_t)hGA + 0x12FF9A0) : nullptr;
-    static t_FullCarRepair pfn_FullCarRepair = hGA ? reinterpret_cast<t_FullCarRepair>((uintptr_t)hGA + 0x1E570D0) : nullptr;
+    static t_CarRepair pfn_CarRepair = nullptr;
+    static t_VisualRepair pfn_VisualRepair = nullptr;
+    static t_FullCarRepair pfn_FullCarRepair = nullptr;
+    static bool s_repairsResolved = false;
+
+    if (!s_repairsResolved && hGA) {
+        s_repairsResolved = true;
+        pfn_CarRepair = reinterpret_cast<t_CarRepair>(PatternScanner::FindOrFallback(hGA,
+            "40 53 41 55 48 83 EC 38 80 3D ? ? ? ? 00 44 0F B6 EA 48 8B D9", 0x17C3EE0, "CarRepair"));
+        pfn_VisualRepair = reinterpret_cast<t_VisualRepair>(PatternScanner::FindFunctionEntryOrFallback(hGA,
+            "48 89 6C 24 30 48 89 74 24 38 48 89 7C 24 40 4C 89 74 24 48 48 85 DB 0F 84 ? ? ? ? 48 8B 15 ? ? ? ? B9 02 00 00 00 4C 8B C3", 0x15CFC00, 256, "VisualRepair"));
+        pfn_FullCarRepair = reinterpret_cast<t_FullCarRepair>(PatternScanner::FindOrFallback(hGA,
+            "48 89 5C 24 08 57 48 83 EC 70 48 8B D9 80 3D ? ? ? ? 00 75 4F", 0x2426DD0, "FullCarRepair"));
+    }
 
     bool repaired = false;
     for (const auto& sc : s_sceneCarCache) {

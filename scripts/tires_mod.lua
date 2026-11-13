@@ -4,6 +4,39 @@ local T = i18n.t
 
 local active_tab = "body_wear" -- "body_wear", "thermal", "telemetry"
 
+if config and carx then
+    local no_dam = config.get("tires", "no_damage")
+    if no_dam ~= nil and carx.set_no_damage then
+        carx.set_no_damage(no_dam)
+    end
+    local saved_cfg = config.get("tires", "tyre_config")
+    if type(saved_cfg) == "table" and carx.set_tyre_config then
+        carx.set_tyre_config(saved_cfg)
+    end
+end
+
+if config and config.register then
+    config.register({
+        id = "tires",
+        on_save = function()
+            return {
+                no_damage = carx and carx.get_no_damage and carx.get_no_damage() or nil,
+                tyre_config = carx and carx.get_tyre_config and carx.get_tyre_config() or nil,
+            }
+        end,
+        on_load = function(saved)
+            if type(saved) == "table" then
+                if saved.no_damage ~= nil and carx and carx.set_no_damage then
+                    carx.set_no_damage(saved.no_damage)
+                end
+                if type(saved.tyre_config) == "table" and carx and carx.set_tyre_config then
+                    carx.set_tyre_config(saved.tyre_config)
+                end
+            end
+        end,
+    })
+end
+
 local function render_tires_window()
     if not carx or not carx.get_tyre_config then
         ui.card(T("Кузов и шины", "Body & Tires"), nil, function()
@@ -39,6 +72,7 @@ local function render_tires_window()
             local ch_dam, val_dam = ui.toggle(T("Без повреждений (кузов, бампера, подвеска)##t_no_dam", "No Damage (Body, Bumpers & Suspension)##t_no_dam"), no_dam)
             if ch_dam then
                 if carx and carx.set_no_damage then carx.set_no_damage(val_dam) end
+                if config then config.set("tires", "no_damage", val_dam) end
             end
 
             local opt_st = (optimizer and optimizer.get_stats) and optimizer.get_stats() or {}
@@ -93,6 +127,7 @@ local function render_tires_window()
             ui.spacing(4)
             if ui.button(T("Сбросить все настройки в стандарт машины (гараж)##tire_btn_reset_all", "Reset All to Car Setup (Garage)##tire_btn_reset_all"), ui.avail_width(), 28, "danger") then
                 if carx.reset_tyre_defaults then carx.reset_tyre_defaults() end
+                if config then config.set("tires", "tyre_config", nil) end
                 dirty = false
             end
         end)
@@ -230,6 +265,7 @@ local function render_tires_window()
 
     if dirty then
         carx.set_tyre_config(cfg)
+        if config then config.set("tires", "tyre_config", cfg) end
     end
 end
 

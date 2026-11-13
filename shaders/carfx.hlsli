@@ -183,11 +183,11 @@ float4 Tex3(PSIn i) { return g_fxTex3.Sample(g_linear, i.uv); }
 float CarSpeedKmh()     { return g_fxGame[0].x; }
 float CarRpm()          { return g_fxGame[0].y; }
 float CarSteerDeg()     { return g_fxGame[0].z; }
-float CarDriftDeg()     { return g_fxDriftState.x; } // True slip angle (deg)
-float CarDriftAngleDeg(){ return g_fxDriftState.x; }
-float CarDriftSignedDeg(){ return g_fxDriftState.y; }
-float CarDrift65()      { return g_fxDriftState.z; } // 0..1 peaking at 65 deg
-float CarDriftNorm()    { return max(g_fxDriftState.z, g_fxGame[0].w * 0.5); }
+float CarDriftDeg()     { float p = g_fxDriftState.x; float l = max(abs(g_fxGame[0].z), g_fxGame[0].w * 65.0); return (p > 0.5) ? p : l; }
+float CarDriftAngleDeg(){ float p = g_fxDriftState.x; float l = max(abs(g_fxGame[0].z), g_fxGame[0].w * 65.0); return (p > 0.5) ? p : l; }
+float CarDriftSignedDeg(){ float p = g_fxDriftState.y; float l = (g_fxGame[0].w > 0.05) ? g_fxGame[0].z : 0.0; return (abs(p) > 0.5) ? p : l; }
+float CarDrift65()      { return max(g_fxDriftState.z, g_fxGame[0].w); }
+float CarDriftNorm()    { return max(g_fxDriftState.z, g_fxGame[0].w); }
 float CarThrottle()     { return g_fxGame[1].x; }
 float CarBrake()        { return g_fxGame[1].y; }
 float CarGear()         { return g_fxGame[1].z; }

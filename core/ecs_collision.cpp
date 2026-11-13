@@ -1,4 +1,5 @@
 #include "ecs_collision.h"
+#include "pattern_scanner.h"
 #include "unity_bridge.h"
 #include "native_carx.h"
 #include "logger.h"
@@ -15,17 +16,15 @@
 
 namespace {
 
-// Verified GameAssembly.dll (CarX DR2 / Unity Entities) RVAs.
-constexpr uintptr_t RVA_WORLD_CLASS            = 0x844C9E0; // Unity.Entities.World*
-constexpr uintptr_t RVA_ECS_CLASS              = 0x8428C98; // EntityComponentStore class static_fields -> s_chunkStore
-constexpr uintptr_t RVA_CHUNK_META_CLASS       = 0x843CB48; // SharedStatic chunk meta table
-constexpr uintptr_t RVA_TYPE_NAMES_SS          = 0x83F57D8; // TypeManager.TypeNames SharedStatic<UnsafeList>
-constexpr uintptr_t RVA_COLLISION_WORLD_CAST_RAY    = 0x2717C40; // Unity.Physics.CollisionWorld.CastRay(RaycastInput, out RaycastHit)
-constexpr uintptr_t RVA_COLLISION_WORLD_SPHERE_CAST = 0x5B57270; // Unity.Physics.CollisionWorld.SphereCast(float3, float, float3, float, out ColliderCastHit, CollisionFilter, QueryInteraction)
-constexpr uintptr_t RVA_CAST_RAY_MI_PTR           = 0x8387960; // Generic MethodInfo* slot for CollisionWorld.CastRay<RaycastHit>
-constexpr uintptr_t RVA_INIT_RUNTIME_METADATA  = 0x09264A0; // il2cpp_codegen_initialize_runtime_metadata
-constexpr uintptr_t RVA_RAYCAST_INPUT_START    = 0x5B65A80; // RaycastInput.set_Start
-constexpr uintptr_t RVA_RAYCAST_INPUT_END      = 0x5B65A30; // RaycastInput.set_End
+// Dynamic RVAs inside GameAssembly.dll (fallback default RVAs for beta/vanilla build)
+static uintptr_t s_rvaWorldClass                = 0x9819CF0; // Unity.Entities.World* (fallback)
+static uintptr_t s_rvaEcsClass                  = 0x976FE30; // EntityComponentStore class static_fields -> s_chunkStore
+static uintptr_t s_rvaChunkMetaClass           = 0x982D7E0; // SharedStatic chunk meta table
+static uintptr_t s_rvaTypeNamesSS              = 0x97DBAC8; // TypeManager.TypeNames SharedStatic<UnsafeList>
+static uintptr_t s_rvaCollisionWorldCastRay    = 0x2F27300; // Unity.Physics.CollisionWorld.CastRay(RaycastInput, out RaycastHit)
+static uintptr_t s_rvaCollisionWorldSphereCast = 0x6B97C00; // Unity.Physics.CollisionWorld.SphereCast
+static uintptr_t s_rvaCastRayMiPtr             = 0x9848F98; // Generic MethodInfo* slot for CollisionWorld.CastRay<RaycastHit>
+static uintptr_t s_rvaInitRuntimeMetadata      = 0x0A75B50; // il2cpp_codegen_initialize_runtime_metadata
 
 constexpr uint32_t FALLBACK_TIDX_PHYSICS_COLLIDER  = 0x5BA;
 constexpr uint32_t FALLBACK_TIDX_PHYSICS_VELOCITY  = 0x5BE;
@@ -172,6 +171,52 @@ static bool ResolveGameAssembly() {
     if (!GetModuleInformation(GetCurrentProcess(), hMod, &mi, sizeof(mi))) return false;
     s_gaBase = reinterpret_cast<uintptr_t>(hMod);
     s_gaSize = mi.SizeOfImage;
+
+    // Dynamically scan GameAssembly.dll for Unity Physics / ECS signatures
+    // 1. CastRay callsite -> resolves both CastRay MethodInfo slot and CollisionWorld.CastRay function
+    uintptr_t vaCastRaySite = PatternScanner::Find(hMod, "4C 8B 0D ? ? ? ? 4C 8D 45 D0 48 8D 55 10 44 0F 29 6D 10 48 8B CE", "Ecs_CastRayCallSite");
+    if (vaCastRaySite) {
+        uintptr_t miPtr = PatternScanner::ResolveRip(vaCastRaySite, 7, 3);
+        if (miPtr >= s_gaBase) s_rvaCastRayMiPtr = miPtr - s_gaBase;
+        uintptr_t crFn = PatternScanner::ResolveRip(vaCastRaySite + 0x41, 5, 1);
+        if (crFn >= s_gaBase) s_rvaCollisionWorldCastRay = crFn - s_gaBase;
+    }
+
+    // 2. InitRuntimeMetadata
+    uintptr_t vaInitMeta = PatternScanner::Find(hMod, "48 83 EC 28 E8 ? ? ? ? F0 83 0C 24 00 48 83 C4 28 C3 CC", "Ecs_InitRuntimeMetadata");
+    if (vaInitMeta && vaInitMeta >= s_gaBase) {
+        s_rvaInitRuntimeMetadata = vaInitMeta - s_gaBase;
+    }
+
+    // 3. TypeNames SharedStatic
+    uintptr_t vaTypeNames = PatternScanner::Find(hMod, "48 BA E6 2A 33 62 A9 C5 B6 9D 49 B8 80 32 50 01 13 1B EB 85 33 C9 E8 ? ? ? ? 48 8B 0D", "Ecs_TypeNamesSS");
+    if (vaTypeNames) {
+        uintptr_t tnPtr = PatternScanner::ResolveRip(vaTypeNames + 0x1B, 7, 3);
+        if (tnPtr >= s_gaBase) s_rvaTypeNamesSS = tnPtr - s_gaBase;
+    }
+
+    // 4. ChunkMeta Class
+    uintptr_t vaChunkMeta = PatternScanner::Find(hMod, "48 BA 90 60 B6 2D 2B 4E 0F E0 33 C9 E8 ? ? ? ? 48 8B 0D", "Ecs_ChunkMetaClass");
+    if (vaChunkMeta) {
+        uintptr_t cmPtr = PatternScanner::ResolveRip(vaChunkMeta + 0x11, 7, 3);
+        if (cmPtr >= s_gaBase) s_rvaChunkMetaClass = cmPtr - s_gaBase;
+    }
+
+    // 5. ECS Class (EntityComponentStore)
+    uintptr_t vaEcsClass = PatternScanner::Find(hMod, "48 8B 01 81 E2 FF 1F 00 00 8B 04 90 C3", "Ecs_EntityComponentStoreClass");
+    if (vaEcsClass) {
+        uintptr_t ecsPtr = PatternScanner::ResolveRip(vaEcsClass + 0x45, 7, 3);
+        if (ecsPtr >= s_gaBase) s_rvaEcsClass = ecsPtr - s_gaBase;
+    }
+
+    // 6. SphereCast
+    uintptr_t vaSphere = PatternScanner::FindOrFallback(hMod, "48 89 5C 24 08 48 89 74 24 10 57 48 81 EC 90 00 00 00 80 3D ? ? ? ? 00 49 8B D9 0F 29 B4 24 80 00 00 00 48 8B FA 0F 28 F2 48 8B F1 75 ? 48 8D 0D ? ? ? ? E8 ? ? ? ? C6 05 ? ? ? ? 01 48 8B 84 24 D0 00 00 00 4C 8D 4C 24 60 4C 8B 05 ? ? ? ? 48 8D 54 24 70 4C 89 44 24 40 0F 28 D6 48 8B CE", 0x6B97C00, "Ecs_SphereCast");
+    if (vaSphere && vaSphere >= s_gaBase) {
+        s_rvaCollisionWorldSphereCast = vaSphere - s_gaBase;
+    } else {
+        s_rvaCollisionWorldSphereCast = 0x6B97C00;
+    }
+
     return s_gaBase != 0;
 }
 
@@ -179,7 +224,7 @@ static void TryResolveTypeIndices() {
     if (s_types.resolvedFromTypeNames || !ResolveGameAssembly()) return;
 
     uintptr_t tmCls = 0, tmSf = 0, tmList = 0, entries = 0;
-    if (!SafeRead(s_gaBase + RVA_TYPE_NAMES_SS, tmCls) || tmCls < 0x10000) return;
+    if (!SafeRead(s_gaBase + s_rvaTypeNamesSS, tmCls) || tmCls < 0x10000) return;
     if (!SafeRead(tmCls + 0xB8, tmSf) || tmSf < 0x10000) return;
     if (!SafeRead(tmSf, tmList) || tmList < 0x10000) return;
     if (!SafeRead(tmList, entries) || entries < 0x10000) return;
@@ -228,18 +273,23 @@ struct EcsStores {
 static bool GetEcsStores(EcsStores& out) {
     if (!ResolveGameAssembly()) return false;
 
-    uintptr_t worldCls = 0, worldSf = 0, world = 0;
-    if (!SafeRead(s_gaBase + RVA_WORLD_CLASS, worldCls) || worldCls < 0x10000) return false;
-    if (!SafeRead(worldCls + 0xB8, worldSf) || worldSf < 0x10000) return false;
-    if (!SafeRead(worldSf + 0x08, world) || world < 0x10000) return false;
+    // World class sanity check (optional, if world is created)
+    if (s_rvaWorldClass) {
+        uintptr_t worldCls = 0, worldSf = 0, world = 0;
+        if (SafeRead(s_gaBase + s_rvaWorldClass, worldCls) && worldCls >= 0x10000) {
+            if (SafeRead(worldCls + 0xB8, worldSf) && worldSf >= 0x10000) {
+                SafeRead(worldSf + 0x08, world);
+            }
+        }
+    }
 
     uintptr_t ecsCls = 0, ecsSf = 0;
-    if (!SafeRead(s_gaBase + RVA_ECS_CLASS, ecsCls) || ecsCls < 0x10000) return false;
+    if (!SafeRead(s_gaBase + s_rvaEcsClass, ecsCls) || ecsCls < 0x10000) return false;
     if (!SafeRead(ecsCls + 0xB8, ecsSf) || ecsSf < 0x10000) return false;
     if (!SafeRead(ecsSf + 0x10, out.chunkStore) || out.chunkStore < 0x10000) return false;
 
     uintptr_t cmCls = 0, cmSf = 0, cmInner = 0;
-    if (!SafeRead(s_gaBase + RVA_CHUNK_META_CLASS, cmCls) || cmCls < 0x10000) return false;
+    if (!SafeRead(s_gaBase + s_rvaChunkMetaClass, cmCls) || cmCls < 0x10000) return false;
     if (!SafeRead(cmCls + 0xB8, cmSf) || cmSf < 0x10000) return false;
     if (!SafeRead(cmSf, cmInner) || cmInner < 0x10000) return false;
     if (!SafeRead(cmInner, out.chunkMetaBase) || out.chunkMetaBase < 0x10000) return false;
@@ -984,9 +1034,10 @@ static uintptr_t ResolveCollisionWorldPtr() {
 
 static void* SafeGetOrInitCastRayMISeh(uintptr_t gaBase) {
     __try {
-        uintptr_t* slot = reinterpret_cast<uintptr_t*>(gaBase + RVA_CAST_RAY_MI_PTR);
-        if (*slot == 0) {
-            auto initFn = reinterpret_cast<void(__fastcall*)(void*)>(gaBase + RVA_INIT_RUNTIME_METADATA);
+        if (!s_rvaCastRayMiPtr) return nullptr;
+        uintptr_t* slot = reinterpret_cast<uintptr_t*>(gaBase + s_rvaCastRayMiPtr);
+        if (*slot == 0 && s_rvaInitRuntimeMetadata) {
+            auto initFn = reinterpret_cast<void(__fastcall*)(void*)>(gaBase + s_rvaInitRuntimeMetadata);
             initFn(slot);
         }
         uintptr_t val = *slot;
@@ -997,19 +1048,35 @@ static void* SafeGetOrInitCastRayMISeh(uintptr_t gaBase) {
 }
 
 static bool SafeDotsCastRaySEH(void* fnCastRay, void* cwPtr, void* miPtr,
-                               void* fnSetStart, void* fnSetEnd,
                                const float* start3, const float* end3,
                                uint32_t belongsTo, uint32_t collidesWith,
                                uint32_t* outDwords16) {
     __try {
         alignas(16) uint8_t inputBuf[0x90] = { 0 };
-        auto setStart = reinterpret_cast<void(__fastcall*)(void*, const float*)>(fnSetStart);
-        auto setEnd   = reinterpret_cast<void(__fastcall*)(void*, const float*)>(fnSetEnd);
-        setStart(inputBuf, start3);
-        setEnd(inputBuf, end3);
+
+        // RaycastInput layout:
+        // +0x00: CollisionFilter (belongsTo, collidesWith, groupIndex = 0)
         *reinterpret_cast<uint32_t*>(inputBuf + 0x00) = belongsTo;
         *reinterpret_cast<uint32_t*>(inputBuf + 0x04) = collidesWith;
         *reinterpret_cast<int32_t*>(inputBuf + 0x08)  = 0;
+
+        // +0x0C: Start (float3)
+        float* pStart = reinterpret_cast<float*>(inputBuf + 0x0C);
+        pStart[0] = start3[0];
+        pStart[1] = start3[1];
+        pStart[2] = start3[2];
+
+        // +0x18: Direction (float3 = end - start)
+        float* pDir = reinterpret_cast<float*>(inputBuf + 0x18);
+        pDir[0] = end3[0] - start3[0];
+        pDir[1] = end3[1] - start3[1];
+        pDir[2] = end3[2] - start3[2];
+
+        // +0x24: InverseDirection (float3)
+        float* pInv = reinterpret_cast<float*>(inputBuf + 0x24);
+        pInv[0] = (fabsf(pDir[0]) > 1e-6f) ? (1.0f / pDir[0]) : 1e6f;
+        pInv[1] = (fabsf(pDir[1]) > 1e-6f) ? (1.0f / pDir[1]) : 1e6f;
+        pInv[2] = (fabsf(pDir[2]) > 1e-6f) ? (1.0f / pDir[2]) : 1e6f;
 
         alignas(16) uint8_t hitBuf[0x40] = { 0 };
         *reinterpret_cast<float*>(hitBuf + 0x00) = 1.0f;
@@ -1037,12 +1104,11 @@ bool EcsCollision::CastRay(const float start[3], const float end[3],
     void* miPtr = SafeGetOrInitCastRayMISeh(s_gaBase);
     if (!miPtr) return false;
 
-    void* fnCastRay  = reinterpret_cast<void*>(s_gaBase + RVA_COLLISION_WORLD_CAST_RAY);
-    void* fnSetStart = reinterpret_cast<void*>(s_gaBase + RVA_RAYCAST_INPUT_START);
-    void* fnSetEnd   = reinterpret_cast<void*>(s_gaBase + RVA_RAYCAST_INPUT_END);
+    if (!s_rvaCollisionWorldCastRay) return false;
+    void* fnCastRay = reinterpret_cast<void*>(s_gaBase + s_rvaCollisionWorldCastRay);
 
     if (!SafeDotsCastRaySEH(fnCastRay, reinterpret_cast<void*>(cwPtr), miPtr,
-                            fnSetStart, fnSetEnd, start, end,
+                            start, end,
                             belongsTo, collidesWith, outHit.rawDwords)) {
         return false;
     }
@@ -1136,7 +1202,8 @@ bool EcsCollision::SphereCast(const float origin[3], float radius, const float d
     if (!cwPtr) return false;
     if (outQueryExecuted) *outQueryExecuted = true;
 
-    void* fnSphereCast = reinterpret_cast<void*>(s_gaBase + RVA_COLLISION_WORLD_SPHERE_CAST);
+    if (!s_rvaCollisionWorldSphereCast) return false;
+    void* fnSphereCast = reinterpret_cast<void*>(s_gaBase + s_rvaCollisionWorldSphereCast);
     DotsColliderCastHitRaw rawHit{};
     if (!SafeDotsSphereCastSEH(fnSphereCast, reinterpret_cast<void*>(cwPtr),
                                origin, radius, uDir, maxDistance,

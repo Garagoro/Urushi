@@ -1,4 +1,5 @@
 #include "steer_assist.h"
+#include "pattern_scanner.h"
 #include "native_carx.h"
 #include "logger.h"
 
@@ -14,13 +15,13 @@ constexpr float kPi = 3.14159265358979323846f;
 constexpr float kDegToRad = kPi / 180.0f;
 constexpr float kRadToDeg = 180.0f / kPi;
 
-// Verified RVAs inside NativeCarX.dll (x64, ImageBase 0x180000000)
-constexpr uintptr_t kRvaCenterScaleMul    = 0x90DE; // F3 0F 59 05 [disp32]  mulss xmm0, [0x96310] (0.3f)
-constexpr uintptr_t kRvaMode0SlipJump     = 0x91F9; // 76 40                  jbe 0x923B
-constexpr uintptr_t kRvaSlipGatePosJump   = 0x92C8; // 76 1B                  jbe 0x92E5 (-1.3f gate)
-constexpr uintptr_t kRvaSlipGateNegJump   = 0x92E9; // 73 1B                  jae 0x9306 (+1.3f gate)
-constexpr uintptr_t kRvaSteerFlipComiss   = 0xA5C5; // 0F 2F 0D [disp32]      comiss xmm1, [0x96420] (90 deg)
-constexpr uintptr_t kRvaUncondFlipComiss  = 0xA5F3; // 0F 2F 0D [disp32]      comiss xmm1, [0x96488] (140 deg)
+// Dynamic RVAs inside NativeCarX.dll (default fallback RVAs for vanilla build)
+static uintptr_t s_rvaCenterScaleMul    = 0x90DE; // F3 0F 59 05 [disp32]  mulss xmm0, [disp32] (0.3f)
+static uintptr_t s_rvaMode0SlipJump     = 0x91F9; // 76 40                  jbe 0x923B
+static uintptr_t s_rvaSlipGatePosJump   = 0x92C8; // 76 1B                  jbe 0x92E5 (-1.3f gate)
+static uintptr_t s_rvaSlipGateNegJump   = 0x92E9; // 73 1B                  jae 0x9306 (+1.3f gate)
+static uintptr_t s_rvaSteerFlipComiss   = 0xA5C5; // 0F 2F 0D [disp32]      comiss xmm1, [disp32] (90 deg)
+static uintptr_t s_rvaUncondFlipComiss  = 0xA5F3; // 0F 2F 0D [disp32]      comiss xmm1, [disp32] (140 deg)
 
 // Verified Car / Wheel struct offsets for live telemetry readout
 constexpr uintptr_t kOffSteerMode         = 0x4E8;
@@ -36,12 +37,12 @@ constexpr uintptr_t kWheelStride          = 0x26C80;
 constexpr uintptr_t kOffWheelSlipAngleNeg = 0xF6C;
 constexpr uintptr_t kOffWheelHasSlipGate  = 0x26930;
 
-constexpr std::array<uint8_t, 8> kOrigCenterScale = { 0xF3, 0x0F, 0x59, 0x05, 0x2A, 0xD2, 0x08, 0x00 };
-constexpr std::array<uint8_t, 2> kOrigMode0Jump   = { 0x76, 0x40 };
-constexpr std::array<uint8_t, 2> kOrigPosGateJump = { 0x76, 0x1B };
-constexpr std::array<uint8_t, 2> kOrigNegGateJump = { 0x73, 0x1B };
-constexpr std::array<uint8_t, 7> kOrigSteerFlip   = { 0x0F, 0x2F, 0x0D, 0x54, 0xBE, 0x08, 0x00 };
-constexpr std::array<uint8_t, 7> kOrigUncondFlip  = { 0x0F, 0x2F, 0x0D, 0x8E, 0xBE, 0x08, 0x00 };
+static std::array<uint8_t, 8> s_origCenterScale = { 0xF3, 0x0F, 0x59, 0x05, 0x2A, 0xD2, 0x08, 0x00 };
+static std::array<uint8_t, 2> s_origMode0Jump   = { 0x76, 0x40 };
+static std::array<uint8_t, 2> s_origPosGateJump = { 0x76, 0x1B };
+static std::array<uint8_t, 2> s_origNegGateJump = { 0x73, 0x1B };
+static std::array<uint8_t, 7> s_origSteerFlip   = { 0x0F, 0x2F, 0x0D, 0x54, 0xBE, 0x08, 0x00 };
+static std::array<uint8_t, 7> s_origUncondFlip  = { 0x0F, 0x2F, 0x0D, 0x8E, 0xBE, 0x08, 0x00 };
 
 struct NearFloatBlock {
     volatile float uncondFlipRad;
@@ -84,17 +85,6 @@ static bool WriteCodeBytes(uintptr_t addr, const uint8_t* data, size_t len) {
     return true;
 }
 
-static bool VerifyAllOriginalBytes(uintptr_t base) {
-    auto eq = [base](uintptr_t rva, const uint8_t* expected, size_t len) {
-        return std::memcmp(reinterpret_cast<const void*>(base + rva), expected, len) == 0;
-    };
-    return eq(kRvaCenterScaleMul, kOrigCenterScale.data(), kOrigCenterScale.size()) &&
-           eq(kRvaMode0SlipJump, kOrigMode0Jump.data(), kOrigMode0Jump.size()) &&
-           eq(kRvaSlipGatePosJump, kOrigPosGateJump.data(), kOrigPosGateJump.size()) &&
-           eq(kRvaSlipGateNegJump, kOrigNegGateJump.data(), kOrigNegGateJump.size()) &&
-           eq(kRvaSteerFlipComiss, kOrigSteerFlip.data(), kOrigSteerFlip.size()) &&
-           eq(kRvaUncondFlipComiss, kOrigUncondFlip.data(), kOrigUncondFlip.size());
-}
 
 static NearFloatBlock* AllocateNearPage(uintptr_t moduleBase) {
     SYSTEM_INFO si{};
@@ -180,22 +170,22 @@ static void ApplyPatchesLocked() {
 
     const bool wantMainPatches = s_cfg.enabled;
     if (wantMainPatches && !s_flipPatched) {
-        bool ok1 = PatchRipDisp32(s_nativeBase + kRvaSteerFlipComiss, 7, 3, &s_nearBlock->steerFlipRad);
-        bool ok2 = PatchRipDisp32(s_nativeBase + kRvaUncondFlipComiss, 7, 3, &s_nearBlock->uncondFlipRad);
-        bool ok3 = PatchRipDisp32(s_nativeBase + kRvaCenterScaleMul, 8, 4, &s_nearBlock->centerScale);
+        bool ok1 = PatchRipDisp32(s_nativeBase + s_rvaSteerFlipComiss, 7, 3, &s_nearBlock->steerFlipRad);
+        bool ok2 = PatchRipDisp32(s_nativeBase + s_rvaUncondFlipComiss, 7, 3, &s_nearBlock->uncondFlipRad);
+        bool ok3 = PatchRipDisp32(s_nativeBase + s_rvaCenterScaleMul, 8, 4, &s_nearBlock->centerScale);
         if (ok1 && ok2 && ok3) {
             s_flipPatched = true;
             Logger::Info("SteerAssist: 155-deg vector flip & target scale patches active.");
         } else {
-            WriteCodeBytes(s_nativeBase + kRvaSteerFlipComiss, kOrigSteerFlip.data(), kOrigSteerFlip.size());
-            WriteCodeBytes(s_nativeBase + kRvaUncondFlipComiss, kOrigUncondFlip.data(), kOrigUncondFlip.size());
-            WriteCodeBytes(s_nativeBase + kRvaCenterScaleMul, kOrigCenterScale.data(), kOrigCenterScale.size());
+            WriteCodeBytes(s_nativeBase + s_rvaSteerFlipComiss, s_origSteerFlip.data(), s_origSteerFlip.size());
+            WriteCodeBytes(s_nativeBase + s_rvaUncondFlipComiss, s_origUncondFlip.data(), s_origUncondFlip.size());
+            WriteCodeBytes(s_nativeBase + s_rvaCenterScaleMul, s_origCenterScale.data(), s_origCenterScale.size());
             Logger::Error("SteerAssist: failed to apply RIP-relative displacement patches (range > 2GB).");
         }
     } else if (!wantMainPatches && s_flipPatched) {
-        WriteCodeBytes(s_nativeBase + kRvaSteerFlipComiss, kOrigSteerFlip.data(), kOrigSteerFlip.size());
-        WriteCodeBytes(s_nativeBase + kRvaUncondFlipComiss, kOrigUncondFlip.data(), kOrigUncondFlip.size());
-        WriteCodeBytes(s_nativeBase + kRvaCenterScaleMul, kOrigCenterScale.data(), kOrigCenterScale.size());
+        WriteCodeBytes(s_nativeBase + s_rvaSteerFlipComiss, s_origSteerFlip.data(), s_origSteerFlip.size());
+        WriteCodeBytes(s_nativeBase + s_rvaUncondFlipComiss, s_origUncondFlip.data(), s_origUncondFlip.size());
+        WriteCodeBytes(s_nativeBase + s_rvaCenterScaleMul, s_origCenterScale.data(), s_origCenterScale.size());
         s_flipPatched = false;
         Logger::Info("SteerAssist: vector flip & scale patches restored to vanilla.");
     }
@@ -204,21 +194,21 @@ static void ApplyPatchesLocked() {
     if (wantSlipPatch && !s_slipPatched) {
         const uint8_t jmpMode0[2] = { 0xEB, 0x40 };
         const uint8_t nops[2] = { 0x90, 0x90 };
-        bool ok1 = WriteCodeBytes(s_nativeBase + kRvaMode0SlipJump, jmpMode0, 2);
-        bool ok2 = WriteCodeBytes(s_nativeBase + kRvaSlipGatePosJump, nops, 2);
-        bool ok3 = WriteCodeBytes(s_nativeBase + kRvaSlipGateNegJump, nops, 2);
+        bool ok1 = WriteCodeBytes(s_nativeBase + s_rvaMode0SlipJump, jmpMode0, 2);
+        bool ok2 = WriteCodeBytes(s_nativeBase + s_rvaSlipGatePosJump, nops, 2);
+        bool ok3 = WriteCodeBytes(s_nativeBase + s_rvaSlipGateNegJump, nops, 2);
         if (ok1 && ok2 && ok3) {
             s_slipPatched = true;
             Logger::Info("SteerAssist: symmetric front-slip gate patch active (removed -acos lockup).");
         } else {
-            WriteCodeBytes(s_nativeBase + kRvaMode0SlipJump, kOrigMode0Jump.data(), kOrigMode0Jump.size());
-            WriteCodeBytes(s_nativeBase + kRvaSlipGatePosJump, kOrigPosGateJump.data(), kOrigPosGateJump.size());
-            WriteCodeBytes(s_nativeBase + kRvaSlipGateNegJump, kOrigNegGateJump.data(), kOrigNegGateJump.size());
+            WriteCodeBytes(s_nativeBase + s_rvaMode0SlipJump, s_origMode0Jump.data(), s_origMode0Jump.size());
+            WriteCodeBytes(s_nativeBase + s_rvaSlipGatePosJump, s_origPosGateJump.data(), s_origPosGateJump.size());
+            WriteCodeBytes(s_nativeBase + s_rvaSlipGateNegJump, s_origNegGateJump.data(), s_origNegGateJump.size());
         }
     } else if (!wantSlipPatch && s_slipPatched) {
-        WriteCodeBytes(s_nativeBase + kRvaMode0SlipJump, kOrigMode0Jump.data(), kOrigMode0Jump.size());
-        WriteCodeBytes(s_nativeBase + kRvaSlipGatePosJump, kOrigPosGateJump.data(), kOrigPosGateJump.size());
-        WriteCodeBytes(s_nativeBase + kRvaSlipGateNegJump, kOrigNegGateJump.data(), kOrigNegGateJump.size());
+        WriteCodeBytes(s_nativeBase + s_rvaMode0SlipJump, s_origMode0Jump.data(), s_origMode0Jump.size());
+        WriteCodeBytes(s_nativeBase + s_rvaSlipGatePosJump, s_origPosGateJump.data(), s_origPosGateJump.size());
+        WriteCodeBytes(s_nativeBase + s_rvaSlipGateNegJump, s_origNegGateJump.data(), s_origNegGateJump.size());
         s_slipPatched = false;
         Logger::Info("SteerAssist: front-slip gate restored to vanilla.");
     }
@@ -235,8 +225,43 @@ static bool EnsureInitializedLocked() {
     s_nativeFound = true;
     s_nativeBase = reinterpret_cast<uintptr_t>(hNative);
 
-    if (!VerifyAllOriginalBytes(s_nativeBase)) {
-        Logger::Warn("SteerAssist: NativeCarX.dll bytes did not match expected offsets (game updated?). Patches disabled for safety.");
+    // Dynamically scan for patch sites in NativeCarX.dll with signature scans
+    uintptr_t vaCenter = PatternScanner::Find(hNative, "0F 28 C4 F3 0F 59 05 ? ? ? ? F3 41 0F 5D D0", "SteerAssist_CenterScaleMul");
+    if (vaCenter) s_rvaCenterScaleMul = vaCenter + 3 - s_nativeBase;
+
+    uintptr_t vaMode0 = PatternScanner::Find(hNative, "F3 0F 11 8B F8 00 00 00 76 40 44 0F 2F 15", "SteerAssist_Mode0SlipJump");
+    if (vaMode0) s_rvaMode0SlipJump = vaMode0 + 8 - s_nativeBase;
+
+    uintptr_t vaPosGate = PatternScanner::Find(hNative, "F3 0F 59 15 ? ? ? ? 76 1B F3 0F 10 05", "SteerAssist_SlipGatePosJump");
+    if (vaPosGate) s_rvaSlipGatePosJump = vaPosGate + 8 - s_nativeBase;
+
+    uintptr_t vaNegGate = PatternScanner::Find(hNative, "45 0F 2F D4 73 1B F3 0F 10 05", "SteerAssist_SlipGateNegJump");
+    if (vaNegGate) s_rvaSlipGateNegJump = vaNegGate + 4 - s_nativeBase;
+
+    uintptr_t vaSteerFlip = PatternScanner::Find(hNative, "0F 28 C8 0F 54 CA 0F 2F 0D ? ? ? ? 76 25", "SteerAssist_SteerFlipComiss");
+    if (vaSteerFlip) s_rvaSteerFlipComiss = vaSteerFlip + 6 - s_nativeBase;
+
+    uintptr_t vaUncondFlip = PatternScanner::Find(hNative, "B3 01 41 88 1F 0F 2F 0D ? ? ? ? 0F B6 DB", "SteerAssist_UncondFlipComiss");
+    if (vaUncondFlip) s_rvaUncondFlipComiss = vaUncondFlip + 5 - s_nativeBase;
+
+    // Cache original bytes dynamically
+    memcpy(s_origCenterScale.data(), reinterpret_cast<const void*>(s_nativeBase + s_rvaCenterScaleMul), s_origCenterScale.size());
+    memcpy(s_origMode0Jump.data(), reinterpret_cast<const void*>(s_nativeBase + s_rvaMode0SlipJump), s_origMode0Jump.size());
+    memcpy(s_origPosGateJump.data(), reinterpret_cast<const void*>(s_nativeBase + s_rvaSlipGatePosJump), s_origPosGateJump.size());
+    memcpy(s_origNegGateJump.data(), reinterpret_cast<const void*>(s_nativeBase + s_rvaSlipGateNegJump), s_origNegGateJump.size());
+    memcpy(s_origSteerFlip.data(), reinterpret_cast<const void*>(s_nativeBase + s_rvaSteerFlipComiss), s_origSteerFlip.size());
+    memcpy(s_origUncondFlip.data(), reinterpret_cast<const void*>(s_nativeBase + s_rvaUncondFlipComiss), s_origUncondFlip.size());
+
+    // Validate opcode signatures before writing any patches
+    bool bytesValid = (s_origCenterScale[0] == 0xF3 && s_origCenterScale[1] == 0x0F && s_origCenterScale[2] == 0x59) &&
+                      (s_origMode0Jump[0] == 0x76 || s_origMode0Jump[0] == 0xEB) &&
+                      (s_origPosGateJump[0] == 0x76 || s_origPosGateJump[0] == 0x90) &&
+                      (s_origNegGateJump[0] == 0x73 || s_origNegGateJump[0] == 0x90) &&
+                      (s_origSteerFlip[0] == 0x0F && s_origSteerFlip[1] == 0x2F) &&
+                      (s_origUncondFlip[0] == 0x0F && s_origUncondFlip[1] == 0x2F);
+
+    if (!bytesValid) {
+        Logger::Warn("SteerAssist: NativeCarX.dll opcodes could not be verified (game updated?). Patches disabled safely.");
         s_bytesVerified = false;
         s_initialized = true;
         return false;
@@ -273,15 +298,15 @@ void SteerAssist::Shutdown() {
         bool wasPatched = s_flipPatched || s_slipPatched;
         if (s_bytesVerified && s_nativeBase) {
             if (s_slipPatched) {
-                WriteCodeBytes(s_nativeBase + kRvaMode0SlipJump, kOrigMode0Jump.data(), kOrigMode0Jump.size());
-                WriteCodeBytes(s_nativeBase + kRvaSlipGatePosJump, kOrigPosGateJump.data(), kOrigPosGateJump.size());
-                WriteCodeBytes(s_nativeBase + kRvaSlipGateNegJump, kOrigNegGateJump.data(), kOrigNegGateJump.size());
+                WriteCodeBytes(s_nativeBase + s_rvaMode0SlipJump, s_origMode0Jump.data(), s_origMode0Jump.size());
+                WriteCodeBytes(s_nativeBase + s_rvaSlipGatePosJump, s_origPosGateJump.data(), s_origPosGateJump.size());
+                WriteCodeBytes(s_nativeBase + s_rvaSlipGateNegJump, s_origNegGateJump.data(), s_origNegGateJump.size());
                 s_slipPatched = false;
             }
             if (s_flipPatched) {
-                WriteCodeBytes(s_nativeBase + kRvaSteerFlipComiss, kOrigSteerFlip.data(), kOrigSteerFlip.size());
-                WriteCodeBytes(s_nativeBase + kRvaUncondFlipComiss, kOrigUncondFlip.data(), kOrigUncondFlip.size());
-                WriteCodeBytes(s_nativeBase + kRvaCenterScaleMul, kOrigCenterScale.data(), kOrigCenterScale.size());
+                WriteCodeBytes(s_nativeBase + s_rvaSteerFlipComiss, s_origSteerFlip.data(), s_origSteerFlip.size());
+                WriteCodeBytes(s_nativeBase + s_rvaUncondFlipComiss, s_origUncondFlip.data(), s_origUncondFlip.size());
+                WriteCodeBytes(s_nativeBase + s_rvaCenterScaleMul, s_origCenterScale.data(), s_origCenterScale.size());
                 s_flipPatched = false;
             }
         }

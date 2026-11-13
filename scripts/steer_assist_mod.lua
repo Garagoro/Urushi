@@ -9,6 +9,27 @@ local function is_recommended_preset(cfg)
         and math.abs((cfg.center_scale or 0.0) - 0.30) < 0.01
 end
 
+if config and steer_assist and steer_assist.set_config then
+    local saved = config.get("steer_assist", "config")
+    if type(saved) == "table" then
+        steer_assist.set_config(saved)
+    end
+end
+
+if config and config.register then
+    config.register({
+        id = "steer_assist",
+        on_save = function()
+            return { config = steer_assist and steer_assist.get_config and steer_assist.get_config() or nil }
+        end,
+        on_load = function(saved)
+            if type(saved) == "table" and type(saved.config) == "table" and steer_assist and steer_assist.set_config then
+                steer_assist.set_config(saved.config)
+            end
+        end,
+    })
+end
+
 local function render_steer_assist_window()
     if not steer_assist or not steer_assist.get_config then
         ui.card(T("Помощник руля", "Steering Assist"), nil, function()
@@ -55,12 +76,14 @@ local function render_steer_assist_window()
         if ui.button(T("155° Баквард##sa_p_rec", "155° Backwards##sa_p_rec"), bw, 28, is_rec and "primary" or "default") then
             steer_assist.set_recommended()
             cfg = steer_assist.get_config()
+            if config then config.set("steer_assist", "config", cfg) end
             dirty = false
         end
         ui.same_line(0, 6)
         if ui.button(T("Сток DR2##sa_p_van", "Stock DR2##sa_p_van"), bw, 28, is_van and "primary" or "default") then
             steer_assist.set_vanilla()
             cfg = steer_assist.get_config()
+            if config then config.set("steer_assist", "config", cfg) end
             dirty = false
         end
 
@@ -127,6 +150,7 @@ local function render_steer_assist_window()
 
         if dirty then
             steer_assist.set_config(cfg)
+            if config then config.set("steer_assist", "config", cfg) end
         end
     end)
 

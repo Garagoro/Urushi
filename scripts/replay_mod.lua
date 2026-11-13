@@ -31,6 +31,15 @@ local state = {
     },
 }
 
+if config then
+    local saved = config.get("anticollision", "ghost_cfg")
+    if type(saved) == "table" then
+        for k, v in pairs(saved) do
+            if state.ghost_cfg[k] ~= nil then state.ghost_cfg[k] = v end
+        end
+    end
+end
+
 local function sync_selective_ghost_cfg()
     if carx.set_selective_ghost_config then
         local synced = carx.set_selective_ghost_config(state.ghost_cfg)
@@ -38,8 +47,28 @@ local function sync_selective_ghost_cfg()
             state.ghost_cfg = synced
         end
     end
+    if config then
+        config.set("anticollision", "ghost_cfg", state.ghost_cfg)
+    end
 end
 sync_selective_ghost_cfg()
+
+if config and config.register then
+    config.register({
+        id = "anticollision",
+        on_save = function()
+            return { ghost_cfg = state.ghost_cfg }
+        end,
+        on_load = function(saved)
+            if type(saved) == "table" and type(saved.ghost_cfg) == "table" then
+                for k, v in pairs(saved.ghost_cfg) do
+                    state.ghost_cfg[k] = v
+                end
+                sync_selective_ghost_cfg()
+            end
+        end,
+    })
+end
 
 local function safe_get_cars()
     if carx.get_cars then

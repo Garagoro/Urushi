@@ -21,6 +21,36 @@ for _, id in ipairs({ "i18n", "config", "keybinds" }) do
 end
 
 -- ---------------------------------------------------------------------------------------------
+-- Window registration interceptor: automatically binds opts.settings or opts.config
+-- ---------------------------------------------------------------------------------------------
+if urushi and urushi.register_window then
+    local native_register_window = urushi.register_window
+    urushi.register_window = function(opts)
+        if type(opts) == "table" and opts.id then
+            local st = opts.settings or opts.config
+            if type(st) == "table" and config and config.bind_script_table then
+                config.bind_script_table(opts.id, st)
+            end
+        end
+        return native_register_window(opts)
+    end
+end
+
+-- Config event helpers
+if events then
+    events.on_config_save = function(fn)
+        if config and config.register then
+            config.register({ on_save = fn })
+        end
+    end
+    events.on_config_load = function(fn)
+        if config and config.register then
+            config.register({ on_load = fn })
+        end
+    end
+end
+
+-- ---------------------------------------------------------------------------------------------
 -- Isolated environment for untrusted scripts
 -- ---------------------------------------------------------------------------------------------
 local PRIVILEGED = {
@@ -32,6 +62,7 @@ local LUA_FUNCS = { "assert", "error", "ipairs", "pairs", "next", "pcall", "xpca
 local LUA_LIBS = { "string", "table", "math", "utf8", "coroutine", "os", "debug" }
 local API_MODULES = { "carx", "steer_assist", "carfx", "replay", "memory", "unity", "optimizer", "ui", "input", "imgui", "gui",
                       "events", "log", "i18n", "keybinds" }
+local SETTINGS_NAMES = { settings = true, SETTINGS = true, config_data = true, CONFIG = true, state = true, STATE = true }
 
 local function make_env(script_id, cloud_id)
     local env = {}
@@ -44,13 +75,37 @@ local function make_env(script_id, cloud_id)
     for k, v in pairs(urushi) do
         if not PRIVILEGED[k] then pub[k] = v end
     end
+    pub.register_window = function(opts)
+        if type(opts) == "table" then
+            opts.id = opts.id or script_id
+            local st = opts.settings or opts.config
+            if type(st) == "table" and config and config.bind_script_table then
+                config.bind_script_table(opts.id, st)
+            end
+        end
+        return urushi.register_window(opts)
+    end
     env.urushi = pub
     env._G = env
-    if config and config.for_script then env.config = config.for_script(script_id) end   -- own section "script:<id>"
+    env._script_id = script_id
+    if config and config.for_script then env.config = config.for_script(script_id) end   -- scoped config for script
     if cloud_id then
         -- multi-file cloud scripts: load a sibling file from the script's own folder
         env.include = function(rel) return cloud.include(cloud_id, rel, env) end
     end
+
+    -- Intercept top-level settings/config declaration in the script so saved values are restored instantly
+    setmetatable(env, {
+        __newindex = function(t, k, v)
+            if SETTINGS_NAMES[k] and type(v) == "table" and config and config.bind_script_table then
+                local proxy = config.bind_script_table(script_id, v)
+                rawset(t, k, proxy or v)
+                log.info("config: auto-bound '" .. tostring(k) .. "' (reactive) for script '" .. tostring(script_id) .. "'")
+                return
+            end
+            rawset(t, k, v)
+        end
+    })
 
     -- strings share one metatable for the whole VM: never hand it out
     env.getmetatable = function(x)
@@ -85,7 +140,6 @@ urushi_scripts = { list = {}, dirty = false, cloud_loaded = {} }
 
 local BUILTIN = {
     { id = "telemetry_hud",    ru = "Телеметрия (HUD)",          en = "Telemetry HUD" },
-    { id = "ghost_test",       ru = "Призрак и 3D-болванка",     en = "Ghost & 3D Dummy" },
     { id = "teleport_mod",     ru = "Телепорт по точкам",        en = "Checkpoint Teleport" },
     { id = "replay_mod",       ru = "Реплеи",                    en = "Replays" },
     { id = "carfx_mod",        ru = "CarFX шейдеры",             en = "CarFX Shaders" },
@@ -110,19 +164,36 @@ local function load_entry(e)
         return
     end
     if e.shader_only then e.status = "ok"; return end        -- shader pack: files are in shaders/cloud/<id>/, nothing to run
-    local ok, err
+    local ok, res_or_err
     if e.cloud then
-        ok, err = cloud.load(e.cloud_id, make_env(e.id, e.cloud_id))
+        local env = make_env(e.id, e.cloud_id)
+        e.env = env
+        ok, res_or_err = cloud.load(e.cloud_id, env)
+        if ok and config and config.bind_script_env then
+            config.bind_script_env(e.id, env)
+        end
     elseif e.user then
-        ok, err = urushi.load_script(e.id, make_env(e.id))
+        local env = make_env(e.id)
+        e.env = env
+        ok, res_or_err = urushi.load_script(e.id, env)
+        if ok and config and config.bind_script_env then
+            config.bind_script_env(e.id, env)
+        end
     else
-        ok, err = urushi.load_script(e.id)           -- trusted built-in
+        ok, res_or_err = urushi.load_script(e.id)           -- trusted built-in
     end
+
     if ok then
         e.status = "ok"
+        if type(res_or_err) == "table" and config and config.bind_script_table then
+            local st = res_or_err.settings or res_or_err.config
+            if type(st) == "table" then
+                config.bind_script_table(e.id, st)
+            end
+        end
     else
         e.status = "error"
-        e.err = tostring(err)
+        e.err = tostring(res_or_err)
         log.error("Script '" .. e.id .. "' failed to load: " .. e.err)
     end
 end

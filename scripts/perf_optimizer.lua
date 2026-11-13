@@ -2,6 +2,27 @@
 local T = i18n.t
 local VK_F5 = 0x74
 
+if config and optimizer and optimizer.set_config then
+    local saved = config.get("optimizer", "config")
+    if type(saved) == "table" then
+        optimizer.set_config(saved)
+    end
+end
+
+if config and config.register then
+    config.register({
+        id = "optimizer",
+        on_save = function()
+            return { config = optimizer and optimizer.get_config and optimizer.get_config() or nil }
+        end,
+        on_load = function(saved)
+            if type(saved) == "table" and type(saved.config) == "table" and optimizer and optimizer.set_config then
+                optimizer.set_config(saved.config)
+            end
+        end,
+    })
+end
+
 local function apply_preset(preset_name)
     if not optimizer or not optimizer.set_config then return end
     if preset_name == "vanilla" then
@@ -52,6 +73,9 @@ local function apply_preset(preset_name)
             use_traffic_mode = false,
             remote_integration_steps = 1,
         })
+    end
+    if config and optimizer and optimizer.get_config then
+        config.set("optimizer", "config", optimizer.get_config())
     end
 end
 
@@ -136,6 +160,7 @@ local function render_optimizer_window()
 
         if dirty then
             optimizer.set_config(cfg)
+            if config then config.set("optimizer", "config", cfg) end
         end
     end)
 

@@ -843,10 +843,11 @@ int Lua_UrushiLoadScript(lua_State* L) {
     const std::string path = Logger::ToNarrow(LuaEngine::GetScriptsDirectory()) + "\\" + name + ".lua";
     // optional 2nd argument: environment table (isolated globals for untrusted scripts)
     int st = LuaSandbox::LoadFileText(L, path.c_str(), lua_istable(L, 2) ? 2 : 0);
-    if (st == LUA_OK) st = LuaSandbox::PCall(L, 0, 0, "load_script", 8000);
+    if (st == LUA_OK) st = LuaSandbox::PCall(L, 0, 1, "load_script", 8000);
     if (st == LUA_OK) {
         lua_pushboolean(L, 1);
-        return 1;
+        lua_insert(L, -2);
+        return 2;
     }
     lua_pushboolean(L, 0);
     lua_insert(L, -2);

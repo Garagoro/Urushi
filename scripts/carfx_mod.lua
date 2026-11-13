@@ -13,12 +13,36 @@ local state = {
 
 local function refresh_shader_list()
     if carfx and carfx.list_shaders then
-        state.shaders = carfx.list_shaders() or {}
-        if state.selected_idx > #state.shaders then
-            state.selected_idx = 1
+        local new_list = carfx.list_shaders() or {}
+        local changed = (#new_list ~= #state.shaders)
+        if not changed then
+            for i = 1, #new_list do
+                if new_list[i] ~= state.shaders[i] then changed = true; break end
+            end
         end
-        if state.custom_path == "" and state.shaders[state.selected_idx] then
-            state.custom_path = state.shaders[state.selected_idx]
+        if changed then
+            local current_name = state.shaders[state.selected_idx] or state.custom_path
+            state.shaders = new_list
+            if current_name and current_name ~= "" then
+                local found = false
+                for i, name in ipairs(state.shaders) do
+                    if name == current_name then
+                        state.selected_idx = i
+                        found = true
+                        break
+                    end
+                end
+                if not found and state.selected_idx > #state.shaders then
+                    state.selected_idx = 1
+                end
+            else
+                if state.selected_idx > #state.shaders then
+                    state.selected_idx = 1
+                end
+            end
+            if state.shaders[state.selected_idx] then
+                state.custom_path = state.shaders[state.selected_idx]
+            end
         end
     end
 end
@@ -33,9 +57,82 @@ local PARTS = {
     { "wheels",     "Колёса",     "Wheels" },
     { "interior",   "Салон и прочее", "Interior & other" },
 }
-if carfx and carfx.set_parts and config then
-    local saved = config.get("carfx", "parts")
-    if type(saved) == "table" then carfx.set_parts(saved) end
+
+local pending_restore = true
+local function try_restore_carfx()
+    if not pending_restore or not carfx or not carfx.get_status then return end
+    local st = carfx.get_status(0)
+    if not st or not st.initialized then return end
+    pending_restore = false
+
+    refresh_shader_list()
+
+    if config then
+        local saved_en = config.get("carfx", "enabled")
+        if saved_en ~= nil and carfx.set_enabled then
+            carfx.set_enabled(saved_en)
+        end
+        local saved_mode = config.get("carfx", "mode")
+        if saved_mode ~= nil and carfx.set_mode then
+            carfx.set_mode(saved_mode, 0)
+        end
+        local saved_stealth = config.get("carfx", "stealth")
+        if saved_stealth ~= nil and carfx.set_stealth then
+            carfx.set_stealth(saved_stealth, 0)
+        end
+        local saved_parts = config.get("carfx", "parts")
+        if type(saved_parts) == "table" and carfx.set_parts then
+            carfx.set_parts(saved_parts)
+        end
+        local saved_shader = config.get("carfx", "selected_shader")
+        if saved_shader and saved_shader ~= "" then
+            state.custom_path = saved_shader
+            for i, s in ipairs(state.shaders) do
+                if s == saved_shader then
+                    state.selected_idx = i
+                    break
+                end
+            end
+            local ok, err = carfx.load(saved_shader, 0)
+            if not ok then
+                log.warn("CarFX failed to auto-load saved shader " .. tostring(saved_shader) .. ": " .. tostring(err))
+            end
+        end
+        local saved_int = config.get("carfx", "internals_shader")
+        if saved_int and saved_int ~= "" and carfx.load then
+            carfx.load(saved_int, 1)
+        end
+        local saved_tex = config.get("carfx", "tex_paths")
+        if type(saved_tex) == "table" and carfx.set_tex then
+            for i = 0, 3 do
+                local p = saved_tex[i] or saved_tex[tostring(i)]
+                if p and p ~= "" then
+                    state.tex_paths[i] = p
+                    carfx.set_tex(i, p, 0)
+                end
+            end
+        end
+    end
+end
+
+if config and config.register then
+    config.register({
+        id = "carfx",
+        on_save = function()
+            local st = carfx.get_status and carfx.get_status(0)
+            local ist = carfx.get_status and carfx.get_status(1)
+            local iname = (ist and ist.compiled and ist.shader_path) and (ist.shader_path:match("([^\\/]+)$") or "") or ""
+            return {
+                enabled = st and (st.enabled == true) or true,
+                mode = st and (st.active_mode or 0) or 1,
+                stealth = st and (st.stealth_active == true) or false,
+                parts = carfx.get_parts and carfx.get_parts() or nil,
+                selected_shader = state.custom_path,
+                internals_shader = iname,
+                tex_paths = state.tex_paths,
+            }
+        end,
+    })
 end
 
 events.on_key(function(vk, is_down)
@@ -47,7 +144,16 @@ events.on_key(function(vk, is_down)
     end
 end)
 
+local refresh_timer = 0
 events.on_update(function(dt)
+    if pending_restore then
+        try_restore_carfx()
+    end
+    refresh_timer = refresh_timer + (dt or 0.016)
+    if refresh_timer >= 2.0 then
+        refresh_timer = 0
+        refresh_shader_list()
+    end
     if keybinds and keybinds.is_pressed and keybinds.is_pressed("carfx_menu") then
         if urushi and urushi.toggle_window then
             urushi.toggle_window("carfx")
@@ -114,10 +220,12 @@ local function render_carfx_window()
             if ch then
                 if idx == 1 then
                     carfx.unload(1)
+                    if config then config.set("carfx", "internals_shader", "") end
                 else
                     local ok, err = carfx.load(names[idx], 1)
                     state.status_msg = ok and "" or tostring(err)
                     state.status_tone = ok and "muted" or "red"
+                    if ok and config then config.set("carfx", "internals_shader", names[idx]) end
                 end
             end
         end
@@ -139,6 +247,7 @@ local function render_carfx_window()
         local en_ch, new_en = ui.toggle(T("Включить CarFX##cfx_en", "Enable CarFX##cfx_en"), st.enabled == true)
         if en_ch then
             carfx.set_enabled(new_en)
+            if config then config.set("carfx", "enabled", new_en) end
         end
 
         ui.spacing(4)
@@ -184,6 +293,7 @@ local function render_carfx_window()
                     local ok, err = carfx.load(picked, 0)
                     state.status_msg = ok and "" or tostring(err)
                     state.status_tone = ok and "muted" or "red"
+                    if ok and config then config.set("carfx", "selected_shader", picked) end
                 end
             end
         end
@@ -195,6 +305,7 @@ local function render_carfx_window()
                 local ok, err = carfx.load(state.custom_path, 0)
                 state.status_msg = ok and "" or tostring(err)
                 state.status_tone = ok and "muted" or "red"
+                if ok and config then config.set("carfx", "selected_shader", state.custom_path) end
             end
         end
         ui.same_line(0, 6)
@@ -207,6 +318,7 @@ local function render_carfx_window()
         if ui.button(T("Снять##cfx_unl", "Clear##cfx_unl"), bw3, 28, "danger") then
             carfx.unload(0)
             state.status_msg = ""
+            if config then config.set("carfx", "selected_shader", "") end
         end
 
         ui.spacing(6)
@@ -215,6 +327,7 @@ local function render_carfx_window()
         local m_ch, new_m = ui.segmented("cfx_mode", cur_m, { T("Авто", "Auto"), "Replace", "Overlay" })
         if m_ch then
             carfx.set_mode(new_m - 1, 0)
+            if config then config.set("carfx", "mode", new_m - 1) end
         end
 
         if carfx.set_stealth then
@@ -224,6 +337,7 @@ local function render_carfx_window()
             local s_ch, new_s = ui.segmented("cfx_stealth", cur_s, T({ "Авто", "Стекло", "Невидимка" }, { "Auto", "Glass", "Stealth" }))
             if s_ch then
                 carfx.set_stealth(new_s - 1, 0)
+                if config then config.set("carfx", "stealth", new_s - 1) end
             end
         end
 
@@ -311,11 +425,15 @@ local function render_carfx_window()
                     if not ok then
                         state.status_msg = tostring(err)
                         state.status_tone = "red"
+                    elseif config then
+                        config.set("carfx", "tex_paths", state.tex_paths)
                     end
                 end
                 ui.same_line(0, 8)
                 if ui.button(T("Очистить##cfx_tx_c_", "Clear##cfx_tx_c_") .. slot, bw, 26, "ghost") then
                     carfx.clear_tex(slot)
+                    state.tex_paths[slot] = ""
+                    if config then config.set("carfx", "tex_paths", state.tex_paths) end
                 end
                 if idx < #st.textures then ui.spacing(4) end
             end

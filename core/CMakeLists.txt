@@ -22,6 +22,7 @@ add_library(urushi SHARED
     ptr_registry.h
     input_manager.h input_manager.cpp
     hook_manager.h hook_manager.cpp
+    pattern_scanner.h pattern_scanner.cpp
     native_carx.h native_carx.cpp
     steer_assist.h steer_assist.cpp
     unity_bridge.h unity_bridge.cpp

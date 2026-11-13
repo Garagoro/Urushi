@@ -111,6 +111,7 @@ void LuaEngine::Shutdown() {
     UrushiUI::ClearLuaRefs(s_L);
 
     if (s_L) {
+        luaL_dostring(s_L, "if config and config.save then config.save() end");
         lua_close(s_L);
         s_L = nullptr;
     }
