@@ -23,7 +23,7 @@
 
 local FILE = "urushi_data/config.json"
 local BACKUP = "urushi_data/config.bak.json"
-local SAVE_DELAY = 0.5          -- seconds after the last change to flush to disk
+local SAVE_DELAY = 0.25         -- seconds after the last change to flush to disk
 
 local config = {}
 local data = { version = 1 }
@@ -422,27 +422,6 @@ function config.sync()
             end
         end
     end
-
-    -- Automatic introspection of all live C++ UI elements across all scripts & windows
-    if urushi and urushi.get_ui_elements then
-        local ok, ui_elems = pcall(urushi.get_ui_elements)
-        if ok and type(ui_elems) == "table" then
-            for win_id, elems in pairs(ui_elems) do
-                local sec = resolve_section(win_id)
-                if type(elems) == "table" then
-                    for elem_id, el in pairs(elems) do
-                        if type(el) == "table" and el.value ~= nil then
-                            if type(data[sec]) ~= "table" then data[sec] = {} end
-                            if el.changed or data[sec][elem_id] ~= el.value then
-                                data[sec][elem_id] = deep_copy(el.value)
-                                config.mark_dirty()
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
 end
 
 function config.get_all()
@@ -506,7 +485,12 @@ function config.bind(arg1, arg2)
 
     -- Automatic migration of legacy nested configurations:
     if type(saved) == "table" then
-        if section == "optimizer" and type(saved.config) == "table" then
+        if section == "tires" and type(saved.tyre_config) == "table" then
+            for k, v in pairs(saved.tyre_config) do
+                if saved[k] == nil then saved[k] = v end
+            end
+            saved.tyre_config = nil
+        elseif section == "optimizer" and type(saved.config) == "table" then
             for k, v in pairs(saved.config) do saved[k] = v end
             saved.config = nil
         elseif section == "steer_assist" and type(saved.config) == "table" then
@@ -519,9 +503,16 @@ function config.bind(arg1, arg2)
 
         -- Merge saved values into store in-place so defaults for any missing keys are preserved
         for k, v in pairs(saved) do
-            store[k] = deep_copy(v)
+            if k ~= "tyre_config" and k ~= "config" and k ~= "ghost_cfg" then
+                store[k] = deep_copy(v)
+            end
         end
     end
+
+    -- Clean up legacy sub-tables from store
+    store.tyre_config = nil
+    store.config = nil
+    store.ghost_cfg = nil
 
     -- Update authoritative data section
     data[section] = deep_copy(store)
