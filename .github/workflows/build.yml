@@ -53,7 +53,7 @@ jobs:
           $linkTime = [BitConverter]::ToUInt32($bytes, $peOff + 8)
 
           $ver = "0.3.1"
-          $notes = "Automated release build v$ver: dynamic sigscans, Unity Transform cluster fixes, reactive config & live auto-updater"
+          $notes = "Automated release build v${ver}: dynamic sigscans, Unity Transform cluster fixes, reactive config and live auto-updater"
           $manifest = @(
               "version=$ver"
               "link_time=$linkTime"
