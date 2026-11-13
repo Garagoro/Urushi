@@ -1,3 +1,3 @@
-version=0.3.0
-link_time=1794503511
-notes=Safe mode, crash reports, Lua sandbox and hardening, script manager, cloud script library, JSON config, input fixes
+version=0.3.1
+link_time=1794533760
+notes=Automated release build v0.3.1: dynamic sigscans, Unity Transform cluster fixes, reactive config and live auto-updater
