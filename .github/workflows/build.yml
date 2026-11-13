@@ -38,14 +38,17 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force dist | Out-Null
+          $root = $PWD.Path
+          $distDir = Join-Path $root "dist"
+          New-Item -ItemType Directory -Force $distDir | Out-Null
 
-          Copy-Item build/core/Release/urushi.dll dist/urushi.dll -Force
-          Copy-Item build/core/Release/urushi.dll dist/CarX2ScriptHook.dll -Force
-          Copy-Item build/proxy/Release/version.dll dist/version.dll -Force
+          Copy-Item (Join-Path $root "build\core\Release\urushi.dll") (Join-Path $distDir "urushi.dll") -Force
+          Copy-Item (Join-Path $root "build\core\Release\urushi.dll") (Join-Path $distDir "CarX2ScriptHook.dll") -Force
+          Copy-Item (Join-Path $root "build\proxy\Release\version.dll") (Join-Path $distDir "version.dll") -Force
 
           # Calculate PE timestamp for updater version comparison
-          $bytes = [System.IO.File]::ReadAllBytes("dist/urushi.dll")
+          $dllPath = Join-Path $distDir "urushi.dll"
+          $bytes = [System.IO.File]::ReadAllBytes($dllPath)
           $peOff = [BitConverter]::ToInt32($bytes, 60)
           $linkTime = [BitConverter]::ToUInt32($bytes, $peOff + 8)
 
@@ -57,8 +60,9 @@ jobs:
               "notes=$notes"
           ) -join "`n"
 
+          $manifestPath = Join-Path $distDir "version.txt"
           $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-          [System.IO.File]::WriteAllText("dist/version.txt", "$manifest`n", $utf8NoBom)
+          [System.IO.File]::WriteAllText($manifestPath, "$manifest`n", $utf8NoBom)
 
           Write-Host "Staged dist/: link_time=$linkTime, version=$ver"
 
@@ -66,19 +70,25 @@ jobs:
         shell: pwsh
         run: |
           $ver = "0.3.1"
-          $pkgDir = "Urushi-v$ver"
+          $root = $PWD.Path
+          $distDir = Join-Path $root "dist"
+          $pkgDir = Join-Path $root "Urushi-v$ver"
           New-Item -ItemType Directory -Force $pkgDir | Out-Null
-          Copy-Item dist/version.dll $pkgDir/ -Force
-          Copy-Item dist/urushi.dll $pkgDir/ -Force
-          Copy-Item dist/CarX2ScriptHook.dll $pkgDir/ -Force
-          Copy-Item -Path scripts -Destination $pkgDir/ -Recurse -Force
-          Copy-Item -Path shaders -Destination $pkgDir/ -Recurse -Force
-          Copy-Item dist/version.txt $pkgDir/ -Force
-          Copy-Item README.md $pkgDir/ -Force
-          Copy-Item LICENSE $pkgDir/ -Force
 
-          Compress-Archive -Path "$pkgDir/*" -DestinationPath "Urushi-v$ver.zip" -Force
-          Copy-Item "Urushi-v$ver.zip" "Urushi-latest.zip" -Force
+          Copy-Item (Join-Path $distDir "version.dll") $pkgDir -Force
+          Copy-Item (Join-Path $distDir "urushi.dll") $pkgDir -Force
+          Copy-Item (Join-Path $distDir "CarX2ScriptHook.dll") $pkgDir -Force
+          Copy-Item -Path (Join-Path $root "scripts") -Destination $pkgDir -Recurse -Force
+          Copy-Item -Path (Join-Path $root "shaders") -Destination $pkgDir -Recurse -Force
+          Copy-Item (Join-Path $distDir "version.txt") $pkgDir -Force
+          Copy-Item (Join-Path $root "README.md") $pkgDir -Force
+          Copy-Item (Join-Path $root "LICENSE") $pkgDir -Force
+
+          $zipVer = Join-Path $root "Urushi-v$ver.zip"
+          $zipLatest = Join-Path $root "Urushi-latest.zip"
+          Compress-Archive -Path "$pkgDir/*" -DestinationPath $zipVer -Force
+          Copy-Item $zipVer $zipLatest -Force
+          Write-Host "Packaged $zipVer and $zipLatest successfully"
 
       - name: Upload Build Artifacts
         if: always()
