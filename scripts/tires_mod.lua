@@ -6,19 +6,75 @@ local active_tab = "body_wear" -- "body_wear", "thermal", "telemetry"
 
 local tire_settings = {
     no_damage = true,
-    tyre_config = (carx and carx.get_tyre_config and carx.get_tyre_config()) or {},
+    infinite_wear = true,
+    desired_life = 1.0,
+    wear_multiplier = 1.0,
+    override_pressure = false,
+    front_pressure = 150.0,
+    rear_pressure = 105.0,
+    lock_temp = false,
+    target_temp = 80.0,
+    override_grip = false,
+    front_grip = 1.15,
+    rear_grip = 0.95,
 }
+
 if config and config.bind then
     tire_settings = config.bind("tires", tire_settings)
+    -- Migration from legacy tyre_config table if present in user's saved config
+    if tire_settings.tyre_config and type(tire_settings.tyre_config) == "table" then
+        local tc = tire_settings.tyre_config
+        if tc.infinite_wear ~= nil and tire_settings.infinite_wear == nil then
+            tire_settings.infinite_wear = tc.infinite_wear
+        end
+        if tc.desired_life ~= nil then tire_settings.desired_life = tc.desired_life end
+        if tc.wear_multiplier ~= nil then tire_settings.wear_multiplier = tc.wear_multiplier end
+        if tc.override_pressure ~= nil then tire_settings.override_pressure = tc.override_pressure end
+        if tc.front_pressure ~= nil then tire_settings.front_pressure = tc.front_pressure end
+        if tc.rear_pressure ~= nil then tire_settings.rear_pressure = tc.rear_pressure end
+        if tc.lock_temp ~= nil then tire_settings.lock_temp = tc.lock_temp end
+        if tc.target_temp ~= nil then tire_settings.target_temp = tc.target_temp end
+    end
 end
 
-if carx then
+local function apply_tires()
+    if not carx then return end
     if tire_settings.no_damage ~= nil and carx.set_no_damage then
         carx.set_no_damage(tire_settings.no_damage)
     end
-    if type(tire_settings.tyre_config) == "table" and carx.set_tyre_config then
-        carx.set_tyre_config(tire_settings.tyre_config)
+    if tire_settings.infinite_wear ~= nil and carx.set_no_tire_wear then
+        carx.set_no_tire_wear(tire_settings.infinite_wear)
     end
+    if carx.set_tyre_config then
+        carx.set_tyre_config({
+            infinite_wear = tire_settings.infinite_wear == true,
+            desired_life = tire_settings.desired_life or 1.0,
+            wear_multiplier = tire_settings.wear_multiplier or 1.0,
+            override_pressure = tire_settings.override_pressure == true,
+            front_pressure = tire_settings.front_pressure or 150.0,
+            rear_pressure = tire_settings.rear_pressure or 105.0,
+            lock_temp = tire_settings.lock_temp == true,
+            target_temp = tire_settings.target_temp or 80.0,
+            override_grip = tire_settings.override_grip == true,
+            front_grip = tire_settings.front_grip or 1.15,
+            rear_grip = tire_settings.rear_grip or 0.95,
+        })
+    end
+end
+
+-- Apply on load
+apply_tires()
+
+-- Continuous background sync: ensures infinite tire wear and damage protection
+-- stay active even when switching tracks, garages, or cars in-game.
+if events and events.on_update then
+    local frame_count = 0
+    events.on_update(function()
+        frame_count = frame_count + 1
+        if frame_count % 30 == 0 then
+            apply_tires()
+        end
+    end)
 end
 
 local function render_tires_window()
@@ -31,7 +87,6 @@ local function render_tires_window()
 
     local cfg = carx.get_tyre_config()
     local live = carx.get_tyre_live()
-    local dirty = false
 
     -- Top Tab Switcher
     local tab_w = (ui.avail_width() - 8) / 3.0
@@ -52,11 +107,11 @@ local function render_tires_window()
     -- TAB 1: BODY PROTECTION & TIRE WEAR
     if active_tab == "body_wear" then
         ui.card(T("Защита кузова (Деформация)", "Body Protection (Deformation)"), nil, function()
-            local no_dam = (carx and carx.get_no_damage and carx.get_no_damage() == true)
+            local no_dam = tire_settings.no_damage == true
             local ch_dam, val_dam = ui.toggle(T("Без повреждений (кузов, бампера, подвеска)##t_no_dam", "No Damage (Body, Bumpers & Suspension)##t_no_dam"), no_dam)
             if ch_dam then
-                if carx and carx.set_no_damage then carx.set_no_damage(val_dam) end
                 tire_settings.no_damage = val_dam
+                apply_tires()
                 if config then config.mark_dirty() end
             end
 
@@ -73,78 +128,93 @@ local function render_tires_window()
         end)
 
         ui.card(T("Режим износа шин", "Tire Wear Mode"), nil, function()
-            local ch_inf, val_inf = ui.toggle(T("Бесконечные шины (заморозка износа)##tire_inf", "Infinite Tires (Freeze Wear)##tire_inf"), cfg.infinite_wear == true)
+            local ch_inf, val_inf = ui.toggle(T("Бесконечные шины (заморозка износа)##tire_inf", "Infinite Tires (Freeze Wear)##tire_inf"), tire_settings.infinite_wear == true)
             if ch_inf then
-                cfg.infinite_wear = val_inf
-                dirty = true
+                tire_settings.infinite_wear = val_inf
+                apply_tires()
+                if config then config.mark_dirty() end
             end
 
-            local life_pct = math.floor((cfg.desired_life or 1.0) * 100.0 + 0.5)
+            local life_pct = math.floor((tire_settings.desired_life or 1.0) * 100.0 + 0.5)
             local ch_life, val_life = ui.slider_int(T("Остаток протектора##tire_life", "Tread Life##tire_life"), life_pct, 0, 100, "%d %%")
             if ch_life then
-                cfg.desired_life = val_life / 100.0
-                dirty = true
+                tire_settings.desired_life = val_life / 100.0
+                apply_tires()
+                if config then config.mark_dirty() end
             end
 
-            if not cfg.infinite_wear then
-                local ch_wm, val_wm = ui.slider_float(T("Скорость износа##tire_wm", "Wear Rate Multiplier##tire_wm"), cfg.wear_multiplier or 1.0, 0.0, 3.0, "%.2fx")
+            if not tire_settings.infinite_wear then
+                local ch_wm, val_wm = ui.slider_float(T("Скорость износа##tire_wm", "Wear Rate Multiplier##tire_wm"), tire_settings.wear_multiplier or 1.0, 0.0, 3.0, "%.2fx")
                 if ch_wm then
-                    cfg.wear_multiplier = val_wm
-                    dirty = true
+                    tire_settings.wear_multiplier = val_wm
+                    apply_tires()
+                    if config then config.mark_dirty() end
                 end
             end
 
             ui.spacing(4)
             local bw = (ui.avail_width() - 6) * 0.5
             if ui.button(T("100% Свежая резина (80°C)##tire_b_fresh", "100% Fresh Tires (80°C)##tire_b_fresh"), bw, 28, "primary") then
-                cfg.desired_life = 1.0
-                cfg.lock_temp = true
-                cfg.target_temp = 80.0
+                tire_settings.desired_life = 1.0
+                tire_settings.lock_temp = true
+                tire_settings.target_temp = 80.0
+                apply_tires()
                 if carx.reset_tire_wear then carx.reset_tire_wear() end
-                dirty = true
+                if config then config.mark_dirty() end
             end
             ui.same_line(0, 6)
             if ui.button(T("Стертая (0% слики)##tire_b_bald", "Bald Tires (0%)##tire_b_bald"), bw, 28, "ghost") then
-                cfg.desired_life = 0.0
-                dirty = true
+                tire_settings.desired_life = 0.0
+                apply_tires()
+                if config then config.mark_dirty() end
             end
 
             ui.spacing(4)
             if ui.button(T("Сбросить все настройки в стандарт машины (гараж)##tire_btn_reset_all", "Reset All to Car Setup (Garage)##tire_btn_reset_all"), ui.avail_width(), 28, "danger") then
+                tire_settings.infinite_wear = false
+                tire_settings.desired_life = 1.0
+                tire_settings.wear_multiplier = 1.0
+                tire_settings.override_pressure = false
+                tire_settings.lock_temp = false
+                tire_settings.target_temp = 80.0
                 if carx.reset_tyre_defaults then carx.reset_tyre_defaults() end
-                if config then config.set("tires", "tyre_config", nil) end
-                dirty = false
+                apply_tires()
+                if config then config.mark_dirty() end
             end
         end)
 
     -- TAB 2: THERMAL & PRESSURE
     elseif active_tab == "thermal" then
         ui.card(T("Температура шин (°C)", "Tire Temperature (°C)"), nil, function()
-            local ch_lt, val_lt = ui.toggle(T("Зафиксировать температуру##tire_lt", "Lock Operating Temperature##tire_lt"), cfg.lock_temp == true)
+            local ch_lt, val_lt = ui.toggle(T("Зафиксировать температуру##tire_lt", "Lock Operating Temperature##tire_lt"), tire_settings.lock_temp == true)
             if ch_lt then
-                cfg.lock_temp = val_lt
-                dirty = true
+                tire_settings.lock_temp = val_lt
+                apply_tires()
+                if config then config.mark_dirty() end
             end
 
-            local ch_tt, val_tt = ui.slider_float(T("Целевая температура##tire_tt", "Target Temp##tire_tt"), cfg.target_temp or 80.0, 20.0, 130.0, "%.0f °C")
+            local ch_tt, val_tt = ui.slider_float(T("Целевая температура##tire_tt", "Target Temp##tire_tt"), tire_settings.target_temp or 80.0, 20.0, 130.0, "%.0f °C")
             if ch_tt then
-                cfg.target_temp = val_tt
-                cfg.lock_temp = true
-                dirty = true
+                tire_settings.target_temp = val_tt
+                tire_settings.lock_temp = true
+                apply_tires()
+                if config then config.mark_dirty() end
             end
 
             ui.spacing(4)
             local bw = (ui.avail_width() - 6) * 0.5
             if ui.button(T("Прогрев 80°C (Дрифт)##tire_warm", "Warm Up 80°C (Drift)##tire_warm"), bw, 26, "primary") then
-                cfg.target_temp = 80.0
-                cfg.lock_temp = true
-                dirty = true
+                tire_settings.target_temp = 80.0
+                tire_settings.lock_temp = true
+                apply_tires()
+                if config then config.mark_dirty() end
             end
             ui.same_line(0, 6)
             if ui.button(T("Холодные 25°C##tire_cold", "Cold 25°C##tire_cold"), bw, 26, "ghost") then
-                cfg.target_temp = 25.0
-                cfg.lock_temp = true
-                dirty = true
+                tire_settings.target_temp = 25.0
+                tire_settings.lock_temp = true
+                apply_tires()
+                if config then config.mark_dirty() end
             end
 
             ui.spacing(4)
@@ -153,51 +223,56 @@ local function render_tires_window()
         end)
 
         ui.card(T("Давление в шинах", "Tire Pressure"), nil, function()
-            local base_fp = cfg.baseline_front_pressure or 145.0
-            local base_rp = cfg.baseline_rear_pressure or 95.0
+            local base_fp = (cfg and cfg.baseline_front_pressure) or 145.0
+            local base_rp = (cfg and cfg.baseline_rear_pressure) or 95.0
 
             ui.text_dim(string.format(T("Тюнинг из гаража: перед %.0f kPa (%.2f bar) · зад %.0f kPa (%.2f bar)",
                                         "Garage setup: front %.0f kPa (%.2f bar) · rear %.0f kPa (%.2f bar)"),
                                       base_fp, base_fp * 0.01, base_rp, base_rp * 0.01))
 
-            local ch_op, val_op = ui.toggle(T("Кастомное давление##tire_op", "Override Tire Pressure##tire_op"), cfg.override_pressure == true)
+            local ch_op, val_op = ui.toggle(T("Кастомное давление##tire_op", "Override Tire Pressure##tire_op"), tire_settings.override_pressure == true)
             if ch_op then
-                cfg.override_pressure = val_op
+                tire_settings.override_pressure = val_op
                 if not val_op then
-                    cfg.front_pressure = base_fp
-                    cfg.rear_pressure = base_rp
+                    tire_settings.front_pressure = base_fp
+                    tire_settings.rear_pressure = base_rp
                 end
-                dirty = true
+                apply_tires()
+                if config then config.mark_dirty() end
             end
 
-            local ch_fp, val_fp = ui.slider_float(T("Переднее давление##tire_fp", "Front Pressure##tire_fp"), cfg.front_pressure or base_fp, 50.0, 250.0, "%.0f kPa")
+            local ch_fp, val_fp = ui.slider_float(T("Переднее давление##tire_fp", "Front Pressure##tire_fp"), tire_settings.front_pressure or base_fp, 50.0, 250.0, "%.0f kPa")
             if ch_fp then
-                cfg.front_pressure = val_fp
-                cfg.override_pressure = true
-                dirty = true
+                tire_settings.front_pressure = val_fp
+                tire_settings.override_pressure = true
+                apply_tires()
+                if config then config.mark_dirty() end
             end
 
-            local ch_rp, val_rp = ui.slider_float(T("Заднее давление##tire_rp", "Rear Pressure##tire_rp"), cfg.rear_pressure or base_rp, 50.0, 250.0, "%.0f kPa")
+            local ch_rp, val_rp = ui.slider_float(T("Заднее давление##tire_rp", "Rear Pressure##tire_rp"), tire_settings.rear_pressure or base_rp, 50.0, 250.0, "%.0f kPa")
             if ch_rp then
-                cfg.rear_pressure = val_rp
-                cfg.override_pressure = true
-                dirty = true
+                tire_settings.rear_pressure = val_rp
+                tire_settings.override_pressure = true
+                apply_tires()
+                if config then config.mark_dirty() end
             end
 
             ui.spacing(4)
             local bw = (ui.avail_width() - 6) * 0.5
             if ui.button(T("Вернуть тюнинг авто##tire_p_stk", "Restore Car Setup##tire_p_stk"), bw, 26, "ghost") then
-                cfg.front_pressure = base_fp
-                cfg.rear_pressure = base_rp
-                cfg.override_pressure = false
-                dirty = true
+                tire_settings.front_pressure = base_fp
+                tire_settings.rear_pressure = base_rp
+                tire_settings.override_pressure = false
+                apply_tires()
+                if config then config.mark_dirty() end
             end
             ui.same_line(0, 6)
             if ui.button(T("Высокое (200/180)##tire_p_hi", "High Press (200/180)##tire_p_hi"), bw, 26, "ghost") then
-                cfg.front_pressure = 200.0
-                cfg.rear_pressure = 180.0
-                cfg.override_pressure = true
-                dirty = true
+                tire_settings.front_pressure = 200.0
+                tire_settings.rear_pressure = 180.0
+                tire_settings.override_pressure = true
+                apply_tires()
+                if config then config.mark_dirty() end
             end
         end)
 
@@ -247,12 +322,6 @@ local function render_tires_window()
             end)
         end
     end
-
-    if dirty then
-        carx.set_tyre_config(cfg)
-        tire_settings.tyre_config = cfg
-        if config then config.mark_dirty() end
-    end
 end
 
 if urushi and urushi.register_window then
@@ -273,7 +342,8 @@ end
 
 _G.tires_mod = {
     set_tab = function(t) active_tab = t end,
-    get_tab = function() return active_tab end
+    get_tab = function() return active_tab end,
+    apply = apply_tires,
 }
 
 log.info("URUSHI Body & Tires module loaded.")

@@ -288,6 +288,9 @@ int Lua_UiEndCard(lua_State* /*L*/) {
 int Lua_UiToggle(lua_State* L) {
     const char* label = luaL_checkstring(L, 1);
     bool val = lua_toboolean(L, 2) != 0;
+    const float sc = UrushiUI::GetUiScale();
+    float width = static_cast<float>(luaL_optnumber(L, 3, 0.0));
+    if (width > 0.0f) width *= sc;
 
     std::string winId = UrushiUI::GetCurrentRenderingWindow();
     if (winId.empty()) winId = "general";
@@ -295,12 +298,20 @@ int Lua_UiToggle(lua_State* L) {
     UrushiUI::ParseElementId(label, cleanLabel, elemId);
 
     bool forced = UrushiUI::ConsumeStoredBool(winId, elemId, val);
-    bool ch = UrushiUI::Toggle(label, &val);
+    bool ch = UrushiUI::Toggle(label, &val, width);
     UrushiUI::RecordUiElement(winId, elemId, cleanLabel, "toggle", val, 0.0, "", ch);
 
     lua_pushboolean(L, (ch || forced) ? 1 : 0);
     lua_pushboolean(L, val ? 1 : 0);
     return 2;
+}
+
+int Lua_UiTooltip(lua_State* L) {
+    const char* text = luaL_checkstring(L, 1);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", text);
+    }
+    return 0;
 }
 
 int Lua_UiSliderFloat(lua_State* L) {
@@ -940,6 +951,17 @@ int Lua_UrushiOpenCrashDir(lua_State*) {
     return 0;
 }
 
+int Lua_UrushiOpenUrl(lua_State* L) {
+    const char* url = luaL_checkstring(L, 1);
+    if (!url || (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    ShellExecuteA(nullptr, "open", url, nullptr, nullptr, SW_SHOWNORMAL);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 int Lua_UrushiIsSafeMode(lua_State* L) {
     lua_pushboolean(L, !SafeMode::IsFull());
     return 1;
@@ -1041,6 +1063,7 @@ const luaL_Reg kUrushiFuncs[] = {
     { "load_script",     Lua_UrushiLoadScript },
     { "get_last_crash",  Lua_UrushiGetLastCrash },
     { "open_crash_dir",  Lua_UrushiOpenCrashDir },
+    { "open_url",        Lua_UrushiOpenUrl },
     { "is_safe_mode",    Lua_UrushiIsSafeMode },
     { "get_ui_elements", Lua_UrushiGetUiElements },
     { "set_ui_element",  Lua_UrushiSetUiElement },
@@ -1075,6 +1098,7 @@ const luaL_Reg kUiFuncs[] = {
     { "separator",    Lua_UiSeparator },
     { "spacing",      Lua_UiSpacing },
     { "avail_width",  Lua_UiAvailWidth },
+    { "tooltip",      Lua_UiTooltip },
     { "get_elements", Lua_UrushiGetUiElements },
     { nullptr, nullptr }
 };

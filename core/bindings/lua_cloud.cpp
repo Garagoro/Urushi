@@ -134,14 +134,61 @@ int Lua_CloudInclude(lua_State* L) {
     return 1;
 }
 
+int Lua_CloudCheckScriptUpdates(lua_State*) {
+    CloudScripts::CheckScriptUpdatesAsync();
+    return 0;
+}
+
+int Lua_CloudGetScriptUpdates(lua_State* L) {
+    const CloudScripts::ScriptUpdatesSnapshot snap = CloudScripts::GetScriptUpdatesSnapshot();
+    lua_newtable(L);
+    lua_pushboolean(L, snap.checking);
+    lua_setfield(L, -2, "checking");
+
+    lua_newtable(L);
+    for (const auto& it : snap.items) {
+        lua_newtable(L);
+        SetStr(L, "state", it.state);
+        SetStr(L, "error", it.error);
+        lua_setfield(L, -2, it.id.c_str());
+    }
+    lua_setfield(L, -2, "items");
+    return 1;
+}
+
+int Lua_CloudUpdateScript(lua_State* L) {
+    const char* id = luaL_checkstring(L, 1);
+    CloudScripts::UpdateScriptAsync(id);
+    return 0;
+}
+
+int Lua_CloudToggleScriptIgnore(lua_State* L) {
+    const char* id = luaL_checkstring(L, 1);
+    bool cur = CloudScripts::IsScriptIgnored(id);
+    CloudScripts::SetScriptIgnored(id, !cur);
+    lua_pushboolean(L, !cur);
+    return 1;
+}
+
+int Lua_CloudIsScriptIgnored(lua_State* L) {
+    const char* id = luaL_checkstring(L, 1);
+    lua_pushboolean(L, CloudScripts::IsScriptIgnored(id));
+    return 1;
+}
+
 const luaL_Reg kCloudFuncs[] = {
-    { "refresh",   Lua_CloudRefresh },
-    { "status",    Lua_CloudStatus },
-    { "install",   Lua_CloudInstall },
-    { "remove",    Lua_CloudRemove },
-    { "installed", Lua_CloudInstalled },
-    { "load",      Lua_CloudLoad },
-    { "include",   Lua_CloudInclude },
+    { "refresh",              Lua_CloudRefresh },
+    { "status",               Lua_CloudStatus },
+    { "install",              Lua_CloudInstall },
+    { "remove",               Lua_CloudRemove },
+    { "installed",            Lua_CloudInstalled },
+    { "load",                 Lua_CloudLoad },
+    { "include",              Lua_CloudInclude },
+    { "check_script_updates", Lua_CloudCheckScriptUpdates },
+    { "get_script_updates",   Lua_CloudGetScriptUpdates },
+    { "update_script",        Lua_CloudUpdateScript },
+    { "toggle_script_ignore", Lua_CloudToggleScriptIgnore },
+    { "is_script_ignored",    Lua_CloudIsScriptIgnored },
     { nullptr, nullptr }
 };
 

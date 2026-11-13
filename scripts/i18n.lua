@@ -22,6 +22,7 @@ local WINDOW_TITLES = {
     fps_net       = { "FPS и Сеть",     "FPS & Network" },
     system        = { "Система",        "System" },
     library       = { "Библиотека",     "Library" },
+    keybinds      = { "Горячие клавиши", "Keybinds" },
 }
 
 function i18n.sync_titles()

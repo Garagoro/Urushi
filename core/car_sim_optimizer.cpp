@@ -1333,7 +1333,9 @@ void CarSimOptimizer::SetConfig(const Config& cfg) {
     if (!s_noDamageOverride) {
         NativeCarX::SetNoDamage(clamped.disableDamage);
     }
-    NativeCarX::SetNoTireWear(clamped.disableTireWear);
+    if (clamped.disableTireWear) {
+        NativeCarX::SetNoTireWear(true);
+    }
     if (clamped.disableDamage) {
         UnityBridge::RequestRepairPlayerCar();
     }

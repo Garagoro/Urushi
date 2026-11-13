@@ -6,15 +6,15 @@ local DATA_FILE = "urushi_data/keybinds.json"          -- scripts may only write
 local LEGACY_FILE = "scripts/keybinds.json"            -- read-only fallback for older installs
 
 local DEFAULT_BINDS = {
-    menu_toggle    = { source = "keyboard", code = 0x73, mod = 0, name = "F4", label = "Открыть / скрыть меню", mod_name = "URUSHI Core", order = 1 },
-    replay_record  = { source = "keyboard", code = 0x75, mod = 0, name = "F6", label = "Старт / стоп записи", mod_name = "3D Replay", order = 10 },
-    replay_ghost   = { source = "keyboard", code = 0x76, mod = 0, name = "F7", label = "Старт / стоп призрака", mod_name = "3D Replay", order = 11 },
-    dummy_ghost    = { source = "keyboard", code = 0x77, mod = 0, name = "F8", label = "3D-болванка", mod_name = "3D Replay", order = 12 },
-    anticollision  = { source = "keyboard", code = 0x4A, mod = 0, name = "J",  label = "Анти-встречка", mod_name = "Anti-Wrong-Way", order = 20 },
-    perf_menu      = { source = "keyboard", code = 0x74, mod = 0, name = "F5", label = "Оптимизатор FPS", mod_name = "Optimizer", order = 30 },
-    carfx_menu     = { source = "keyboard", code = 0x78, mod = 0, name = "F9", label = "CarFX шейдеры", mod_name = "CarFX Shaders", order = 40 },
-    tp_save        = { source = "keyboard", code = 0xDB, mod = 0, name = "[",  label = "Запомнить точку (ТП)", mod_name = "Teleport System", order = 50 },
-    tp_teleport    = { source = "keyboard", code = 0xDD, mod = 0, name = "]",  label = "Телепорт в точку", mod_name = "Teleport System", order = 51 },
+    menu_toggle    = { source = "keyboard", code = 0x73, mod = 0, name = "F4", label = "Открыть / скрыть меню", label_en = "Toggle URUSHI menu", mod_name = "URUSHI Core", mod_name_en = "URUSHI Core", order = 1 },
+    replay_record  = { source = "keyboard", code = 0x75, mod = 0, name = "F6", label = "Старт / стоп записи", label_en = "Start / stop record", mod_name = "3D Replay", mod_name_en = "3D Replay", order = 10 },
+    replay_ghost   = { source = "keyboard", code = 0x76, mod = 0, name = "F7", label = "Старт / стоп призрака", label_en = "Start / stop ghost", mod_name = "3D Replay", mod_name_en = "3D Replay", order = 11 },
+    dummy_ghost    = { source = "keyboard", code = 0x77, mod = 0, name = "F8", label = "3D-болванка", label_en = "3D Dummy", mod_name = "3D Replay", mod_name_en = "3D Replay", order = 12 },
+    anticollision  = { source = "keyboard", code = 0x4A, mod = 0, name = "J",  label = "Анти-встречка", label_en = "Anti-Wrong-Way", mod_name = "Anti-Wrong-Way", mod_name_en = "Anti-Wrong-Way", order = 20 },
+    perf_menu      = { source = "keyboard", code = 0x74, mod = 0, name = "F5", label = "Оптимизатор FPS", label_en = "FPS Optimizer", mod_name = "Optimizer", mod_name_en = "Optimizer", order = 30 },
+    carfx_menu     = { source = "keyboard", code = 0x78, mod = 0, name = "F9", label = "CarFX шейдеры", label_en = "CarFX Shaders", mod_name = "CarFX Shaders", mod_name_en = "CarFX Shaders", order = 40 },
+    tp_save        = { source = "keyboard", code = 0xDB, mod = 0, name = "[",  label = "Запомнить точку (ТП)", label_en = "Save point (TP)", mod_name = "Teleport System", mod_name_en = "Teleport System", order = 50 },
+    tp_teleport    = { source = "keyboard", code = 0xDD, mod = 0, name = "]",  label = "Телепорт в точку", label_en = "Teleport to point", mod_name = "Teleport System", mod_name_en = "Teleport System", order = 51 },
 }
 
 local registered_actions = {}
@@ -290,7 +290,9 @@ function keybinds.register(action_id, opts)
     registered_actions[action_id] = {
         action_id = action_id,
         label = opts.label or def.label or action_id,
+        label_en = opts.label_en or opts.en_label or def.label_en,
         mod_name = opts.mod_name or def.mod_name or "General",
+        mod_name_en = opts.mod_name_en or opts.en_mod_name or def.mod_name_en,
         order = opts.order or def.order or 100,
     }
 
@@ -305,34 +307,36 @@ function keybinds.register(action_id, opts)
 end
 
 function keybinds.get_grouped_actions()
-    -- Groups all registered and default actions by mod_name
+    -- Groups all registered and default actions by mod_name with locale awareness
+    local is_en = (urushi and urushi.get_language and urushi.get_language() == "en") or (i18n and i18n.is_en and i18n.is_en())
     local by_mod = {}
     local mod_order = {}
     local seen = {}
 
-    local function add_item(id, label, mod_name, order)
+    local function add_item(id, label, mod_name, order, label_en, mod_name_en)
         if seen[id] then return end
         seen[id] = true
-        mod_name = mod_name or "General"
-        if not by_mod[mod_name] then
-            by_mod[mod_name] = {}
-            table.insert(mod_order, mod_name)
+        local final_label = (is_en and label_en and label_en ~= "") and label_en or (label or id)
+        local final_mod = (is_en and mod_name_en and mod_name_en ~= "") and mod_name_en or (mod_name or "General")
+        if not by_mod[final_mod] then
+            by_mod[final_mod] = {}
+            table.insert(mod_order, final_mod)
         end
-        table.insert(by_mod[mod_name], {
+        table.insert(by_mod[final_mod], {
             action_id = id,
-            label = label or id,
+            label = final_label,
             order = order or 100,
         })
     end
 
     -- First add explicitly registered actions
     for id, info in pairs(registered_actions) do
-        add_item(id, info.label, info.mod_name, info.order)
+        add_item(id, info.label, info.mod_name, info.order, info.label_en, info.mod_name_en)
     end
 
     -- Then add any defaults not yet registered
     for id, def in pairs(DEFAULT_BINDS) do
-        add_item(id, def.label, def.mod_name, def.order)
+        add_item(id, def.label, def.mod_name, def.order, def.label_en, def.mod_name_en)
     end
 
     -- Sort items inside each mod by order

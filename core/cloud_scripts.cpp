@@ -619,4 +619,142 @@ Snapshot GetSnapshot() {
     return s;
 }
 
+// ------------------------------------------------------------------ Script Updates for local scripts
+static std::map<std::string, ScriptUpdateItem> g_scriptUpdates;
+static std::atomic<bool> g_scriptChecking{ false };
+
+bool IsScriptIgnored(const std::string& scriptId) {
+    return Settings::GetString("scripts_ignore_update", scriptId, "0") == "1";
+}
+
+void SetScriptIgnored(const std::string& scriptId, bool ignored) {
+    Settings::SetString("scripts_ignore_update", scriptId, ignored ? "1" : "0");
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (ignored) {
+        g_scriptUpdates[scriptId] = { scriptId, "ignored", "" };
+    } else {
+        g_scriptUpdates.erase(scriptId);
+    }
+}
+
+void CheckScriptUpdatesAsync() {
+    if (g_scriptChecking.exchange(true)) return;
+    std::thread([exeDir = g_exeDir]() {
+        std::wstring scriptsDir = exeDir + L"\\scripts";
+        WIN32_FIND_DATAW fd;
+        HANDLE h = FindFirstFileW((scriptsDir + L"\\*.lua").c_str(), &fd);
+        std::vector<std::string> names;
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                    std::string fn = Logger::ToNarrow(fd.cFileName);
+                    if (fn.size() > 4 && fn.substr(fn.size() - 4) == ".lua") {
+                        names.push_back(fn.substr(0, fn.size() - 4));
+                    }
+                }
+            } while (FindNextFileW(h, &fd));
+            FindClose(h);
+        }
+
+        {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            for (const auto& name : names) {
+                if (IsScriptIgnored(name)) {
+                    g_scriptUpdates[name] = { name, "ignored", "" };
+                } else {
+                    g_scriptUpdates[name] = { name, "checking", "" };
+                }
+            }
+        }
+
+        for (const auto& name : names) {
+            if (g_stop.load(std::memory_order_acquire)) break;
+            if (IsScriptIgnored(name)) continue;
+
+            std::string localContent;
+            std::ifstream in(scriptsDir + L"\\" + Logger::ToWide(name) + L".lua", std::ios::binary);
+            if (in.is_open()) {
+                localContent.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            }
+
+            std::vector<uint8_t> remoteBytes;
+            DWORD status = 0;
+            const std::string repoPath = "scripts/" + name + ".lua";
+            std::string oldRef = Settings::GetString("cloud", "ref", kDefaultRef);
+            Settings::SetString("cloud", "ref", "main");
+            bool ok = Fetch(repoPath, kMaxFileBytes, remoteBytes, status);
+            Settings::SetString("cloud", "ref", oldRef);
+
+            std::lock_guard<std::mutex> lk(g_mtx);
+            if (status == 404) {
+                g_scriptUpdates[name] = { name, "custom", "" };
+            } else if (ok && status == 200) {
+                std::string remoteStr(remoteBytes.begin(), remoteBytes.end());
+                auto normalize = [](std::string s) {
+                    s.erase(std::remove(s.begin(), s.end(), '\r'), s.end());
+                    return s;
+                };
+                if (normalize(localContent) != normalize(remoteStr)) {
+                    g_scriptUpdates[name] = { name, "update_available", "" };
+                } else {
+                    g_scriptUpdates[name] = { name, "up_to_date", "" };
+                }
+            } else {
+                g_scriptUpdates[name] = { name, "error", HttpErr(status) };
+            }
+        }
+        g_scriptChecking = false;
+    }).detach();
+}
+
+void UpdateScriptAsync(const std::string& scriptId) {
+    {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        g_scriptUpdates[scriptId] = { scriptId, "updating", "" };
+    }
+    std::thread([exeDir = g_exeDir, scriptId]() {
+        std::vector<uint8_t> remoteBytes;
+        DWORD status = 0;
+        const std::string repoPath = "scripts/" + scriptId + ".lua";
+        std::string oldRef = Settings::GetString("cloud", "ref", kDefaultRef);
+        Settings::SetString("cloud", "ref", "main");
+        bool ok = Fetch(repoPath, kMaxFileBytes, remoteBytes, status);
+        Settings::SetString("cloud", "ref", oldRef);
+
+        if (ok && status == 200) {
+            std::wstring dest = exeDir + L"\\scripts\\" + Logger::ToWide(scriptId) + L".lua";
+            std::ofstream out(dest, std::ios::binary);
+            if (out.is_open()) {
+                out.write(reinterpret_cast<const char*>(remoteBytes.data()), remoteBytes.size());
+                out.close();
+            }
+            std::wstring devDest = exeDir + L"\\Urushi\\scripts\\" + Logger::ToWide(scriptId) + L".lua";
+            if (GetFileAttributesW(devDest.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                std::ofstream devOut(devDest, std::ios::binary);
+                if (devOut.is_open()) {
+                    devOut.write(reinterpret_cast<const char*>(remoteBytes.data()), remoteBytes.size());
+                    devOut.close();
+                }
+            }
+            std::lock_guard<std::mutex> lk(g_mtx);
+            g_scriptUpdates[scriptId] = { scriptId, "updated", "" };
+            Logger::Info("Script '" + scriptId + "' successfully updated from GitHub.");
+        } else {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            g_scriptUpdates[scriptId] = { scriptId, "error", HttpErr(status) };
+            Logger::Error("Failed to update script '" + scriptId + "': " + HttpErr(status));
+        }
+    }).detach();
+}
+
+ScriptUpdatesSnapshot GetScriptUpdatesSnapshot() {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    ScriptUpdatesSnapshot snap;
+    snap.checking = g_scriptChecking.load();
+    for (const auto& kv : g_scriptUpdates) {
+        snap.items.push_back(kv.second);
+    }
+    return snap;
+}
+
 } // namespace CloudScripts

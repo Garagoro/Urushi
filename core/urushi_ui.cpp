@@ -379,6 +379,87 @@ static void DrawModuleIcon(ImDrawList* dl, ImVec2 center, const std::string& ico
 
 // ==================== Floating Dock Rendering ====================
 
+// Official 20x20 anti-aliased SVG alpha bitmaps (rasterized directly from official SVGs)
+static const unsigned char kDiscordAlpha20[20 * 20] = {
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,   0,   0,  24,  90,  43,   0,   0,   0,   0,  45,  89,  22,   0,   0,   0,   0,   0,
+      0,   0,   1, 105, 201, 255, 255, 204, 173, 192, 192, 173, 206, 255, 255, 200, 104,   1,   0,   0,
+      0,   0,  99, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,  97,   0,   0,
+      0,  10, 234, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 234,  10,   0,
+      0, 120, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 113,   0,
+      2, 232, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 226,   1,
+     74, 255, 255, 255, 255, 255, 214, 250, 255, 255, 255, 255, 250, 214, 255, 255, 255, 255, 255,  59,
+    136, 255, 255, 255, 255,  82,   0,  21, 230, 255, 255, 224,  20,   0,  90, 255, 255, 255, 255, 120,
+    190, 255, 255, 255, 240,   0,   0,   0, 148, 255, 255, 146,   0,   0,   0, 240, 255, 255, 255, 178,
+    227, 255, 255, 255, 254,  19,   0,   0, 179, 255, 255, 182,   0,   0,  18, 254, 255, 255, 255, 212,
+    243, 255, 255, 255, 255, 192,  86, 144, 255, 255, 255, 255, 143,  86, 193, 255, 255, 255, 255, 236,
+    252, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 251,
+    243, 255, 255, 255, 234, 235, 255, 255, 255, 255, 255, 255, 255, 255, 233, 235, 255, 255, 255, 239,
+     60, 211, 255, 255, 242, 123,  68, 125, 155, 180, 180, 155, 124,  66, 126, 243, 255, 255, 208,  59,
+      0,   2, 108, 219, 255, 214,   6,   0,   0,   0,   0,   0,   0,   7, 220, 255, 216, 105,   2,   0,
+      0,   0,   0,   0,  67,  44,   0,   0,   0,   0,   0,   0,   0,   0,  48,  64,   0,   0,   0,   0,
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+};
+
+static const unsigned char kGithubAlpha20[20 * 20] = {
+      0,   0,   0,   0,   0,   0,  26,  98, 145, 177, 176, 144,  96,  24,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,   0,  28, 169, 255, 255, 255, 255, 255, 255, 255, 254, 161,  22,   0,   0,   0,   0,
+      0,   0,   0,  68, 241, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 235,  55,   0,   0,   0,
+      0,   0,  79, 253, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 250,  63,   0,   0,
+      0,  43, 245, 255, 196,  90, 197, 255, 255, 255, 255, 255, 255, 191,  87, 205, 255, 236,  29,   0,
+      1, 203, 255, 255, 126,   0,   1,  94,  26,   0,   0,  28,  89,   0,   0, 140, 255, 255, 182,   0,
+     83, 255, 255, 255, 126,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 141, 255, 255, 255,  59,
+    163, 255, 255, 255,  87,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  97, 255, 255, 255, 136,
+    221, 255, 255, 219,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 229, 255, 255, 196,
+    241, 255, 255, 169,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 181, 255, 255, 229,
+    248, 255, 255, 171,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 182, 255, 255, 247,
+    227, 255, 255, 216,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 231, 255, 255, 224,
+    182, 255, 255, 255,  53,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  75, 255, 255, 255, 177,
+    118, 255, 255, 255, 226,  46,   0,   0,   0,   0,   0,   0,   0,   0,  60, 234, 255, 255, 255, 111,
+     18, 244, 227, 122, 234, 253, 191, 113,   3,   0,   0,   9, 121, 201, 255, 255, 255, 255, 236,  12,
+      0, 127, 255, 188,  56, 240, 255, 180,   0,   0,   0,   0, 207, 255, 255, 255, 255, 255, 112,   0,
+      0,  11, 203, 255,  66,  20,  64,  18,   0,   0,   0,   0, 145, 255, 255, 255, 255, 189,   6,   0,
+      0,   0,  14, 193, 241, 123,  86,  64,   0,   0,   0,   0, 141, 255, 255, 255, 176,   9,   0,   0,
+      0,   0,   0,   5, 150, 255, 255, 128,   0,   0,   0,   0, 146, 255, 239, 110,   1,   0,   0,   0,
+      0,   0,   0,   0,   0,  69, 162,  73,   0,   0,   0,   0,  84, 139,  18,   0,   0,   0,   0,   0,
+};
+
+static void DrawAlphaMask(ImDrawList* dl, ImVec2 pos, float size, const unsigned char* mask, int w, int h, ImU32 baseCol) {
+    const float pixelW = size / static_cast<float>(w);
+    const float pixelH = size / static_cast<float>(h);
+    const ImVec4 base = ImGui::ColorConvertU32ToFloat4(baseCol);
+
+    for (int y = 0; y < h; ++y) {
+        int runStart = -1;
+        float alphaSum = 0.0f;
+        for (int x = 0; x <= w; ++x) {
+            unsigned char a = (x < w) ? mask[y * w + x] : 0;
+            if (a > 20) {
+                if (runStart < 0) {
+                    runStart = x;
+                    alphaSum = a / 255.0f;
+                } else {
+                    alphaSum += a / 255.0f;
+                }
+            } else {
+                if (runStart >= 0) {
+                    int len = x - runStart;
+                    float avgAlpha = std::min(1.0f, (alphaSum / len) * 1.15f);
+                    ImU32 col = ImGui::ColorConvertFloat4ToU32(ImVec4(base.x, base.y, base.z, base.w * avgAlpha));
+                    dl->AddRectFilled(
+                        ImVec2(pos.x + runStart * pixelW, pos.y + y * pixelH),
+                        ImVec2(pos.x + x * pixelW, pos.y + (y + 1) * pixelH),
+                        col);
+                    runStart = -1;
+                    alphaSum = 0.0f;
+                }
+            }
+        }
+    }
+}
+
 static void RenderDock(bool menuOpen) {
     float dt = ImGui::GetIO().DeltaTime;
     if (dt <= 0.0f || dt > 0.25f) dt = 0.016f;
@@ -392,7 +473,7 @@ static void RenderDock(bool menuOpen) {
 
     const float S = s_uiScale;
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const float dockW = 228.0f * S;
+    const float dockW = 246.0f * S;
     const float padX = 12.0f * S;
     const float padY = 12.0f * S;
     const float innerW = dockW - padX * 2.0f;
@@ -448,6 +529,46 @@ static void RenderDock(bool menuOpen) {
         dl->AddText(ImVec2(hPos.x + 31.0f * S, hPos.y + 1.0f * S), kColTextPrimary, "URUSHI");
         if (AppFonts::Large) ImGui::PopFont();
 
+        // Discord link button
+        {
+            const float tw = 20.0f * S;
+            const ImVec2 tp(hPos.x + 98.0f * S, hPos.y + 1.0f * S);
+            ImGui::SetCursorScreenPos(tp);
+            if (ImGui::InvisibleButton("##dock_discord", ImVec2(tw, 20.0f * S))) {
+                ShellExecuteW(nullptr, L"open", L"https://discord.gg/jS6cc49EbT", nullptr, nullptr, SW_SHOWNORMAL);
+            }
+            const bool hv = ImGui::IsItemHovered();
+            if (hv) {
+                dl->AddRectFilled(tp, ImVec2(tp.x + tw, tp.y + 20.0f * S), IM_COL32(88, 101, 242, 45), 4.0f * S);
+                dl->AddRect(tp, ImVec2(tp.x + tw, tp.y + 20.0f * S), IM_COL32(88, 101, 242, 180), 4.0f * S);
+                ImGui::SetTooltip("%s", s_language == UrushiUI::Language::Russian
+                    ? u8"Discord: сообщество URUSHI (чат и поддержка)"
+                    : "Discord: URUSHI community (chat & support)");
+            }
+            const ImU32 col = hv ? IM_COL32(88, 101, 242, 255) : kColTextMuted;
+            DrawAlphaMask(dl, ImVec2(tp.x + 3.0f * S, tp.y + 3.0f * S), 14.0f * S, kDiscordAlpha20, 20, 20, col);
+        }
+
+        // GitHub link button
+        {
+            const float tw = 20.0f * S;
+            const ImVec2 tp(hPos.x + 124.0f * S, hPos.y + 1.0f * S);
+            ImGui::SetCursorScreenPos(tp);
+            if (ImGui::InvisibleButton("##dock_github", ImVec2(tw, 20.0f * S))) {
+                ShellExecuteW(nullptr, L"open", L"https://github.com/Garagoro/Urushi", nullptr, nullptr, SW_SHOWNORMAL);
+            }
+            const bool hv = ImGui::IsItemHovered();
+            if (hv) {
+                dl->AddRectFilled(tp, ImVec2(tp.x + tw, tp.y + 20.0f * S), IM_COL32(255, 255, 255, 25), 4.0f * S);
+                dl->AddRect(tp, ImVec2(tp.x + tw, tp.y + 20.0f * S), IM_COL32(255, 255, 255, 120), 4.0f * S);
+                ImGui::SetTooltip("%s", s_language == UrushiUI::Language::Russian
+                    ? u8"GitHub: репозиторий, исходный код и релизы"
+                    : "GitHub: repository, source code & releases");
+            }
+            const ImU32 col = hv ? IM_COL32(255, 255, 255, 255) : kColTextMuted;
+            DrawAlphaMask(dl, ImVec2(tp.x + 3.0f * S, tp.y + 3.0f * S), 14.0f * S, kGithubAlpha20, 20, 20, col);
+        }
+
         std::string verLabel = std::string("v") + URUSHI_VERSION;
         if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
         ImVec2 verSz = ImGui::CalcTextSize(verLabel.c_str());
@@ -456,21 +577,21 @@ static void RenderDock(bool menuOpen) {
 
         // reorder toggle (left of the version label)
         {
-            const float tw = 22.0f * S;
-            const ImVec2 tp(hPos.x + innerW - verSz.x - 10.0f * S - tw, hPos.y);
+            const float tw = 20.0f * S;
+            const ImVec2 tp(hPos.x + innerW - verSz.x - 6.0f * S - tw, hPos.y + 1.0f * S);
             ImGui::SetCursorScreenPos(tp);
-            if (ImGui::InvisibleButton("##dockedit", ImVec2(tw, 22.0f * S))) {
+            if (ImGui::InvisibleButton("##dockedit", ImVec2(tw, 20.0f * S))) {
                 s_dockEdit = !s_dockEdit;
             }
             const bool hv = ImGui::IsItemHovered();
             if (s_dockEdit || hv) {
-                dl->AddRectFilled(tp, ImVec2(tp.x + tw, tp.y + 22.0f * S),
-                                  s_dockEdit ? UrushiUI::GetAccentU32() : IM_COL32(255, 255, 255, 20), 6.0f * S);
+                dl->AddRectFilled(tp, ImVec2(tp.x + tw, tp.y + 20.0f * S),
+                                  s_dockEdit ? UrushiUI::GetAccentU32() : IM_COL32(255, 255, 255, 20), 4.0f * S);
             }
             const ImU32 gc = s_dockEdit ? IM_COL32(20, 20, 24, 255) : (hv ? kColTextPrimary : kColTextMuted);
             for (int k = 0; k < 3; ++k) {   // three bars = "reorder"
-                const float y = tp.y + (7.0f + 4.0f * k) * S;
-                dl->AddLine(ImVec2(tp.x + 5.0f * S, y), ImVec2(tp.x + tw - 5.0f * S, y), gc, 1.6f * S);
+                const float y = tp.y + (6.0f + 4.0f * k) * S;
+                dl->AddLine(ImVec2(tp.x + 4.0f * S, y), ImVec2(tp.x + tw - 4.0f * S, y), gc, 1.5f * S);
             }
             if (hv) ImGui::SetTooltip("%s", s_language == UrushiUI::Language::Russian
                 ? u8"Изменить порядок (перетаскивание)" : "Reorder (drag & drop)");
@@ -1486,10 +1607,10 @@ void UrushiUI::EndCard() {
     ImGui::Dummy(ImVec2(frame->width, 0.0f));
 }
 
-bool UrushiUI::Toggle(const std::string& label, bool* value) {
+bool UrushiUI::Toggle(const std::string& label, bool* value, float width) {
     if (!value) return false;
     const float S = s_uiScale;
-    const float w = CurrentContentWidth();
+    const float w = (width <= 0.0f) ? CurrentContentWidth() : width;
     const float rowH = 26.0f * S;
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();

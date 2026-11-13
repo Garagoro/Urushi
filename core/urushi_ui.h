@@ -155,7 +155,7 @@ public:
     static void BeginCard(const std::string& title = "", const std::string& subtitle = "");
     static void EndCard();
 
-    static bool Toggle(const std::string& label, bool* value);
+    static bool Toggle(const std::string& label, bool* value, float width = 0.0f);
     static bool SliderFloat(const std::string& label, float* value, float minVal, float maxVal, const char* fmt = "%.2f");
     static bool SliderInt(const std::string& label, int* value, int minVal, int maxVal, const char* fmt = "%d");
     static bool Segmented(const std::string& id, int* currentIdx, const std::vector<std::string>& options);

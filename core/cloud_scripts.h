@@ -43,6 +43,17 @@ struct Installed {
     std::string id, name, nameRu, version, entry;
 };
 
+struct ScriptUpdateItem {
+    std::string id;
+    std::string state; // "idle" | "checking" | "up_to_date" | "update_available" | "custom" | "ignored" | "updating" | "updated" | "error"
+    std::string error;
+};
+
+struct ScriptUpdatesSnapshot {
+    bool checking = false;
+    std::vector<ScriptUpdateItem> items;
+};
+
 void Init(const std::wstring& exeDir);
 void Shutdown();
 
@@ -54,6 +65,13 @@ Snapshot GetSnapshot();
 std::vector<Installed> ListInstalled();
 // Resolves <gameDir>\scripts\cloud\<id>\<entry>; false if not installed / invalid.
 bool ResolveEntry(const std::string& id, std::wstring& outFile, std::wstring& outDir);
+
+// ---- Script Updates for local scripts ----
+void CheckScriptUpdatesAsync();
+void UpdateScriptAsync(const std::string& scriptId);
+ScriptUpdatesSnapshot GetScriptUpdatesSnapshot();
+void SetScriptIgnored(const std::string& scriptId, bool ignored);
+bool IsScriptIgnored(const std::string& scriptId);
 
 // ---- exposed for tests ----
 bool ParseCatalog(const std::string& json, std::vector<Item>& out, std::string& err);
