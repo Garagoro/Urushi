@@ -6,6 +6,7 @@
 
 static const luaL_Reg kCarfxFuncs[] = {
     { "load",           LuaCarFX::Load },
+    { "compile",        LuaCarFX::Compile },
     { "unload",         LuaCarFX::Unload },
     { "reload",         LuaCarFX::Reload },
     { "set_enabled",    LuaCarFX::SetEnabled },
@@ -36,6 +37,21 @@ int LuaCarFX::Load(lua_State* L) {
     int target = static_cast<int>(luaL_optinteger(L, 2, CarFX::kTargetBody));
     std::string err;
     bool ok = CarFX::LoadShader(target, path, &err);
+    lua_pushboolean(L, ok);
+    if (ok) {
+        lua_pushnil(L);
+    } else {
+        lua_pushstring(L, err.c_str());
+    }
+    return 2;
+}
+
+int LuaCarFX::Compile(lua_State* L) {
+    const char* src = luaL_checkstring(L, 1);
+    int target = static_cast<int>(luaL_optinteger(L, 2, CarFX::kTargetBody));
+    const char* name = luaL_optstring(L, 3, "dynamic_shader.hlsl");
+    std::string err;
+    bool ok = CarFX::CompileShaderSource(target, src, name, &err);
     lua_pushboolean(L, ok);
     if (ok) {
         lua_pushnil(L);

@@ -24,6 +24,7 @@ scratch/
 *.cxr2
 scripts/*.json
 dist/*.pdb
+dist/*.map
 
 # IDE & OS
 .vscode/

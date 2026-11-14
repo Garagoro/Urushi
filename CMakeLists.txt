@@ -7,6 +7,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # MinHook
 add_subdirectory(third_party/minhook)
 
+# Zydis Disassembler
+set(ZYDIS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(ZYDIS_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(ZYDIS_BUILD_MAN OFF CACHE BOOL "" FORCE)
+set(ZYCORE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(ZYCORE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+add_subdirectory(third_party/zydis)
+
 # Lua 5.4 Static Library
 file(GLOB LUA_SOURCES "third_party/lua/*.c")
 list(REMOVE_ITEM LUA_SOURCES 

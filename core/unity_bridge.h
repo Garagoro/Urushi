@@ -106,6 +106,10 @@ public:
     static std::string LookupCarUnityName(void* carPtr);
     static std::string LookupCarPlayerName(void* carPtr);
 
+    // Player Car Repair & God Mode
+    static void RequestPlayerCarRepair();
+    static bool RepairPlayerCarOnMainThread();
+
     // Direct Unity calls (safe only on Unity Main Thread!)
     static void* CloneGameObjectDirect(void* nativeGo);
     static bool DestroyObjectDirect(void* nativeObj, float delay = 0.0f);

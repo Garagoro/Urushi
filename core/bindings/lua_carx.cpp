@@ -28,6 +28,9 @@ static void PushCarTelemetry(lua_State* L, const CarTelemetry& car) {
     PtrRegistry::Push(L, car.carPtr);
     lua_setfield(L, -2, "ptr");
 
+    lua_pushinteger(L, static_cast<lua_Integer>(reinterpret_cast<uintptr_t>(car.carPtr)));
+    lua_setfield(L, -2, "addr");
+
     lua_pushboolean(L, car.isLocalPlayer);
     lua_setfield(L, -2, "is_local_player");
 
@@ -1161,6 +1164,7 @@ int LuaCarX::RepairCar(lua_State* L) {
     }
     NativeCarX::ResetCarDamage(car);
     NativeCarX::ResetTireWear(car);
+    UnityBridge::RequestPlayerCarRepair();
     lua_pushboolean(L, true);
     return 1;
 }

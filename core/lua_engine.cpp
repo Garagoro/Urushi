@@ -4,7 +4,6 @@
 #include "d3d11_hook.h"
 #include "urushi_ui.h"
 #include "bindings/lua_carx.h"
-#include "bindings/lua_steer.h"
 #include "bindings/lua_carfx.h"
 #include "bindings/lua_imgui.h"
 #include "bindings/lua_replay.h"
@@ -13,6 +12,9 @@
 #include "bindings/lua_optimizer.h"
 #include "bindings/lua_urushi.h"
 #include "bindings/lua_cloud.h"
+#include "bindings/lua_disasm.h"
+#include "bindings/lua_pattern.h"
+#include "pattern_scanner.h"
 #include "lua_sandbox.h"
 #include "lua_hardening.h"
 #include "ptr_registry.h"
@@ -58,7 +60,6 @@ bool LuaEngine::Init(const std::wstring& scriptsDir) {
 
     // Register our custom modules
     LuaCarX::Register(s_L);
-    LuaSteer::Register(s_L);
     LuaCarFX::Register(s_L);
     LuaImGui::Register(s_L);
     LuaReplay::Register(s_L);
@@ -67,6 +68,8 @@ bool LuaEngine::Init(const std::wstring& scriptsDir) {
     LuaOptimizer::Register(s_L);
     LuaUrushi::Register(s_L);
     LuaCloud::Register(s_L);
+    LuaDisasm::Register(s_L);
+    LuaPattern::Register(s_L);
     RegisterEventsModule(s_L);
     RegisterLogModule(s_L);
 
@@ -109,6 +112,10 @@ void LuaEngine::Shutdown() {
 
     UiSchema::Shutdown();
     UrushiUI::ClearLuaRefs(s_L);
+
+    // Rollback any live memory code patches to keep game clean
+    LuaMemory::RestoreAllPatchesNative();
+    PatternScanner::ClearCache();
 
     if (s_L) {
         luaL_dostring(s_L, "if config and config.save then config.save() end");
@@ -351,6 +358,96 @@ std::wstring LuaEngine::GetScriptsDirectory() {
     return s_scriptsDir;
 }
 
+static void DumpLuaValue(lua_State* L, int idx, std::string& out, int depth = 0) {
+    if (depth > 3) {
+        out += "{...}";
+        return;
+    }
+    int t = lua_type(L, idx);
+    switch (t) {
+    case LUA_TNIL:
+        out += "nil";
+        break;
+    case LUA_TBOOLEAN:
+        out += (lua_toboolean(L, idx) ? "true" : "false");
+        break;
+    case LUA_TNUMBER: {
+        if (lua_isinteger(L, idx)) {
+            out += std::to_string(lua_tointeger(L, idx));
+        } else {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%.4g", lua_tonumber(L, idx));
+            out += buf;
+        }
+        break;
+    }
+    case LUA_TSTRING: {
+        size_t len = 0;
+        const char* s = lua_tolstring(L, idx, &len);
+        if (depth == 0) {
+            out.append(s, len);
+        } else {
+            out += "\"";
+            out.append(s, len);
+            out += "\"";
+        }
+        break;
+    }
+    case LUA_TLIGHTUSERDATA: {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "0x%llX", (unsigned long long)reinterpret_cast<uintptr_t>(lua_touserdata(L, idx)));
+        out += buf;
+        break;
+    }
+    case LUA_TTABLE: {
+        if (luaL_getmetafield(L, idx, "__tostring")) {
+            lua_pushvalue(L, idx < 0 ? idx - 1 : idx);
+            if (lua_pcall(L, 1, 1, 0) == LUA_OK) {
+                size_t len = 0;
+                const char* s = lua_tolstring(L, -1, &len);
+                if (s) out.append(s, len);
+                lua_pop(L, 1);
+                break;
+            }
+            lua_pop(L, 1);
+        }
+        out += "{ ";
+        lua_pushnil(L);
+        int normIdx = (idx > 0) ? idx : (lua_gettop(L) + idx);
+        bool first = true;
+        int count = 0;
+        while (lua_next(L, normIdx) != 0) {
+            if (!first) out += ", ";
+            first = false;
+            if (++count > 40) {
+                out += "...";
+                lua_pop(L, 2);
+                break;
+            }
+            if (lua_type(L, -2) == LUA_TSTRING) {
+                out += lua_tostring(L, -2);
+                out += " = ";
+            } else if (lua_type(L, -2) == LUA_TNUMBER && lua_isinteger(L, -2)) {
+                out += "[";
+                out += std::to_string(lua_tointeger(L, -2));
+                out += "] = ";
+            }
+            DumpLuaValue(L, -1, out, depth + 1);
+            lua_pop(L, 1);
+        }
+        out += " }";
+        break;
+    }
+    default: {
+        size_t len = 0;
+        const char* s = luaL_tolstring(L, idx, &len);
+        if (s) out.append(s, len);
+        lua_pop(L, 1);
+        break;
+    }
+    }
+}
+
 bool LuaEngine::Eval(const std::string& code, std::string& outOutput, std::string& outError) {
     outOutput.clear();
     outError.clear();
@@ -404,13 +501,8 @@ bool LuaEngine::Eval(const std::string& code, std::string& outOutput, std::strin
         ok = true;
         int nres = lua_gettop(s_L) - baseTop;
         for (int i = 1; i <= nres; ++i) {
-            size_t len = 0;
-            const char* s = luaL_tolstring(s_L, baseTop + i, &len);
-            if (s && len > 0) {
-                if (!outOutput.empty() && outOutput.back() != '\n') outOutput.push_back('\t');
-                outOutput.append(s, len);
-            }
-            lua_pop(s_L, 1);
+            if (!outOutput.empty() && outOutput.back() != '\n') outOutput.push_back('\t');
+            DumpLuaValue(s_L, baseTop + i, outOutput, 0);
         }
         lua_pop(s_L, nres);
     }

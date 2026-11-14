@@ -1,4 +1,5 @@
 #include "urushi_ui.h"
+#include "urushi_ui_internal.h"
 #include "d3d11_hook.h"
 #include "input_manager.h"
 #include "native_carx.h"
@@ -21,87 +22,14 @@ extern "C" {
 #include <mutex>
 #include <unordered_map>
 
-namespace {
+using namespace UrushiUiInternal;
 
-// Quiet Chrome Lacquer Colors
-constexpr ImU32 kColBgDock         = IM_COL32(11, 11, 15, 240);
-constexpr ImU32 kColBgWindow       = IM_COL32(16, 16, 21, 240);
-constexpr ImU32 kColBgHeader       = IM_COL32(13, 13, 17, 246);
-constexpr ImU32 kColBgCard         = IM_COL32(23, 23, 28, 250);
-constexpr ImU32 kColBgControl      = IM_COL32(14, 14, 18, 255);
-constexpr ImU32 kColBgRaised       = IM_COL32(33, 33, 41, 255);
-constexpr ImU32 kColBgRaisedHover  = IM_COL32(43, 43, 54, 255);
-constexpr ImU32 kColBgRaisedActive = IM_COL32(52, 52, 64, 255);
+namespace UrushiUiInternal {
 
-constexpr ImU32 kColHairline       = IM_COL32(255, 255, 255, 16);
-constexpr ImU32 kColHairlineStrong = IM_COL32(255, 255, 255, 28);
-
-constexpr ImU32 kColTextPrimary    = IM_COL32(244, 244, 247, 255);
-constexpr ImU32 kColTextSecondary  = IM_COL32(154, 156, 166, 255);
-constexpr ImU32 kColTextMuted      = IM_COL32(112, 114, 124, 255);
-
-constexpr ImU32 kColGreen          = IM_COL32(52, 199, 123, 255);
-constexpr ImU32 kColRed            = IM_COL32(232, 76, 76, 255);
-constexpr ImU32 kColYellow         = IM_COL32(238, 190, 65, 255);
-
-struct AccentDef {
-    const char* name;
-    ImU32 main;
-    ImU32 hover;
-    ImU32 fg;
-    ImU32 soft;
-    ImU32 line;
-};
-
-constexpr AccentDef kAccents[] = {
-    // Amber (Default)
-    { "amber",     IM_COL32(229, 154, 56, 255), IM_COL32(240, 170, 74, 255), IM_COL32(18, 16, 13, 255),  IM_COL32(229, 154, 56, 40), IM_COL32(229, 154, 56, 98) },
-    // Vermilion
-    { "vermilion", IM_COL32(224, 72, 50, 255),  IM_COL32(238, 88, 66, 255),  IM_COL32(255, 255, 255, 255), IM_COL32(224, 72, 50, 40), IM_COL32(224, 72, 50, 102) },
-    // Platinum
-    { "platinum",  IM_COL32(228, 228, 236, 255),IM_COL32(244, 244, 250, 255),IM_COL32(12, 12, 16, 255),  IM_COL32(228, 228, 236, 34),IM_COL32(228, 228, 236, 90) },
-    // Indigo
-    { "indigo",    IM_COL32(139, 124, 246, 255),IM_COL32(156, 143, 248, 255),IM_COL32(255, 255, 255, 255), IM_COL32(139, 124, 246, 40),IM_COL32(139, 124, 246, 102) },
-};
-
-struct WindowState {
-    std::string id;
-    std::string title;
-    std::string icon;
-    int order = 100;
-    bool open = false;
-    bool pinned = false;
-    bool shaded = false;
-    bool hudNoInputs = false;
-    bool scrollable = false;
-    bool userMoved = false;
-    bool anchorRight = false;
-    float defaultX = 264.0f;
-    float defaultY = 36.0f;
-    float posX = 264.0f;
-    float posY = 36.0f;
-    float width = 410.0f;
-    float lastBodyH = 120.0f;
-    float actualW = 410.0f;
-    float actualH = 180.0f;
-    int luaRenderRef = -1;
-    bool registeredInPass = true;
-    bool posInitialized = false;
-    float openAnim = 1.0f;
-    std::string pendingMoveKey;
-};
-
-struct CardFrame {
-    ImDrawListSplitter splitter;
-    ImVec2 startPos{};
-    float width = 0.0f;
-    float innerWidth = 0.0f;
-};
-
-std::recursive_mutex s_mutex;
-UrushiUI::Accent s_accent = UrushiUI::Accent::Amber;
-float s_customRgb[3] = { 0.30f, 0.78f, 0.96f };
-AccentDef s_customAccentDef = {
+std::recursive_mutex g_mutex;
+UrushiUI::Accent g_accent = UrushiUI::Accent::Amber;
+float g_customRgb[3] = { 0.30f, 0.78f, 0.96f };
+AccentDef g_customAccentDef = {
     "custom",
     IM_COL32(76, 199, 245, 255),
     IM_COL32(102, 212, 250, 255),
@@ -109,78 +37,55 @@ AccentDef s_customAccentDef = {
     IM_COL32(76, 199, 245, 40),
     IM_COL32(76, 199, 245, 102)
 };
-UrushiUI::Language s_language = []() {
+UrushiUI::Language g_language = []() {
     LANGID lang = GetUserDefaultUILanguage();
     return (PRIMARYLANGID(lang) == LANG_RUSSIAN) ? UrushiUI::Language::Russian : UrushiUI::Language::English;
 }();
-bool s_singleTabMode = false;
+bool g_singleTabMode = false;
 
 // UI Element Introspection & Config Auto-Discovery
-static std::mutex s_uiElementMutex;
-static std::string s_currentRenderingWindow;
-static std::unordered_map<std::string, std::unordered_map<std::string, UrushiUI::UiElementDesc>> s_uiElements;
+std::mutex g_uiElementMutex;
+std::string g_currentRenderingWindow;
+std::unordered_map<std::string, std::unordered_map<std::string, UrushiUI::UiElementDesc>> g_uiElements;
 
 // ---- dock order (user drag & drop), stored in urushi_dock.ini next to urushi_settings.ini ----
-constexpr int kDockMaxVisible = 12;   // more entries than this -> the list scrolls
-bool s_dockEdit = false;
-bool s_dockOrderLoaded = false;
-std::vector<std::string> s_dockOrder;
+bool g_dockEdit = false;
+bool g_dockOrderLoaded = false;
+std::vector<std::string> g_dockOrder;
 // drag & drop state (rows slide while one is carried by the cursor)
-float s_dockScrollTarget = -1.0f;         // smooth-scroll target of the dock list
-std::string s_dragId;                       // id of the row being carried ("" = none)
-ImVec2 s_dragPos(0.0f, 0.0f);               // smoothed top-left of the carried row (screen px)
-ImVec2 s_dragGrab(0.0f, 0.0f);              // cursor offset inside the carried row
-std::unordered_map<std::string, ImVec2> s_rowOff;   // per-row visual offset from its natural slot
+float g_dockScrollTarget = -1.0f;         // smooth-scroll target of the dock list
+std::string g_dragId;                       // id of the row being carried ("" = none)
+ImVec2 g_dragPos(0.0f, 0.0f);               // smoothed top-left of the carried row (screen px)
+ImVec2 g_dragGrab(0.0f, 0.0f);              // cursor offset inside the carried row
+std::unordered_map<std::string, ImVec2> g_rowOff;   // per-row visual offset from its natural slot
 
-std::wstring DockOrderPath() {
-    const std::wstring dir = Settings::GameDir();
-    return dir.empty() ? std::wstring() : dir + L"\\urushi_dock.ini";
-}
-void LoadDockOrder() {
-    if (s_dockOrderLoaded) return;
-    const std::wstring path = DockOrderPath();
-    if (path.empty()) return;
-    s_dockOrderLoaded = true;
-    const int n = static_cast<int>(GetPrivateProfileIntW(L"order", L"count", 0, path.c_str()));
-    for (int i = 0; i < n && i < 512; ++i) {
-        wchar_t buf[256] = {};
-        GetPrivateProfileStringW(L"order", std::to_wstring(i).c_str(), L"", buf, 256, path.c_str());
-        if (buf[0]) s_dockOrder.push_back(Logger::ToNarrow(buf));
-    }
-}
-int DockRank(const std::string& id) {
-    for (size_t i = 0; i < s_dockOrder.size(); ++i) if (s_dockOrder[i] == id) return static_cast<int>(i);
-    return 1 << 20;   // not saved yet: after the ones the user ordered
-}
-float s_dockAlpha = 0.0f;
-float s_lastDockX = 0.0f, s_lastDockY = 0.0f, s_lastDockW = 0.0f, s_lastDockH = 0.0f;
-float s_lastWorkW = 0.0f, s_lastWorkH = 0.0f;
+float g_dockAlpha = 0.0f;
+float g_lastDockX = 0.0f, g_lastDockY = 0.0f, g_lastDockW = 0.0f, g_lastDockH = 0.0f;
+float g_lastWorkW = 0.0f, g_lastWorkH = 0.0f;
 
-float s_userScale = 0.0f;       // 0.0f = Auto
-float s_autoScale = 1.0f;
-float s_uiScale = 1.0f;
-float s_appliedThemeScale = -1.0f;
+float g_userScale = 0.0f;       // 0.0f = Auto
+float g_autoScale = 1.0f;
+float g_uiScale = 1.0f;
+float g_appliedThemeScale = -1.0f;
 
-bool s_previewActive = false;
-float s_previewW = 0.0f;
-float s_previewH = 0.0f;
-float s_previewForcedScale = -1.0f;
+bool g_previewActive = false;
+float g_previewW = 0.0f;
+float g_previewH = 0.0f;
+float g_previewForcedScale = -1.0f;
 
-float s_layoutWorkW = 0.0f;
-float s_layoutWorkH = 0.0f;
-float s_layoutScale = 0.0f;
+float g_layoutWorkW = 0.0f;
+float g_layoutWorkH = 0.0f;
+float g_layoutScale = 0.0f;
 
-std::vector<WindowState> s_windows;
-std::unordered_map<ImGuiID, float> s_animFloat;
-std::vector<std::unique_ptr<CardFrame>> s_cardStack;
+std::vector<WindowState> g_windows;
+std::unordered_map<ImGuiID, float> g_animFloat;
+std::vector<std::unique_ptr<CardFrame>> g_cardStack;
 
-// ==================== Helpers ====================
-
-static ImVec4 U32ToVec4(ImU32 col) {
+ImVec4 U32ToVec4(ImU32 col) {
     return ImGui::ColorConvertU32ToFloat4(col);
 }
 
-static ImU32 ScaleAlpha(ImU32 col, float mul) {
+ImU32 ScaleAlpha(ImU32 col, float mul) {
     if (mul >= 0.999f) return col;
     if (mul <= 0.001f) return col & ~IM_COL32_A_MASK;
     int a = static_cast<int>(((col >> IM_COL32_A_SHIFT) & 0xFF) * mul);
@@ -188,7 +93,7 @@ static ImU32 ScaleAlpha(ImU32 col, float mul) {
     return (col & ~IM_COL32_A_MASK) | (static_cast<ImU32>(a) << IM_COL32_A_SHIFT);
 }
 
-static ImU32 LerpCol(ImU32 a, ImU32 b, float t) {
+ImU32 LerpCol(ImU32 a, ImU32 b, float t) {
     t = std::clamp(t, 0.0f, 1.0f);
     int ar = (a >> IM_COL32_R_SHIFT) & 0xFF, ag = (a >> IM_COL32_G_SHIFT) & 0xFF, ab = (a >> IM_COL32_B_SHIFT) & 0xFF, aa = (a >> IM_COL32_A_SHIFT) & 0xFF;
     int br = (b >> IM_COL32_R_SHIFT) & 0xFF, bg = (b >> IM_COL32_G_SHIFT) & 0xFF, bb = (b >> IM_COL32_B_SHIFT) & 0xFF, ba = (b >> IM_COL32_A_SHIFT) & 0xFF;
@@ -200,12 +105,12 @@ static ImU32 LerpCol(ImU32 a, ImU32 b, float t) {
     );
 }
 
-static float AnimateTowards(ImGuiID key, float target, float speed = 18.0f) {
+float AnimateTowards(ImGuiID key, float target, float speed) {
     float dt = ImGui::GetIO().DeltaTime;
     if (dt <= 0.0f || dt > 0.25f) dt = 0.016f;
-    auto it = s_animFloat.find(key);
-    if (it == s_animFloat.end()) {
-        s_animFloat[key] = target;
+    auto it = g_animFloat.find(key);
+    if (it == g_animFloat.end()) {
+        g_animFloat[key] = target;
         return target;
     }
     float alpha = 1.0f - std::exp(-speed * dt);
@@ -214,10 +119,10 @@ static float AnimateTowards(ImGuiID key, float target, float speed = 18.0f) {
     return it->second;
 }
 
-static void RebuildCustomAccentDef() {
-    const float r = std::clamp(s_customRgb[0], 0.0f, 1.0f);
-    const float g = std::clamp(s_customRgb[1], 0.0f, 1.0f);
-    const float b = std::clamp(s_customRgb[2], 0.0f, 1.0f);
+void RebuildCustomAccentDef() {
+    const float r = std::clamp(g_customRgb[0], 0.0f, 1.0f);
+    const float g = std::clamp(g_customRgb[1], 0.0f, 1.0f);
+    const float b = std::clamp(g_customRgb[2], 0.0f, 1.0f);
     const int ri = static_cast<int>(std::round(r * 255.0f));
     const int gi = static_cast<int>(std::round(g * 255.0f));
     const int bi = static_cast<int>(std::round(b * 255.0f));
@@ -226,24 +131,24 @@ static void RebuildCustomAccentDef() {
     const int bh = std::min(255, static_cast<int>(std::round((b + (1.0f - b) * 0.16f) * 255.0f)));
     const float lum = 0.2126f * r + 0.7152f * g + 0.0722f * b;
 
-    s_customAccentDef.name  = "custom";
-    s_customAccentDef.main  = IM_COL32(ri, gi, bi, 255);
-    s_customAccentDef.hover = IM_COL32(rh, gh, bh, 255);
-    s_customAccentDef.fg    = (lum > 0.52f) ? IM_COL32(14, 14, 18, 255) : IM_COL32(255, 255, 255, 255);
-    s_customAccentDef.soft  = IM_COL32(ri, gi, bi, 40);
-    s_customAccentDef.line  = IM_COL32(ri, gi, bi, 102);
+    g_customAccentDef.name  = "custom";
+    g_customAccentDef.main  = IM_COL32(ri, gi, bi, 255);
+    g_customAccentDef.hover = IM_COL32(rh, gh, bh, 255);
+    g_customAccentDef.fg    = (lum > 0.52f) ? IM_COL32(14, 14, 18, 255) : IM_COL32(255, 255, 255, 255);
+    g_customAccentDef.soft  = IM_COL32(ri, gi, bi, 40);
+    g_customAccentDef.line  = IM_COL32(ri, gi, bi, 102);
 }
 
-static const AccentDef& CurrentAccentDef() {
-    if (s_accent == UrushiUI::Accent::Custom) {
-        return s_customAccentDef;
+const AccentDef& CurrentAccentDef() {
+    if (g_accent == UrushiUI::Accent::Custom) {
+        return g_customAccentDef;
     }
-    int idx = static_cast<int>(s_accent);
+    int idx = static_cast<int>(g_accent);
     if (idx < 0 || idx >= 4) idx = 0;
     return kAccents[idx];
 }
 
-static float QueryMonitorDpiFactor() {
+float QueryMonitorDpiFactor() {
     using t_GetDpiForWindow = UINT(WINAPI*)(HWND);
     static t_GetDpiForWindow pfnGetDpi = []() -> t_GetDpiForWindow {
         HMODULE u32 = GetModuleHandleW(L"user32.dll");
@@ -259,13 +164,13 @@ static float QueryMonitorDpiFactor() {
     return 1.0f;
 }
 
-static float ComputeAutoScaleForViewport(float workW, float workH) {
+float ComputeAutoScaleForViewport(float workW, float workH) {
     if (workW <= 1.0f || workH <= 1.0f) return 1.0f;
     const float hRatio = workH / 1080.0f;
     float candidate = std::clamp(1.0f + (hRatio - 1.0f) * 0.72f, 0.80f, 1.95f);
 
     if (workW >= 1500.0f && workH >= 860.0f) {
-        const float monitorDpi = s_previewActive ? 1.0f : QueryMonitorDpiFactor();
+        const float monitorDpi = g_previewActive ? 1.0f : QueryMonitorDpiFactor();
         candidate = std::max(candidate, std::min(monitorDpi, 1.60f));
     } else {
         const float maxSafeW = std::max(0.80f, workW / 1500.0f);
@@ -275,7 +180,7 @@ static float ComputeAutoScaleForViewport(float workW, float workH) {
     return std::clamp(candidate, 0.80f, 2.00f);
 }
 
-static ImVec2 ComputeDefaultOrigin(const WindowState& win, float S, float workW, float workH, float targetW, float outerH) {
+ImVec2 ComputeDefaultOrigin(const WindowState& win, float S, float workW, float workH, float targetW, float outerH) {
     float x = win.anchorRight ? (workW - targetW - win.defaultX * S) : (win.defaultX * S);
     float y = win.defaultY * S;
     const float maxPosX = std::max(12.0f * S, workW - targetW - 12.0f * S);
@@ -283,814 +188,14 @@ static ImVec2 ComputeDefaultOrigin(const WindowState& win, float S, float workW,
     return ImVec2(std::clamp(x, 12.0f * S, maxPosX), std::clamp(y, 12.0f * S, maxPosY));
 }
 
-static WindowState* FindWindowLocked(const std::string& id) {
-    for (auto& w : s_windows) {
+WindowState* FindWindowLocked(const std::string& id) {
+    for (auto& w : g_windows) {
         if (w.id == id) return &w;
     }
     return nullptr;
 }
 
-// Vector 16px icons drawn via ImDrawList
-static void DrawModuleIcon(ImDrawList* dl, ImVec2 center, const std::string& icon, ImU32 col, float s) {
-    const float r = 6.5f * s;
-    const float th = std::max(1.2f, 1.5f * s);
-    if (icon == "gauge") {
-        dl->PathArcTo(center, r, 3.14159f * 0.85f, 3.14159f * 2.15f, 16);
-        dl->PathStroke(col, ImDrawFlags_None, th);
-        dl->AddLine(center, ImVec2(center.x + 3.8f * s, center.y - 3.2f * s), col, th);
-        dl->AddCircleFilled(center, 1.5f * s, col);
-    } else if (icon == "shader") {
-        ImVec2 pts[6] = {
-            ImVec2(center.x, center.y - r),
-            ImVec2(center.x + r * 0.86f, center.y - r * 0.5f),
-            ImVec2(center.x + r * 0.86f, center.y + r * 0.5f),
-            ImVec2(center.x, center.y + r),
-            ImVec2(center.x - r * 0.86f, center.y + r * 0.5f),
-            ImVec2(center.x - r * 0.86f, center.y - r * 0.5f)
-        };
-        dl->AddPolyline(pts, 6, col, ImDrawFlags_Closed, th);
-        dl->AddLine(center, pts[0], col, th * 0.85f);
-        dl->AddLine(center, pts[2], col, th * 0.85f);
-        dl->AddLine(center, pts[4], col, th * 0.85f);
-    } else if (icon == "play") {
-        ImVec2 p1(center.x - 4.0f * s, center.y - 5.5f * s);
-        ImVec2 p2(center.x + 5.5f * s, center.y);
-        ImVec2 p3(center.x - 4.0f * s, center.y + 5.5f * s);
-        dl->AddTriangle(p1, p2, p3, col, th);
-    } else if (icon == "shield") {
-        ImVec2 pts[5] = {
-            ImVec2(center.x, center.y - 6.5f * s),
-            ImVec2(center.x + 5.5f * s, center.y - 4.2f * s),
-            ImVec2(center.x + 4.8f * s, center.y + 1.8f * s),
-            ImVec2(center.x, center.y + 6.5f * s),
-            ImVec2(center.x - 4.8f * s, center.y + 1.8f * s)
-        };
-        ImVec2 pLeft(center.x - 5.5f * s, center.y - 4.2f * s);
-        ImVec2 full[6] = { pts[0], pts[1], pts[2], pts[3], pts[4], pLeft };
-        dl->AddPolyline(full, 6, col, ImDrawFlags_Closed, th);
-    } else if (icon == "ghost") {
-        dl->AddCircle(ImVec2(center.x, center.y - 1.0f * s), 5.0f * s, col, 16, th);
-        dl->AddCircleFilled(ImVec2(center.x - 1.8f * s, center.y - 1.5f * s), 1.1f * s, col);
-        dl->AddCircleFilled(ImVec2(center.x + 1.8f * s, center.y - 1.5f * s), 1.1f * s, col);
-    } else if (icon == "hud") {
-        dl->AddRect(ImVec2(center.x - 6.5f * s, center.y - 4.8f * s), ImVec2(center.x + 6.5f * s, center.y + 3.2f * s), col, 2.0f * s, 0, th);
-        dl->AddLine(ImVec2(center.x - 3.5f * s, center.y + 6.0f * s), ImVec2(center.x + 3.5f * s, center.y + 6.0f * s), col, th);
-        dl->AddLine(ImVec2(center.x, center.y + 3.2f * s), ImVec2(center.x, center.y + 6.0f * s), col, th);
-    } else if (icon == "target") {
-        dl->AddCircle(center, 5.2f * s, col, 16, th);
-        dl->AddCircleFilled(center, 1.8f * s, col);
-        dl->AddLine(ImVec2(center.x - 7.4f * s, center.y), ImVec2(center.x - 3.4f * s, center.y), col, th);
-        dl->AddLine(ImVec2(center.x + 3.4f * s, center.y), ImVec2(center.x + 7.4f * s, center.y), col, th);
-        dl->AddLine(ImVec2(center.x, center.y - 7.4f * s), ImVec2(center.x, center.y - 3.4f * s), col, th);
-        dl->AddLine(ImVec2(center.x, center.y + 3.4f * s), ImVec2(center.x, center.y + 7.4f * s), col, th);
-    } else if (icon == "library") {
-        // three books on a shelf
-        const float w = 3.0f * s, g = 1.2f * s, base = center.y + 6.0f * s;
-        float x = center.x - 5.4f * s;
-        const float hs[3] = { 10.0f * s, 12.5f * s, 9.0f * s };
-        for (int i = 0; i < 3; ++i) {
-            dl->AddRect(ImVec2(x, base - hs[i]), ImVec2(x + w, base), col, 0.0f, ImDrawFlags_None, th * 0.9f);
-            x += w + g;
-        }
-    } else if (icon == "wheel") {
-        dl->AddCircle(center, r, col, 20, th);
-        dl->AddCircle(center, 1.9f * s, col, 12, th * 0.9f);
-        dl->AddLine(ImVec2(center.x - r, center.y), ImVec2(center.x - 1.9f * s, center.y), col, th);
-        dl->AddLine(ImVec2(center.x + 1.9f * s, center.y), ImVec2(center.x + r, center.y), col, th);
-        dl->AddLine(ImVec2(center.x, center.y + 1.9f * s), ImVec2(center.x, center.y + r), col, th);
-    } else if (icon == "keyboard") {
-        dl->AddRect(ImVec2(center.x - 6.5f * s, center.y - 4.5f * s),
-                    ImVec2(center.x + 6.5f * s, center.y + 4.5f * s), col, 1.5f * s, 0, th);
-        dl->AddLine(ImVec2(center.x - 4.0f * s, center.y - 2.0f * s), ImVec2(center.x - 2.5f * s, center.y - 2.0f * s), col, th);
-        dl->AddLine(ImVec2(center.x - 0.7f * s, center.y - 2.0f * s), ImVec2(center.x + 0.8f * s, center.y - 2.0f * s), col, th);
-        dl->AddLine(ImVec2(center.x + 2.5f * s, center.y - 2.0f * s), ImVec2(center.x + 4.0f * s, center.y - 2.0f * s), col, th);
-        dl->AddLine(ImVec2(center.x - 3.5f * s, center.y + 1.8f * s), ImVec2(center.x + 3.5f * s, center.y + 1.8f * s), col, th);
-    } else {
-        // settings / gear
-        dl->AddCircle(center, 3.0f * s, col, 14, th);
-        for (int i = 0; i < 6; ++i) {
-            float ang = i * (3.1415926f / 3.0f);
-            float cs = std::cos(ang), sn = std::sin(ang);
-            dl->AddLine(ImVec2(center.x + cs * 4.2f * s, center.y + sn * 4.2f * s),
-                        ImVec2(center.x + cs * 6.5f * s, center.y + sn * 6.5f * s), col, th);
-        }
-    }
-}
-
-// ==================== Floating Dock Rendering ====================
-
-// Official 20x20 anti-aliased SVG alpha bitmaps (rasterized directly from official SVGs)
-static const unsigned char kDiscordAlpha20[20 * 20] = {
-      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
-      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
-      0,   0,   0,   0,   0,  24,  90,  43,   0,   0,   0,   0,  45,  89,  22,   0,   0,   0,   0,   0,
-      0,   0,   1, 105, 201, 255, 255, 204, 173, 192, 192, 173, 206, 255, 255, 200, 104,   1,   0,   0,
-      0,   0,  99, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,  97,   0,   0,
-      0,  10, 234, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 234,  10,   0,
-      0, 120, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 113,   0,
-      2, 232, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 226,   1,
-     74, 255, 255, 255, 255, 255, 214, 250, 255, 255, 255, 255, 250, 214, 255, 255, 255, 255, 255,  59,
-    136, 255, 255, 255, 255,  82,   0,  21, 230, 255, 255, 224,  20,   0,  90, 255, 255, 255, 255, 120,
-    190, 255, 255, 255, 240,   0,   0,   0, 148, 255, 255, 146,   0,   0,   0, 240, 255, 255, 255, 178,
-    227, 255, 255, 255, 254,  19,   0,   0, 179, 255, 255, 182,   0,   0,  18, 254, 255, 255, 255, 212,
-    243, 255, 255, 255, 255, 192,  86, 144, 255, 255, 255, 255, 143,  86, 193, 255, 255, 255, 255, 236,
-    252, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 251,
-    243, 255, 255, 255, 234, 235, 255, 255, 255, 255, 255, 255, 255, 255, 233, 235, 255, 255, 255, 239,
-     60, 211, 255, 255, 242, 123,  68, 125, 155, 180, 180, 155, 124,  66, 126, 243, 255, 255, 208,  59,
-      0,   2, 108, 219, 255, 214,   6,   0,   0,   0,   0,   0,   0,   7, 220, 255, 216, 105,   2,   0,
-      0,   0,   0,   0,  67,  44,   0,   0,   0,   0,   0,   0,   0,   0,  48,  64,   0,   0,   0,   0,
-      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
-      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
-};
-
-static const unsigned char kGithubAlpha20[20 * 20] = {
-      0,   0,   0,   0,   0,   0,  26,  98, 145, 177, 176, 144,  96,  24,   0,   0,   0,   0,   0,   0,
-      0,   0,   0,   0,  28, 169, 255, 255, 255, 255, 255, 255, 255, 254, 161,  22,   0,   0,   0,   0,
-      0,   0,   0,  68, 241, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 235,  55,   0,   0,   0,
-      0,   0,  79, 253, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 250,  63,   0,   0,
-      0,  43, 245, 255, 196,  90, 197, 255, 255, 255, 255, 255, 255, 191,  87, 205, 255, 236,  29,   0,
-      1, 203, 255, 255, 126,   0,   1,  94,  26,   0,   0,  28,  89,   0,   0, 140, 255, 255, 182,   0,
-     83, 255, 255, 255, 126,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 141, 255, 255, 255,  59,
-    163, 255, 255, 255,  87,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  97, 255, 255, 255, 136,
-    221, 255, 255, 219,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 229, 255, 255, 196,
-    241, 255, 255, 169,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 181, 255, 255, 229,
-    248, 255, 255, 171,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 182, 255, 255, 247,
-    227, 255, 255, 216,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 231, 255, 255, 224,
-    182, 255, 255, 255,  53,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  75, 255, 255, 255, 177,
-    118, 255, 255, 255, 226,  46,   0,   0,   0,   0,   0,   0,   0,   0,  60, 234, 255, 255, 255, 111,
-     18, 244, 227, 122, 234, 253, 191, 113,   3,   0,   0,   9, 121, 201, 255, 255, 255, 255, 236,  12,
-      0, 127, 255, 188,  56, 240, 255, 180,   0,   0,   0,   0, 207, 255, 255, 255, 255, 255, 112,   0,
-      0,  11, 203, 255,  66,  20,  64,  18,   0,   0,   0,   0, 145, 255, 255, 255, 255, 189,   6,   0,
-      0,   0,  14, 193, 241, 123,  86,  64,   0,   0,   0,   0, 141, 255, 255, 255, 176,   9,   0,   0,
-      0,   0,   0,   5, 150, 255, 255, 128,   0,   0,   0,   0, 146, 255, 239, 110,   1,   0,   0,   0,
-      0,   0,   0,   0,   0,  69, 162,  73,   0,   0,   0,   0,  84, 139,  18,   0,   0,   0,   0,   0,
-};
-
-// Official Lucide refresh-cw 16x16 anti-aliased SVG alpha bitmap
-static const unsigned char kLucideRefreshAlpha16[16 * 16] = {
-      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
-      0,   0,   0,   0,   0,  60, 119, 168, 169, 122,  69,   0,   0, 115, 111,   0,
-      0,   0,   0,  18, 169, 255, 255, 224, 220, 255, 255, 195,  36, 214, 213,   0,
-      0,   0,  22, 230, 253, 144,  34,   0,   0,  24, 133, 254, 249, 227, 213,   0,
-      0,   0, 176, 253,  57,   0,   0,   0,   0,   1, 105, 156, 245, 255, 226,   0,
-      0,  42, 255, 134,   0,   0,   0,   0,   0,  15, 243, 255, 255, 255, 234,   0,
-      0, 112, 255,  26,   0,   0,   0,   0,   0,   0,  31,  64,  64,  85,  34,   0,
-      0, 182, 239,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 115, 111,   0,
-      0, 115, 108,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0, 240, 187,   0,
-      0,  37,  77,  64,  64,  40,   0,   0,   0,   0,   0,   0,  31, 255, 136,   0,
-      0, 241, 255, 255, 255, 255,  19,   0,   0,   0,   0,   0, 139, 255,  85,   0,
-      0, 227, 255, 244, 155, 128,   1,   0,   0,   0,   0,  56, 253, 204,   8,   0,
-      0, 214, 227, 249, 253, 132,  22,   0,   0,   0, 100, 248, 230,  27,   0,   0,
-      0, 214, 213,  37, 194, 255, 255, 218, 209, 241, 255, 161,  17,   0,   0,   0,
-      0, 115, 108,   0,   1,  69, 123, 170, 168, 119,  58,   0,   0,   0,   0,   0,
-      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
-};
-
-static void DrawAlphaMask(ImDrawList* dl, ImVec2 pos, float size, const unsigned char* mask, int w, int h, ImU32 baseCol) {
-    const float pixelW = size / static_cast<float>(w);
-    const float pixelH = size / static_cast<float>(h);
-    const ImVec4 base = ImGui::ColorConvertU32ToFloat4(baseCol);
-
-    for (int y = 0; y < h; ++y) {
-        int runStart = -1;
-        float alphaSum = 0.0f;
-        for (int x = 0; x <= w; ++x) {
-            unsigned char a = (x < w) ? mask[y * w + x] : 0;
-            if (a > 20) {
-                if (runStart < 0) {
-                    runStart = x;
-                    alphaSum = a / 255.0f;
-                } else {
-                    alphaSum += a / 255.0f;
-                }
-            } else {
-                if (runStart >= 0) {
-                    int len = x - runStart;
-                    float avgAlpha = std::min(1.0f, (alphaSum / len) * 1.15f);
-                    ImU32 col = ImGui::ColorConvertFloat4ToU32(ImVec4(base.x, base.y, base.z, base.w * avgAlpha));
-                    dl->AddRectFilled(
-                        ImVec2(pos.x + runStart * pixelW, pos.y + y * pixelH),
-                        ImVec2(pos.x + x * pixelW, pos.y + (y + 1) * pixelH),
-                        col);
-                    runStart = -1;
-                    alphaSum = 0.0f;
-                }
-            }
-        }
-    }
-}
-
-static void RenderDock(bool menuOpen) {
-    float dt = ImGui::GetIO().DeltaTime;
-    if (dt <= 0.0f || dt > 0.25f) dt = 0.016f;
-    if (!menuOpen) { s_dockEdit = false; s_dragId.clear(); }   // closing the menu leaves reorder mode
-    const float targetAlpha = menuOpen ? 1.0f : 0.0f;
-    s_dockAlpha += (targetAlpha - s_dockAlpha) * (1.0f - std::exp(-20.0f * dt));
-    if (!menuOpen && s_dockAlpha < 0.02f) {
-        s_dockAlpha = 0.0f;
-        return;
-    }
-
-    const float S = s_uiScale;
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const float dockW = 246.0f * S;
-    const float padX = 12.0f * S;
-    const float padY = 12.0f * S;
-    const float innerW = dockW - padX * 2.0f;
-    const size_t modCount = s_windows.size();
-    const float headerTotal = 36.0f * S;
-    const float availListH = std::max(80.0f, vp->WorkSize.y - 24.0f * S - padY * 2.0f - headerTotal);
-    const float btnH = 34.0f * S;
-    const float btnGap = 4.0f * S;
-    // At most kDockMaxVisible entries are shown at once (fewer if the screen is short); the rest scrolls with the wheel.
-    size_t visibleCount = std::min<size_t>(modCount, kDockMaxVisible);
-    while (visibleCount > 3 && static_cast<float>(visibleCount) * (btnH + btnGap) - btnGap > availListH) --visibleCount;
-    const bool scrolling = modCount > visibleCount;
-    const float listH = (modCount > 0)
-        ? (static_cast<float>(visibleCount) * btnH + static_cast<float>(visibleCount - 1) * btnGap)
-        : 24.0f * S;
-    const float dockH = std::min(vp->WorkSize.y - 24.0f * S, padY * 2.0f + headerTotal + listH);
-    const float dockX = vp->WorkPos.x + 18.0f * S;
-    const float dockY = vp->WorkPos.y + (vp->WorkSize.y - dockH) * 0.5f;
-
-    s_lastWorkW = vp->WorkSize.x;
-    s_lastWorkH = vp->WorkSize.y;
-    s_lastDockX = dockX - vp->WorkPos.x;
-    s_lastDockY = dockY - vp->WorkPos.y;
-    s_lastDockW = dockW;
-    s_lastDockH = dockH;
-
-    ImGui::SetNextWindowPos(ImVec2(dockX, dockY), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(dockW, dockH), ImGuiCond_Always);
-
-    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, s_dockAlpha);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(padX, padY));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, btnGap));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 14.0f * S);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, U32ToVec4(kColBgDock));
-    ImGui::PushStyleColor(ImGuiCol_Border, U32ToVec4(kColHairlineStrong));
-
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
-                             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus;
-    if (!menuOpen) flags |= ImGuiWindowFlags_NoInputs;
-
-    if (ImGui::Begin("##UrushiFloatingDock", nullptr, flags)) {
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-
-        // 1. Brand Header
-        const ImVec2 hPos = ImGui::GetCursorScreenPos();
-        dl->AddRectFilled(hPos, ImVec2(hPos.x + 22.0f * S, hPos.y + 22.0f * S), kColBgCard, 6.0f * S);
-        dl->AddRect(hPos, ImVec2(hPos.x + 22.0f * S, hPos.y + 22.0f * S), kColHairlineStrong, 6.0f * S);
-        dl->AddCircleFilled(ImVec2(hPos.x + 11.0f * S, hPos.y + 11.0f * S), 4.5f * S, UrushiUI::GetAccentU32());
-
-        if (AppFonts::Large) ImGui::PushFont(AppFonts::Large);
-        dl->AddText(ImVec2(hPos.x + 31.0f * S, hPos.y + 1.0f * S), kColTextPrimary, "URUSHI");
-        if (AppFonts::Large) ImGui::PopFont();
-
-        // Discord link button
-        {
-            const float tw = 20.0f * S;
-            const ImVec2 tp(hPos.x + 98.0f * S, hPos.y + 1.0f * S);
-            ImGui::SetCursorScreenPos(tp);
-            if (ImGui::InvisibleButton("##dock_discord", ImVec2(tw, 20.0f * S))) {
-                ShellExecuteW(nullptr, L"open", L"https://discord.gg/jS6cc49EbT", nullptr, nullptr, SW_SHOWNORMAL);
-            }
-            const bool hv = ImGui::IsItemHovered();
-            if (hv) {
-                dl->AddRectFilled(tp, ImVec2(tp.x + tw, tp.y + 20.0f * S), IM_COL32(88, 101, 242, 45), 4.0f * S);
-                dl->AddRect(tp, ImVec2(tp.x + tw, tp.y + 20.0f * S), IM_COL32(88, 101, 242, 180), 4.0f * S);
-                ImGui::SetTooltip("%s", s_language == UrushiUI::Language::Russian
-                    ? u8"Discord: сообщество URUSHI (чат и поддержка)"
-                    : "Discord: URUSHI community (chat & support)");
-            }
-            const ImU32 col = hv ? IM_COL32(88, 101, 242, 255) : kColTextMuted;
-            DrawAlphaMask(dl, ImVec2(tp.x + 3.0f * S, tp.y + 3.0f * S), 14.0f * S, kDiscordAlpha20, 20, 20, col);
-        }
-
-        // GitHub link button
-        {
-            const float tw = 20.0f * S;
-            const ImVec2 tp(hPos.x + 124.0f * S, hPos.y + 1.0f * S);
-            ImGui::SetCursorScreenPos(tp);
-            if (ImGui::InvisibleButton("##dock_github", ImVec2(tw, 20.0f * S))) {
-                ShellExecuteW(nullptr, L"open", L"https://github.com/Garagoro/Urushi", nullptr, nullptr, SW_SHOWNORMAL);
-            }
-            const bool hv = ImGui::IsItemHovered();
-            if (hv) {
-                dl->AddRectFilled(tp, ImVec2(tp.x + tw, tp.y + 20.0f * S), IM_COL32(255, 255, 255, 25), 4.0f * S);
-                dl->AddRect(tp, ImVec2(tp.x + tw, tp.y + 20.0f * S), IM_COL32(255, 255, 255, 120), 4.0f * S);
-                ImGui::SetTooltip("%s", s_language == UrushiUI::Language::Russian
-                    ? u8"GitHub: репозиторий, исходный код и релизы"
-                    : "GitHub: repository, source code & releases");
-            }
-            const ImU32 col = hv ? IM_COL32(255, 255, 255, 255) : kColTextMuted;
-            DrawAlphaMask(dl, ImVec2(tp.x + 3.0f * S, tp.y + 3.0f * S), 14.0f * S, kGithubAlpha20, 20, 20, col);
-        }
-
-        std::string verLabel = std::string("v") + URUSHI_VERSION;
-        if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
-        ImVec2 verSz = ImGui::CalcTextSize(verLabel.c_str());
-        dl->AddText(ImVec2(hPos.x + innerW - verSz.x, hPos.y + 4.0f * S), kColTextMuted, verLabel.c_str());
-        if (AppFonts::Small) ImGui::PopFont();
-
-        // reorder toggle (left of the version label)
-        {
-            const float tw = 20.0f * S;
-            const ImVec2 tp(hPos.x + innerW - verSz.x - 6.0f * S - tw, hPos.y + 1.0f * S);
-            ImGui::SetCursorScreenPos(tp);
-            if (ImGui::InvisibleButton("##dockedit", ImVec2(tw, 20.0f * S))) {
-                s_dockEdit = !s_dockEdit;
-            }
-            const bool hv = ImGui::IsItemHovered();
-            if (s_dockEdit || hv) {
-                dl->AddRectFilled(tp, ImVec2(tp.x + tw, tp.y + 20.0f * S),
-                                  s_dockEdit ? UrushiUI::GetAccentU32() : IM_COL32(255, 255, 255, 20), 4.0f * S);
-            }
-            const ImU32 gc = s_dockEdit ? IM_COL32(20, 20, 24, 255) : (hv ? kColTextPrimary : kColTextMuted);
-            for (int k = 0; k < 3; ++k) {   // three bars = "reorder"
-                const float y = tp.y + (6.0f + 4.0f * k) * S;
-                dl->AddLine(ImVec2(tp.x + 4.0f * S, y), ImVec2(tp.x + tw - 4.0f * S, y), gc, 1.5f * S);
-            }
-            if (hv) ImGui::SetTooltip("%s", s_language == UrushiUI::Language::Russian
-                ? u8"Изменить порядок (перетаскивание)" : "Reorder (drag & drop)");
-            ImGui::SetCursorScreenPos(hPos);
-        }
-
-        ImGui::Dummy(ImVec2(innerW, 24.0f * S));
-        dl->AddLine(ImVec2(hPos.x, hPos.y + 29.0f * S), ImVec2(hPos.x + innerW, hPos.y + 29.0f * S), kColHairline);
-        ImGui::Dummy(ImVec2(innerW, 4.0f * S));
-
-        // 2. Rows. Hit-testing uses the natural layout; visuals are drawn at animated offsets, so rows
-        //    slide out of the way while one is carried by the cursor and settle into the nearest slot on release.
-        const float listW = scrolling ? innerW - 8.0f * S : innerW;   // leave room for the scrollbar
-        const float step = btnH + btnGap;
-        if (scrolling) {
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-            ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, 4.0f * S);
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
-            ImGui::BeginChild("##dockscroll", ImVec2(innerW, listH), false, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollWithMouse);
-            dl = ImGui::GetWindowDrawList();
-            // smooth wheel scrolling: the wheel moves a target, the view eases towards it (fast enough to feel instant)
-            const float cur = ImGui::GetScrollY();
-            if (s_dockScrollTarget < 0.0f) s_dockScrollTarget = cur;
-            if (ImGui::IsWindowHovered() && s_dragId.empty() && ImGui::GetIO().MouseWheel != 0.0f)
-                s_dockScrollTarget -= ImGui::GetIO().MouseWheel * step * 1.5f;
-            if (!s_dragId.empty()) s_dockScrollTarget = cur;   // edge auto-scroll while carrying drives the view directly
-            s_dockScrollTarget = std::clamp(s_dockScrollTarget, 0.0f, ImGui::GetScrollMaxY());
-            if (std::fabs(s_dockScrollTarget - cur) > 0.5f)
-                ImGui::SetScrollY(cur + (s_dockScrollTarget - cur) * (1.0f - std::exp(-22.0f * dt)));
-            else
-                ImGui::SetScrollY(s_dockScrollTarget);
-        } else {
-            s_dockScrollTarget = -1.0f;
-        }
-        const ImVec2 listTop = ImGui::GetCursorScreenPos();            // natural position of row 0 (scroll included)
-        const int rowCount = static_cast<int>(s_windows.size());
-        const ImVec2 mouse = ImGui::GetIO().MousePos;
-
-        auto drawRow = [&](ImDrawList* d, ImVec2 rPos, const WindowState& w, float hoverT, float lift) {
-            ImU32 bgCol = w.open
-                ? LerpCol(IM_COL32(255, 255, 255, 18), IM_COL32(255, 255, 255, 26), hoverT)
-                : LerpCol(IM_COL32(255, 255, 255, 0),  IM_COL32(255, 255, 255, 14), hoverT);
-            if (lift > 0.0f) {
-                // carried row: shadow + solid card + accent outline
-                const ImVec2 a0(rPos.x - 2.0f * S, rPos.y - 2.0f * S), a1(rPos.x + listW + 2.0f * S, rPos.y + btnH + 2.0f * S);
-                d->AddRectFilled(ImVec2(a0.x, a0.y + 5.0f * S), ImVec2(a1.x, a1.y + 5.0f * S), IM_COL32(0, 0, 0, static_cast<int>(90 * lift)), 10.0f * S);
-                d->AddRectFilled(a0, a1, IM_COL32(30, 30, 38, 250), 10.0f * S);
-                d->AddRect(a0, a1, UrushiUI::GetAccentU32(), 10.0f * S, 0, 1.2f * S);
-            } else if ((bgCol >> IM_COL32_A_SHIFT) > 0) {
-                d->AddRectFilled(rPos, ImVec2(rPos.x + listW, rPos.y + btnH), bgCol, 8.0f * S);
-            }
-            if (w.open) {
-                d->AddRectFilled(ImVec2(rPos.x + 2.0f * S, rPos.y + 7.0f * S),
-                                 ImVec2(rPos.x + 4.5f * S, rPos.y + btnH - 7.0f * S), UrushiUI::GetAccentU32(), 2.0f * S);
-            }
-            const ImU32 fgCol = (w.open || lift > 0.0f) ? kColTextPrimary : LerpCol(kColTextSecondary, kColTextPrimary, hoverT);
-            DrawModuleIcon(d, ImVec2(rPos.x + 18.0f * S, rPos.y + btnH * 0.5f), w.icon, fgCol, S);
-
-            const float rightX = rPos.x + listW - 10.0f * S;
-            float titleClipMaxX = rightX - 10.0f * S;
-            if (w.pinned) titleClipMaxX -= 28.0f * S;
-            const ImVec2 txtSz = ImGui::CalcTextSize(w.title.c_str());
-            d->PushClipRect(ImVec2(rPos.x + 33.0f * S, rPos.y - 4.0f * S), ImVec2(std::max(rPos.x + 40.0f * S, titleClipMaxX), rPos.y + btnH + 4.0f * S), true);
-            d->AddText(ImVec2(rPos.x + 35.0f * S, rPos.y + (btnH - txtSz.y) * 0.5f), fgCol, w.title.c_str());
-            d->PopClipRect();
-
-            if (s_dockEdit) {
-                for (int k = 0; k < 3; ++k) {   // grip bars: the row can be picked up
-                    const float y = rPos.y + btnH * 0.5f + (k - 1) * 4.0f * S;
-                    d->AddLine(ImVec2(rightX - 8.0f * S, y), ImVec2(rightX + 2.0f * S, y),
-                               lift > 0.0f ? UrushiUI::GetAccentU32() : kColTextMuted, 1.4f * S);
-                }
-            } else {
-                const ImU32 dotCol = w.open ? UrushiUI::GetAccentU32() : IM_COL32(255, 255, 255, 32);
-                d->AddCircleFilled(ImVec2(rightX - 3.0f * S, rPos.y + btnH * 0.5f), 3.0f * S, dotCol);
-                if (w.pinned) {
-                    if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
-                    const ImVec2 pinSz = ImGui::CalcTextSize("PIN");
-                    d->AddText(ImVec2(rightX - 14.0f * S - pinSz.x, rPos.y + (btnH - pinSz.y) * 0.5f), kColTextMuted, "PIN");
-                    if (AppFonts::Small) ImGui::PopFont();
-                }
-            }
-        };
-
-        // carried row: where it is in the list, and where it would land
-        int dragIdx = -1;
-        if (!s_dragId.empty()) {
-            for (int i = 0; i < rowCount; ++i) if (s_windows[i].id == s_dragId) dragIdx = i;
-            if (dragIdx < 0 || !s_dockEdit) { s_dragId.clear(); dragIdx = -1; }
-        }
-        int insertIdx = dragIdx;
-        if (dragIdx >= 0) {
-            const float k = 1.0f - std::exp(-30.0f * dt);   // magnet: the row chases the cursor
-            s_dragPos.x += (mouse.x - s_dragGrab.x - s_dragPos.x) * k;
-            s_dragPos.y += (mouse.y - s_dragGrab.y - s_dragPos.y) * k;
-            insertIdx = std::clamp(static_cast<int>(std::floor((s_dragPos.y - listTop.y) / step + 0.5f)), 0, rowCount - 1);
-            if (scrolling) {   // edge auto-scroll while carrying
-                const float top = ImGui::GetWindowPos().y, bot = top + listH;
-                if (mouse.y < top + 26.0f * S) ImGui::SetScrollY(ImGui::GetScrollY() - 420.0f * S * dt);
-                else if (mouse.y > bot - 26.0f * S) ImGui::SetScrollY(ImGui::GetScrollY() + 420.0f * S * dt);
-            }
-        }
-
-        const float animK = 1.0f - std::exp(-18.0f * dt);
-        for (int i = 0; i < rowCount; ++i) {
-            WindowState& w = s_windows[i];
-            const ImVec2 nat = ImGui::GetCursorScreenPos();
-
-            ImGui::PushID(w.id.c_str());
-            const bool clicked = ImGui::InvisibleButton("##dockbtn", ImVec2(listW, btnH));
-            const bool hovered = ImGui::IsItemHovered();
-            const bool active = ImGui::IsItemActive();
-            const ImGuiID animKey = ImGui::GetItemID();
-            ImGui::PopID();
-
-            ImVec2& off = s_rowOff[w.id];
-            if (s_dockEdit && s_dragId.empty() && active && ImGui::IsMouseDragging(0, 4.0f * S)) {
-                const ImVec2 cp = ImGui::GetIO().MouseClickedPos[0];
-                s_dragId = w.id;
-                s_dragPos = ImVec2(nat.x + off.x, nat.y + off.y);
-                s_dragGrab = ImVec2(cp.x - s_dragPos.x, cp.y - s_dragPos.y);
-                dragIdx = i;
-                insertIdx = i;
-            }
-
-            ImVec2 tgt(0.0f, 0.0f);
-            if (dragIdx >= 0 && i != dragIdx) {
-                int disp = (i > dragIdx) ? i - 1 : i;   // index with the carried row taken out
-                if (disp >= insertIdx) ++disp;          // ...and a gap opened at the landing slot
-                tgt.y = static_cast<float>(disp - i) * step;
-            }
-            off.x += (tgt.x - off.x) * animK;
-            off.y += (tgt.y - off.y) * animK;
-            if (std::fabs(off.x - tgt.x) < 0.2f) off.x = tgt.x;
-            if (std::fabs(off.y - tgt.y) < 0.2f) off.y = tgt.y;
-
-            const float hoverT = AnimateTowards(animKey, (hovered && dragIdx < 0) ? 1.0f : 0.0f, 20.0f);
-            if (i == dragIdx) {
-                // landing slot marker (the card itself is drawn on top of everything below)
-                const ImVec2 sp(nat.x, listTop.y + static_cast<float>(insertIdx) * step);
-                dl->AddRectFilled(sp, ImVec2(sp.x + listW, sp.y + btnH), IM_COL32(255, 255, 255, 10), 8.0f * S);
-                dl->AddRect(sp, ImVec2(sp.x + listW, sp.y + btnH), UrushiUI::GetAccentU32(), 8.0f * S, 0, 1.0f * S);
-            } else {
-                drawRow(dl, ImVec2(nat.x + off.x, nat.y + off.y), w, hoverT, 0.0f);
-            }
-
-            if (!s_dockEdit && clicked) {
-                w.open = !w.open;
-                if (w.open) w.openAnim = 0.0f;
-            }
-        }
-
-        if (dragIdx >= 0) {
-            // the carried card floats above everything (may leave the dock)
-            drawRow(ImGui::GetForegroundDrawList(), s_dragPos, s_windows[dragIdx], 1.0f, 1.0f);
-
-            if (!ImGui::IsMouseDown(0)) {
-                // release: commit the nearest slot; every row keeps its current screen position and glides into place
-                const int from = dragIdx, to = insertIdx;
-                std::vector<int> newIndex(rowCount);
-                for (int i = 0; i < rowCount; ++i) {
-                    int ni = i;
-                    if (i == from) ni = to;
-                    else if (from < to && i > from && i <= to) ni = i - 1;
-                    else if (from > to && i >= to && i < from) ni = i + 1;
-                    newIndex[i] = ni;
-                }
-                for (int i = 0; i < rowCount; ++i) {
-                    ImVec2& o = s_rowOff[s_windows[i].id];
-                    if (i == from) {
-                        o = ImVec2(s_dragPos.x - listTop.x, s_dragPos.y - (listTop.y + static_cast<float>(to) * step));
-                    } else {
-                        o.y += static_cast<float>(i - newIndex[i]) * step;
-                    }
-                }
-                WindowState moved = std::move(s_windows[from]);
-                s_windows.erase(s_windows.begin() + from);
-                s_windows.insert(s_windows.begin() + to, std::move(moved));
-                s_dragId.clear();
-
-                s_dockOrder.clear();
-                for (const auto& w2 : s_windows) s_dockOrder.push_back(w2.id);
-                const std::wstring path = DockOrderPath();
-                if (!path.empty()) {
-                    WritePrivateProfileStringW(L"order", L"count", std::to_wstring(s_dockOrder.size()).c_str(), path.c_str());
-                    for (size_t k = 0; k < s_dockOrder.size(); ++k)
-                        WritePrivateProfileStringW(L"order", std::to_wstring(k).c_str(), Logger::ToWide(s_dockOrder[k]).c_str(), path.c_str());
-                }
-            }
-        }
-        if (scrolling) {
-            ImGui::EndChild();
-            ImGui::PopStyleColor();
-            ImGui::PopStyleVar(2);
-        }
-    }
-    ImGui::End();
-
-    ImGui::PopStyleColor(2);
-    ImGui::PopStyleVar(5);
-}
-
-// ==================== Floating Windows Rendering ====================
-
-static void RenderFloatingWindows(bool menuOpen, lua_State* L) {
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const float S = s_uiScale;
-
-    const bool firstLayout = (s_layoutWorkW <= 0.0f || s_layoutWorkH <= 0.0f || s_layoutScale <= 0.0f);
-    const bool viewportChanged = !firstLayout &&
-        (std::fabs(vp->WorkSize.x - s_layoutWorkW) > 1.0f ||
-         std::fabs(vp->WorkSize.y - s_layoutWorkH) > 1.0f ||
-         std::fabs(S - s_layoutScale) > 0.002f);
-
-    if (!s_previewActive && (firstLayout || viewportChanged)) {
-        if (viewportChanged) {
-            const float prevMaxWinH = std::min(960.0f * S, std::max(240.0f * S, vp->WorkSize.y * 0.90f));
-            for (auto& win : s_windows) {
-                const float targetW = std::min(win.width * S, std::max(220.0f * S, vp->WorkSize.x - 24.0f * S));
-                if (!win.userMoved) {
-                    const float estOuterH = std::min(prevMaxWinH, (40.0f + 22.0f + win.lastBodyH) * S);
-                    ImVec2 defPos = ComputeDefaultOrigin(win, S, vp->WorkSize.x, vp->WorkSize.y, targetW, estOuterH);
-                    win.posX = defPos.x;
-                    win.posY = defPos.y;
-                } else {
-                    const float oldSpanX = std::max(1.0f, s_layoutWorkW - win.actualW - 24.0f * s_layoutScale);
-                    const float oldSpanY = std::max(1.0f, s_layoutWorkH - win.actualH - 24.0f * s_layoutScale);
-                    const float fracX = std::clamp((win.posX - 12.0f * s_layoutScale) / oldSpanX, 0.0f, 1.0f);
-                    const float fracY = std::clamp((win.posY - 12.0f * s_layoutScale) / oldSpanY, 0.0f, 1.0f);
-                    const float newSpanX = std::max(0.0f, vp->WorkSize.x - targetW - 24.0f * S);
-                    const float newSpanY = std::max(0.0f, vp->WorkSize.y - std::min(vp->WorkSize.y * 0.85f, win.actualH * (S / std::max(0.1f, s_layoutScale))) - 24.0f * S);
-                    win.posX = std::clamp(12.0f * S + fracX * newSpanX, 12.0f * S, std::max(12.0f * S, vp->WorkSize.x - targetW - 12.0f * S));
-                    win.posY = std::clamp(12.0f * S + fracY * newSpanY, 12.0f * S, std::max(12.0f * S, vp->WorkSize.y - 120.0f * S));
-                }
-                win.pendingMoveKey = "relayout";
-            }
-        }
-        s_layoutWorkW = vp->WorkSize.x;
-        s_layoutWorkH = vp->WorkSize.y;
-        s_layoutScale = S;
-    }
-
-    s_lastWorkW = vp->WorkSize.x;
-    s_lastWorkH = vp->WorkSize.y;
-
-    float dt = ImGui::GetIO().DeltaTime;
-    if (dt <= 0.0f || dt > 0.25f) dt = 0.016f;
-
-    const float headerH = 40.0f * S;
-    const float bodyPadX = 14.0f * S;
-    const float bodyPadTop = 10.0f * S;
-    const float bodyPadBot = 12.0f * S;
-    const float maxWinH = std::min(960.0f * S, std::max(240.0f * S, vp->WorkSize.y * 0.90f));
-    const float maxBodyH = std::max(110.0f * S, maxWinH - headerH - bodyPadTop - bodyPadBot);
-    const float winRounding = 12.0f * S;
-
-    for (size_t i = 0; i < s_windows.size(); ++i) {
-        WindowState& w = s_windows[i];
-        const bool shouldShow = w.open && (menuOpen || w.pinned);
-        if (!shouldShow || w.luaRenderRef == -1 || !L) continue;
-
-        w.openAnim += (1.0f - w.openAnim) * (1.0f - std::exp(-22.0f * dt));
-        if (w.openAnim > 0.99f) w.openAnim = 1.0f;
-
-        const float targetW = std::min(w.width * S, std::max(220.0f * S, vp->WorkSize.x - 24.0f * S));
-        const float targetBodyH = std::clamp(w.lastBodyH * S, 28.0f * S, maxBodyH);
-        const float outerH = w.shaded ? headerH : (headerH + bodyPadTop + targetBodyH + bodyPadBot);
-        w.scrollable = (!w.shaded && (w.lastBodyH * S) > maxBodyH + 1.0f);
-
-        const float maxPosX = std::max(12.0f * S, vp->WorkSize.x - targetW - 12.0f * S);
-        const float maxPosY = std::max(12.0f * S, vp->WorkSize.y - std::max(headerH + 40.0f * S, outerH) - 12.0f * S);
-
-        if (s_previewActive) {
-            ImVec2 prevPos = ComputeDefaultOrigin(w, S, vp->WorkSize.x, vp->WorkSize.y, targetW, outerH);
-            if (w.userMoved) {
-                const float refW = (s_layoutWorkW > 1.0f) ? s_layoutWorkW : vp->WorkSize.x;
-                const float refH = (s_layoutWorkH > 1.0f) ? s_layoutWorkH : vp->WorkSize.y;
-                const float refS = (s_layoutScale > 0.1f) ? s_layoutScale : S;
-                const float oldSpanX = std::max(1.0f, refW - w.actualW - 24.0f * refS);
-                const float oldSpanY = std::max(1.0f, refH - w.actualH - 24.0f * refS);
-                const float fracX = std::clamp((w.posX - 12.0f * refS) / oldSpanX, 0.0f, 1.0f);
-                const float fracY = std::clamp((w.posY - 12.0f * refS) / oldSpanY, 0.0f, 1.0f);
-                prevPos.x = std::clamp(12.0f * S + fracX * std::max(0.0f, vp->WorkSize.x - targetW - 24.0f * S), 12.0f * S, maxPosX);
-                prevPos.y = std::clamp(12.0f * S + fracY * std::max(0.0f, vp->WorkSize.y - outerH - 24.0f * S), 12.0f * S, maxPosY);
-            }
-            ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + prevPos.x, vp->WorkPos.y + prevPos.y), ImGuiCond_Always);
-        } else if (!w.posInitialized) {
-            ImVec2 initPos = ComputeDefaultOrigin(w, S, vp->WorkSize.x, vp->WorkSize.y, targetW, outerH);
-            w.posX = initPos.x;
-            w.posY = initPos.y;
-            ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + initPos.x, vp->WorkPos.y + initPos.y), ImGuiCond_Always);
-            w.posInitialized = true;
-        } else if (!w.pendingMoveKey.empty()) {
-            w.posX = std::clamp(w.posX, 12.0f * S, maxPosX);
-            w.posY = std::clamp(w.posY, 12.0f * S, maxPosY);
-            ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + w.posX, vp->WorkPos.y + w.posY), ImGuiCond_Always);
-            w.pendingMoveKey.clear();
-        } else {
-            // Keep existing window clamped if viewport shrunk or bottom content expanded
-            const float cX = std::clamp(w.posX, 6.0f * S, std::max(6.0f * S, vp->WorkSize.x - targetW - 6.0f * S));
-            const float cY = std::clamp(w.posY, 6.0f * S, std::max(6.0f * S, vp->WorkSize.y - outerH - 6.0f * S));
-            if (std::fabs(cX - w.posX) > 1.0f || std::fabs(cY - w.posY) > 1.0f) {
-                w.posX = cX;
-                w.posY = cY;
-                ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + cX, vp->WorkPos.y + cY), ImGuiCond_Always);
-            }
-        }
-
-        ImGui::SetNextWindowSize(ImVec2(targetW, outerH), ImGuiCond_Always);
-
-        ImGuiWindowFlags wflags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
-                                  ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
-                                  ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
-        if (w.hudNoInputs && !menuOpen) {
-            wflags |= ImGuiWindowFlags_NoInputs;
-        }
-
-        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, std::max(0.25f, w.openAnim));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(bodyPadX, bodyPadBot));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, winRounding);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, U32ToVec4(kColBgWindow));
-        ImGui::PushStyleColor(ImGuiCol_Border, U32ToVec4(w.pinned ? UrushiUI::GetAccentLineU32() : kColHairlineStrong));
-
-        std::string winLabel = "##UrushiWin_" + w.id;
-        if (ImGui::Begin(winLabel.c_str(), nullptr, wflags)) {
-            const ImVec2 winPos = ImGui::GetWindowPos();
-            const ImVec2 winSize = ImGui::GetWindowSize();
-            if (!s_previewActive) {
-                w.posX = winPos.x - vp->WorkPos.x;
-                w.posY = winPos.y - vp->WorkPos.y;
-                w.actualW = winSize.x;
-                w.actualH = winSize.y;
-            }
-
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            ImDrawFlags hdrRound = w.shaded ? ImDrawFlags_RoundNone : (ImDrawFlags_RoundTopLeft | ImDrawFlags_RoundTopRight);
-            if (w.shaded) {
-                dl->AddRectFilled(winPos, ImVec2(winPos.x + winSize.x, winPos.y + headerH), kColBgHeader, winRounding);
-            } else {
-                dl->AddRectFilled(winPos, ImVec2(winPos.x + winSize.x, winPos.y + headerH), kColBgHeader, winRounding, hdrRound);
-                dl->AddLine(ImVec2(winPos.x, winPos.y + headerH), ImVec2(winPos.x + winSize.x, winPos.y + headerH), kColHairline);
-            }
-
-            const float btnSize = 22.0f * S;
-            const float btnGap = 4.0f * S;
-            const float pinW = 36.0f * S;
-            const float ctrlRight = winPos.x + winSize.x - 10.0f * S;
-            const float btnTop = winPos.y + (headerH - btnSize) * 0.5f;
-            const float shRight = ctrlRight - btnSize - btnGap;
-            const float pinRight = shRight - btnSize - btnGap;
-            const float titleMaxX = (pinRight - pinW) - 8.0f * S;
-
-            // Title + accent dot inside header (clipped before buttons)
-            dl->AddCircleFilled(ImVec2(winPos.x + 17.0f * S, winPos.y + headerH * 0.5f), 3.2f * S, UrushiUI::GetAccentU32());
-            ImVec2 tSz = ImGui::CalcTextSize(w.title.c_str());
-            dl->PushClipRect(ImVec2(winPos.x + 26.0f * S, winPos.y), ImVec2(std::max(winPos.x + 48.0f * S, titleMaxX), winPos.y + headerH), true);
-            dl->AddText(ImVec2(winPos.x + 28.0f * S, winPos.y + (headerH - tSz.y) * 0.5f), kColTextPrimary, w.title.c_str());
-            dl->PopClipRect();
-
-            // Header action buttons (Pin, Shade, Close) — only interactive if inputs allowed
-            const bool allowClicks = !(w.hudNoInputs && !menuOpen);
-            if (allowClicks) {
-                ImGui::PushID(w.id.c_str());
-                const float btnR = 5.0f * S;
-                const float stroke = std::max(1.2f, 1.45f * S);
-
-                // Close button
-                ImGui::SetCursorScreenPos(ImVec2(ctrlRight - btnSize, btnTop));
-                bool clickClose = ImGui::InvisibleButton("##close", ImVec2(btnSize, btnSize));
-                if (ImGui::IsItemHovered()) {
-                    dl->AddRectFilled(ImVec2(ctrlRight - btnSize, btnTop), ImVec2(ctrlRight, btnTop + btnSize), IM_COL32(255, 255, 255, 18), btnR);
-                }
-                ImVec2 cx(ctrlRight - btnSize * 0.5f, btnTop + btnSize * 0.5f);
-                ImU32 xCol = ImGui::IsItemHovered() ? kColTextPrimary : kColTextSecondary;
-                dl->AddLine(ImVec2(cx.x - 3.5f * S, cx.y - 3.5f * S), ImVec2(cx.x + 3.5f * S, cx.y + 3.5f * S), xCol, stroke);
-                dl->AddLine(ImVec2(cx.x - 3.5f * S, cx.y + 3.5f * S), ImVec2(cx.x + 3.5f * S, cx.y - 3.5f * S), xCol, stroke);
-
-                // Shade button
-                ImGui::SetCursorScreenPos(ImVec2(shRight - btnSize, btnTop));
-                bool clickShade = ImGui::InvisibleButton("##shade", ImVec2(btnSize, btnSize));
-                if (ImGui::IsItemHovered()) {
-                    dl->AddRectFilled(ImVec2(shRight - btnSize, btnTop), ImVec2(shRight, btnTop + btnSize), IM_COL32(255, 255, 255, 18), btnR);
-                }
-                ImVec2 sx(shRight - btnSize * 0.5f, btnTop + btnSize * 0.5f);
-                ImU32 sCol = ImGui::IsItemHovered() ? kColTextPrimary : kColTextSecondary;
-                dl->AddLine(ImVec2(sx.x - 4.0f * S, sx.y), ImVec2(sx.x + 4.0f * S, sx.y), sCol, stroke);
-                if (w.shaded) {
-                    dl->AddLine(ImVec2(sx.x, sx.y - 4.0f * S), ImVec2(sx.x, sx.y + 4.0f * S), sCol, stroke);
-                }
-
-                // Pin pill button
-                ImGui::SetCursorScreenPos(ImVec2(pinRight - pinW, btnTop));
-                bool clickPin = ImGui::InvisibleButton("##pin", ImVec2(pinW, btnSize));
-                bool pinHov = ImGui::IsItemHovered();
-                ImU32 pinBg = w.pinned ? UrushiUI::GetAccentSoftU32() : (pinHov ? IM_COL32(255, 255, 255, 14) : 0);
-                if ((pinBg >> IM_COL32_A_SHIFT) > 0) {
-                    dl->AddRectFilled(ImVec2(pinRight - pinW, btnTop), ImVec2(pinRight, btnTop + btnSize), pinBg, btnR);
-                }
-                if (w.pinned) {
-                    dl->AddRect(ImVec2(pinRight - pinW, btnTop), ImVec2(pinRight, btnTop + btnSize), UrushiUI::GetAccentLineU32(), btnR);
-                }
-                if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
-                ImVec2 pSz = ImGui::CalcTextSize("Pin");
-                dl->AddText(ImVec2(pinRight - pinW * 0.5f - pSz.x * 0.5f, btnTop + (btnSize - pSz.y) * 0.5f),
-                            w.pinned ? UrushiUI::GetAccentU32() : (pinHov ? kColTextPrimary : kColTextSecondary), "Pin");
-                if (AppFonts::Small) ImGui::PopFont();
-
-                // Header drag & double-click zone
-                float dragW = std::max(40.0f * S, (pinRight - pinW - 4.0f * S) - winPos.x);
-                ImGui::SetCursorScreenPos(winPos);
-                ImGui::InvisibleButton("##drag_hdr", ImVec2(dragW, headerH));
-                if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
-                    w.shaded = !w.shaded;
-                }
-                if (ImGui::IsItemActive() && ImGui::IsMouseDragging(0)) {
-                    w.userMoved = true;
-                    ImVec2 delta = ImGui::GetIO().MouseDelta;
-                    ImVec2 np(winPos.x + delta.x, winPos.y + delta.y);
-                    np.x = std::clamp(np.x, vp->WorkPos.x + 6.0f * S, vp->WorkPos.x + vp->WorkSize.x - winSize.x - 6.0f * S);
-                    np.y = std::clamp(np.y, vp->WorkPos.y + 6.0f * S, vp->WorkPos.y + vp->WorkSize.y - 44.0f * S);
-                    ImGui::SetWindowPos(np);
-                }
-
-                if (clickClose) w.open = false;
-                if (clickShade) w.shaded = !w.shaded;
-                if (clickPin)   w.pinned = !w.pinned;
-
-                ImGui::PopID();
-            }
-
-            if (!w.shaded) {
-                const float childW = std::max(80.0f * S, winSize.x - bodyPadX * 2.0f);
-                const float childH = std::max(28.0f * S, winSize.y - headerH - bodyPadTop - bodyPadBot);
-                ImGui::SetCursorScreenPos(ImVec2(winPos.x + bodyPadX, winPos.y + headerH + bodyPadTop));
-                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f * S, 8.0f * S));
-                ImGuiWindowFlags bodyFlags = ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoNavInputs;
-                if (!w.scrollable) {
-                    bodyFlags |= ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
-                }
-                if (ImGui::BeginChild("##body", ImVec2(childW, childH), ImGuiChildFlags_None, bodyFlags)) {
-                    ImGui::BeginGroup();
-                    {
-                        UrushiUI::SetCurrentRenderingWindow(w.id);
-                        lua_rawgeti(L, LUA_REGISTRYINDEX, w.luaRenderRef);
-                        if (lua_isfunction(L, -1)) {
-                            lua_getglobal(L, "ui");
-                            if (LuaSandbox::PCall(L, 1, 0, "window_render") != LUA_OK) {
-                                const char* err = lua_tostring(L, -1);
-                                Logger::Error("URUSHI UI render error (" + w.id + "): " + std::string(err ? err : "unknown"));
-                                lua_pop(L, 1);
-                                while (!s_cardStack.empty()) {
-                                    UrushiUI::EndCard();
-                                }
-                            }
-                        } else {
-                            lua_pop(L, 1);
-                        }
-                        UrushiUI::SetCurrentRenderingWindow("");
-                    }
-                    ImGui::EndGroup();
-                    float measuredH = ImGui::GetItemRectSize().y;
-                    if (measuredH >= 6.0f * S) {
-                        w.lastBodyH = measuredH / S;
-                    }
-                }
-                ImGui::EndChild();
-                ImGui::PopStyleVar(2);
-            }
-        }
-        ImGui::End();
-
-        ImGui::PopStyleColor(2);
-        ImGui::PopStyleVar(4);
-    }
-}
-
-static void ApplyThemeMetrics(float S) {
+void ApplyThemeMetrics(float S) {
     ImGuiStyle& s = ImGui::GetStyle();
     s.WindowPadding     = ImVec2(14.0f * S, 12.0f * S);
     s.FramePadding      = ImVec2(10.0f * S, 6.0f * S);
@@ -1113,96 +218,94 @@ static void ApplyThemeMetrics(float S) {
     s.AntiAliasedLines  = true;
     s.AntiAliasedFill   = true;
     s.FontScaleMain     = S;
-    s_appliedThemeScale = S;
+    g_appliedThemeScale = S;
 }
 
-} // namespace
-
-// ==================== Lifecycle & Configuration ====================
+} // namespace UrushiUiInternal
 
 void UrushiUI::Init() {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     ApplyBaseTheme();
 }
 
 void UrushiUI::Shutdown() {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    s_windows.clear();
-    s_animFloat.clear();
-    s_cardStack.clear();
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    g_windows.clear();
+    g_animFloat.clear();
+    g_cardStack.clear();
 }
 
 void UrushiUI::PrepareFrame() {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (!ImGui::GetCurrentContext()) return;
 
     float workW = 0.0f, workH = 0.0f;
-    if (s_previewActive && s_previewW > 1.0f && s_previewH > 1.0f) {
-        workW = s_previewW;
-        workH = s_previewH;
+    if (g_previewActive && g_previewW > 1.0f && g_previewH > 1.0f) {
+        workW = g_previewW;
+        workH = g_previewH;
     } else {
         const ImVec2 ds = ImGui::GetIO().DisplaySize;
         workW = ds.x;
         workH = ds.y;
     }
 
-    s_autoScale = ComputeAutoScaleForViewport(workW, workH);
+    g_autoScale = ComputeAutoScaleForViewport(workW, workH);
 
-    float targetScale = s_autoScale;
-    if (s_previewActive && s_previewForcedScale > 0.0f) {
-        targetScale = std::clamp(s_previewForcedScale, 0.70f, 2.50f);
-    } else if (s_userScale > 0.0f) {
-        targetScale = std::clamp(s_userScale, 0.70f, 2.50f);
+    float targetScale = g_autoScale;
+    if (g_previewActive && g_previewForcedScale > 0.0f) {
+        targetScale = std::clamp(g_previewForcedScale, 0.70f, 2.50f);
+    } else if (g_userScale > 0.0f) {
+        targetScale = std::clamp(g_userScale, 0.70f, 2.50f);
     }
 
-    s_uiScale = targetScale;
-    if (std::fabs(s_appliedThemeScale - s_uiScale) > 0.002f) {
-        ApplyThemeMetrics(s_uiScale);
+    g_uiScale = targetScale;
+    if (std::fabs(g_appliedThemeScale - g_uiScale) > 0.002f) {
+        ApplyThemeMetrics(g_uiScale);
     }
 }
 
 void UrushiUI::SetUserScale(float scale) {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (scale <= 0.01f) {
-        s_userScale = 0.0f;
+        g_userScale = 0.0f;
     } else {
-        s_userScale = std::clamp(scale, 0.70f, 2.50f);
+        g_userScale = std::clamp(scale, 0.70f, 2.50f);
     }
 }
 
 float UrushiUI::GetUserScale() {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    return s_userScale;
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    return g_userScale;
 }
 
 float UrushiUI::GetAutoScale() {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    return s_autoScale;
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    return g_autoScale;
 }
 
 float UrushiUI::GetUiScale() {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    return s_uiScale;
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    return g_uiScale;
 }
 
 void UrushiUI::SetPreviewViewport(float w, float h, float forcedScale) {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    s_previewActive = (w > 1.0f && h > 1.0f);
-    s_previewW = w;
-    s_previewH = h;
-    s_previewForcedScale = forcedScale;
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    g_previewActive = (w > 1.0f && h > 1.0f);
+    g_previewW = w;
+    g_previewH = h;
+    g_previewForcedScale = forcedScale;
 }
 
 void UrushiUI::ClearPreviewViewport() {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    s_previewActive = false;
-    s_previewW = 0.0f;
-    s_previewH = 0.0f;
-    s_previewForcedScale = -1.0f;
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    g_previewActive = false;
+    g_previewW = 0.0f;
+    g_previewH = 0.0f;
+    g_previewForcedScale = -1.0f;
 }
 
 void UrushiUI::ApplyBaseTheme() {
-    ApplyThemeMetrics(s_uiScale);
+    ApplyThemeMetrics(g_uiScale);
     ImGuiStyle& s = ImGui::GetStyle();
 
     const AccentDef& acc = CurrentAccentDef();
@@ -1243,14 +346,14 @@ void UrushiUI::ApplyBaseTheme() {
 }
 
 void UrushiUI::BeginLuaReload() {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    for (auto& w : s_windows) {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    for (auto& w : g_windows) {
         w.registeredInPass = false;
         w.luaRenderRef = -1;
     }
     {
-        std::lock_guard<std::mutex> elemLock(s_uiElementMutex);
-        for (auto& wPair : s_uiElements) {
+        std::lock_guard<std::mutex> elemLock(g_uiElementMutex);
+        for (auto& wPair : g_uiElements) {
             for (auto& ePair : wPair.second) {
                 ePair.second.initialized = false;
                 ePair.second.changed = false;
@@ -1260,8 +363,8 @@ void UrushiUI::BeginLuaReload() {
 }
 
 void UrushiUI::ClearLuaRefs(lua_State* L) {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    for (auto& w : s_windows) {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    for (auto& w : g_windows) {
         if (w.luaRenderRef != -1 && L) {
             luaL_unref(L, LUA_REGISTRYINDEX, w.luaRenderRef);
         }
@@ -1271,80 +374,18 @@ void UrushiUI::ClearLuaRefs(lua_State* L) {
 }
 
 void UrushiUI::EndLuaReload() {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    s_windows.erase(
-        std::remove_if(s_windows.begin(), s_windows.end(),
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    g_windows.erase(
+        std::remove_if(g_windows.begin(), g_windows.end(),
                        [](const WindowState& w) { return !w.registeredInPass; }),
-        s_windows.end());
-}
-
-void UrushiUI::RegisterWindow(const WindowRegistration& reg) {
-    if (reg.id.empty()) return;
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-
-    if (WindowState* existing = FindWindowLocked(reg.id)) {
-        existing->title = reg.title;
-        existing->icon = reg.icon;
-        existing->order = reg.order;
-        existing->hudNoInputs = reg.hudNoInputs;
-        existing->anchorRight = reg.anchorRight;
-        existing->defaultX = reg.defaultX;
-        existing->defaultY = reg.defaultY;
-        existing->width = reg.width;
-        if (!existing->userMoved) {
-            if (s_layoutWorkW > 1.0f && s_layoutWorkH > 1.0f) {
-                const float targetW = std::min(existing->width * s_uiScale, std::max(220.0f * s_uiScale, s_layoutWorkW - 24.0f * s_uiScale));
-                ImVec2 defPos = ComputeDefaultOrigin(*existing, s_uiScale, s_layoutWorkW, s_layoutWorkH, targetW, existing->actualH);
-                existing->posX = defPos.x;
-                existing->posY = defPos.y;
-            } else {
-                existing->posX = reg.defaultX * s_uiScale;
-                existing->posY = reg.defaultY * s_uiScale;
-            }
-            existing->pendingMoveKey = "reload";
-        }
-        existing->luaRenderRef = reg.luaRenderRef;
-        existing->registeredInPass = true;
-    } else {
-        WindowState st;
-        st.id = reg.id;
-        st.title = reg.title;
-        st.icon = reg.icon;
-        st.order = reg.order;
-        st.open = reg.defaultOpen;
-        st.pinned = reg.defaultPinned;
-        st.hudNoInputs = reg.hudNoInputs;
-        st.anchorRight = reg.anchorRight;
-        st.defaultX = reg.defaultX;
-        st.defaultY = reg.defaultY;
-        st.posX = reg.defaultX * s_uiScale;
-        st.posY = reg.defaultY * s_uiScale;
-        st.width = reg.width;
-        st.luaRenderRef = reg.luaRenderRef;
-        st.registeredInPass = true;
-        s_windows.push_back(std::move(st));
-    }
-
-    LoadDockOrder();
-    std::sort(s_windows.begin(), s_windows.end(), [](const WindowState& a, const WindowState& b) {
-        const int ra = DockRank(a.id), rb = DockRank(b.id);
-        if (ra != rb) return ra < rb;
-        if (a.order != b.order) return a.order < b.order;
-        return a.title < b.title;
-    });
-}
-
-void UrushiUI::Render(bool menuOpen, lua_State* L) {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    RenderDock(menuOpen);
-    RenderFloatingWindows(menuOpen, L);
+        g_windows.end());
 }
 
 void UrushiUI::SetWindowOpen(const std::string& id, bool open) {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (WindowState* w = FindWindowLocked(id)) {
-        if (open && s_singleTabMode) {
-            for (auto& other : s_windows) {
+        if (open && g_singleTabMode) {
+            for (auto& other : g_windows) {
                 if (other.id != id && !other.pinned) other.open = false;
             }
         }
@@ -1354,7 +395,7 @@ void UrushiUI::SetWindowOpen(const std::string& id, bool open) {
 }
 
 bool UrushiUI::ToggleWindow(const std::string& id) {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (WindowState* w = FindWindowLocked(id)) {
         const bool next = !w->open;
         SetWindowOpen(id, next);
@@ -1364,30 +405,30 @@ bool UrushiUI::ToggleWindow(const std::string& id) {
 }
 
 bool UrushiUI::IsWindowOpen(const std::string& id) {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (WindowState* w = FindWindowLocked(id)) return w->open;
     return false;
 }
 
 void UrushiUI::CloseAllUnpinned() {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    for (auto& w : s_windows) {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    for (auto& w : g_windows) {
         if (!w.pinned) w.open = false;
     }
 }
 
 void UrushiUI::SetWindowPinned(const std::string& id, bool pinned) {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (WindowState* w = FindWindowLocked(id)) w->pinned = pinned;
 }
 
 void UrushiUI::SetWindowShaded(const std::string& id, bool shaded) {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (WindowState* w = FindWindowLocked(id)) w->shaded = shaded;
 }
 
 void UrushiUI::SetWindowPos(const std::string& id, float x, float y) {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (WindowState* w = FindWindowLocked(id)) {
         w->posX = x;
         w->posY = y;
@@ -1398,26 +439,26 @@ void UrushiUI::SetWindowPos(const std::string& id, float x, float y) {
 }
 
 void UrushiUI::SetWindowTitle(const std::string& id, const std::string& title) {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (WindowState* w = FindWindowLocked(id)) {
         w->title = title;
     }
 }
 
 UrushiUI::DebugSnapshot UrushiUI::GetDebugSnapshot() {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     DebugSnapshot snap;
-    snap.dockX = s_lastDockX;
-    snap.dockY = s_lastDockY;
-    snap.dockW = s_lastDockW;
-    snap.dockH = s_lastDockH;
-    snap.workW = s_lastWorkW;
-    snap.workH = s_lastWorkH;
-    snap.uiScale = s_uiScale;
-    snap.autoScale = s_autoScale;
-    snap.userScale = s_userScale;
-    snap.windows.reserve(s_windows.size());
-    for (const auto& w : s_windows) {
+    snap.dockX = g_lastDockX;
+    snap.dockY = g_lastDockY;
+    snap.dockW = g_lastDockW;
+    snap.dockH = g_lastDockH;
+    snap.workW = g_lastWorkW;
+    snap.workH = g_lastWorkH;
+    snap.uiScale = g_uiScale;
+    snap.autoScale = g_autoScale;
+    snap.userScale = g_userScale;
+    snap.windows.reserve(g_windows.size());
+    for (const auto& w : g_windows) {
         WindowDebugInfo info;
         info.id = w.id;
         info.title = w.title;
@@ -1433,25 +474,25 @@ UrushiUI::DebugSnapshot UrushiUI::GetDebugSnapshot() {
         info.width = w.width;
         info.actualW = w.actualW;
         info.actualH = w.actualH;
-        info.bodyH = w.lastBodyH * s_uiScale;
+        info.bodyH = w.lastBodyH * g_uiScale;
         snap.windows.push_back(std::move(info));
     }
     return snap;
 }
 
 void UrushiUI::SetSingleTabMode(bool enabled) {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    s_singleTabMode = enabled;
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    g_singleTabMode = enabled;
 }
 
 bool UrushiUI::GetSingleTabMode() {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    return s_singleTabMode;
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    return g_singleTabMode;
 }
 
 void UrushiUI::SetLanguage(Language lang) {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    s_language = lang;
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    g_language = lang;
 }
 
 bool UrushiUI::SetLanguageByName(const std::string& name) {
@@ -1467,23 +508,23 @@ bool UrushiUI::SetLanguageByName(const std::string& name) {
 }
 
 UrushiUI::Language UrushiUI::GetLanguage() {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    return s_language;
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    return g_language;
 }
 
 std::string UrushiUI::GetLanguageName() {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    return (s_language == Language::English) ? "en" : "ru";
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    return (g_language == Language::English) ? "en" : "ru";
 }
 
 bool UrushiUI::IsEnglish() {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    return s_language == Language::English;
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    return g_language == Language::English;
 }
 
 void UrushiUI::SetAccent(Accent accent) {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    s_accent = accent;
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    g_accent = accent;
     if (ImGui::GetCurrentContext()) {
         ApplyBaseTheme();
     }
@@ -1504,31 +545,31 @@ bool UrushiUI::SetAccentByName(const std::string& name) {
 }
 
 void UrushiUI::SetCustomAccent(float r, float g, float b) {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    s_customRgb[0] = std::clamp(r, 0.0f, 1.0f);
-    s_customRgb[1] = std::clamp(g, 0.0f, 1.0f);
-    s_customRgb[2] = std::clamp(b, 0.0f, 1.0f);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    g_customRgb[0] = std::clamp(r, 0.0f, 1.0f);
+    g_customRgb[1] = std::clamp(g, 0.0f, 1.0f);
+    g_customRgb[2] = std::clamp(b, 0.0f, 1.0f);
     RebuildCustomAccentDef();
-    s_accent = Accent::Custom;
+    g_accent = Accent::Custom;
     if (ImGui::GetCurrentContext()) {
         ApplyBaseTheme();
     }
 }
 
 void UrushiUI::GetCustomAccent(float& r, float& g, float& b) {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    r = s_customRgb[0];
-    g = s_customRgb[1];
-    b = s_customRgb[2];
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    r = g_customRgb[0];
+    g = g_customRgb[1];
+    b = g_customRgb[2];
 }
 
 UrushiUI::Accent UrushiUI::GetAccent() {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
-    return s_accent;
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    return g_accent;
 }
 
 std::string UrushiUI::GetAccentName() {
-    std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
     return CurrentAccentDef().name;
 }
 
@@ -1557,864 +598,15 @@ ImVec4 UrushiUI::GetToneVec4(Tone tone) {
     return U32ToVec4(GetToneU32(tone));
 }
 
-// ==================== Lacquered ImDrawList Widgets ====================
-
-float UrushiUI::CurrentContentWidth() {
-    if (!s_cardStack.empty()) {
-        return s_cardStack.back()->innerWidth;
-    }
-    return std::max(60.0f * s_uiScale, ImGui::GetContentRegionAvail().x);
-}
-
-void UrushiUI::BeginCard(const std::string& title, const std::string& subtitle) {
-    const float S = s_uiScale;
-    const float padX = 14.0f * S;
-    const float padY = 12.0f * S;
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    auto frame = std::make_unique<CardFrame>();
-    frame->startPos = ImGui::GetCursorScreenPos();
-    frame->width = CurrentContentWidth();
-    frame->innerWidth = std::max(40.0f * S, frame->width - padX * 2.0f);
-
-    frame->splitter.Split(dl, 2);
-    frame->splitter.SetCurrentChannel(dl, 1);
-
-    ImGui::SetCursorScreenPos(ImVec2(frame->startPos.x + padX, frame->startPos.y + padY));
-    ImGui::BeginGroup();
-    ImGui::PushItemWidth(frame->innerWidth);
-
-    if (!title.empty()) {
-        dl->AddText(ImGui::GetCursorScreenPos(), kColTextPrimary, title.c_str());
-        ImGui::Dummy(ImVec2(frame->innerWidth, ImGui::GetTextLineHeight()));
-    }
-    if (!subtitle.empty()) {
-        if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
-        ImVec2 sPos = ImGui::GetCursorScreenPos();
-        dl->AddText(sPos, kColTextSecondary, subtitle.c_str());
-        ImGui::Dummy(ImVec2(frame->innerWidth, ImGui::GetTextLineHeight()));
-        if (AppFonts::Small) ImGui::PopFont();
-    }
-    if (!title.empty() || !subtitle.empty()) {
-        ImGui::Dummy(ImVec2(0.0f, 4.0f * S));
-    }
-
-    s_cardStack.push_back(std::move(frame));
-}
-
-void UrushiUI::EndCard() {
-    if (s_cardStack.empty()) return;
-    const float S = s_uiScale;
-    const float padY = 12.0f * S;
-    const float cardR = 10.0f * S;
-
-    std::unique_ptr<CardFrame> frame = std::move(s_cardStack.back());
-    s_cardStack.pop_back();
-
-    ImGui::PopItemWidth();
-    ImGui::EndGroup();
-
-    ImVec2 itemMax = ImGui::GetItemRectMax();
-    float bodyBottom = (std::max)(frame->startPos.y + padY * 2.0f, itemMax.y);
-    ImVec2 cardEnd(frame->startPos.x + frame->width, bodyBottom + padY);
-
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    frame->splitter.SetCurrentChannel(dl, 0);
-    dl->AddRectFilled(frame->startPos, cardEnd, kColBgCard, cardR);
-    dl->AddRect(frame->startPos, cardEnd, kColHairline, cardR);
-    frame->splitter.Merge(dl);
-
-    ImGui::SetCursorScreenPos(ImVec2(frame->startPos.x, cardEnd.y));
-    ImGui::Dummy(ImVec2(frame->width, 0.0f));
-}
-
-bool UrushiUI::Toggle(const std::string& label, bool* value, float width) {
-    if (!value) return false;
-    const float S = s_uiScale;
-    const float w = (width <= 0.0f) ? CurrentContentWidth() : width;
-    const float rowH = 26.0f * S;
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-
-    bool clicked = ImGui::InvisibleButton(label.c_str(), ImVec2(w, rowH));
-    bool hovered = ImGui::IsItemHovered();
-    ImGuiID key = ImGui::GetItemID();
-
-    if (clicked) {
-        *value = !(*value);
-    }
-
-    float t = AnimateTowards(key, *value ? 1.0f : 0.0f, 18.0f);
-    float hov = AnimateTowards(key ^ 0x9E3779B9u, hovered ? 1.0f : 0.0f, 20.0f);
-
-    // Strip '##' ImGui ID suffix for visible text
-    const char* hashPos = strstr(label.c_str(), "##");
-    std::string vis = hashPos ? label.substr(0, hashPos - label.c_str()) : label;
-
-    // Pill switch on the right
-    const float swW = 38.0f * S, swH = 20.0f * S;
-    ImVec2 swMin(pos.x + w - swW, pos.y + (rowH - swH) * 0.5f);
-    ImVec2 swMax(swMin.x + swW, swMin.y + swH);
-
-    ImVec2 txtSz = ImGui::CalcTextSize(vis.c_str());
-    dl->PushClipRect(pos, ImVec2((std::max)(pos.x + 8.0f * S, swMin.x - 8.0f * S), pos.y + rowH), true);
-    dl->AddText(ImVec2(pos.x, pos.y + (rowH - txtSz.y) * 0.5f),
-                LerpCol(kColTextPrimary, IM_COL32(255, 255, 255, 255), hov * 0.5f), vis.c_str());
-    dl->PopClipRect();
-
-    ImU32 trackOff = LerpCol(IM_COL32(255, 255, 255, 34), IM_COL32(255, 255, 255, 48), hov);
-    ImU32 trackCol = LerpCol(trackOff, GetAccentU32(), t);
-    dl->AddRectFilled(swMin, swMax, trackCol, swH * 0.5f);
-
-    const float knobR = (7.0f + hov * 0.5f) * S;
-    float knobX = (swMin.x + 10.0f * S) + (swW - 20.0f * S) * t;
-    float knobY = swMin.y + swH * 0.5f;
-    ImU32 knobCol = LerpCol(IM_COL32(244, 244, 248, 255), GetAccentFgU32(), t);
-    dl->AddCircleFilled(ImVec2(knobX, knobY), knobR, knobCol, 16);
-
-    return clicked;
-}
-
-static float DrawSliderHeader(ImDrawList* dl, ImVec2 pos, float w, float S, const char* vis, const char* valBuf) {
-    ImVec2 lblSz = ImGui::CalcTextSize(vis);
-    if (AppFonts::Mono) ImGui::PushFont(AppFonts::Mono);
-    ImVec2 valSz = ImGui::CalcTextSize(valBuf);
-    const float chipW = valSz.x + 14.0f * S;
-    const float chipH = valSz.y + 4.0f * S;
-    const float chipR = 5.0f * S;
-    ImVec2 chipMin(pos.x + w - chipW, pos.y - 1.0f * S);
-    ImVec2 chipMax(pos.x + w, pos.y - 1.0f * S + chipH);
-    dl->AddRectFilled(chipMin, chipMax, kColBgControl, chipR);
-    dl->AddRect(chipMin, chipMax, kColHairline, chipR);
-    dl->AddText(ImVec2(chipMin.x + 7.0f * S, chipMin.y + 2.0f * S), kColTextPrimary, valBuf);
-    if (AppFonts::Mono) ImGui::PopFont();
-
-    dl->PushClipRect(pos, ImVec2((std::max)(pos.x + 8.0f * S, chipMin.x - 6.0f * S), pos.y + (std::max)(lblSz.y, chipH) + 2.0f * S), true);
-    dl->AddText(pos, kColTextPrimary, vis);
-    dl->PopClipRect();
-
-    return pos.y + std::max(lblSz.y, chipH) + 3.0f * S;
-}
-
-static void DrawSliderTrackVisual(ImDrawList* dl, ImVec2 pos, float trackTop, float w, float hitH, float S, float pct, ImGuiID key, bool hovered, bool active) {
-    float knobScale = AnimateTowards(key, (hovered || active) ? 1.0f : 0.0f, 22.0f);
-    const float pad = 6.0f * S;
-    const float trkY = trackTop + hitH * 0.5f;
-    const float trkH = std::max(2.0f, 4.0f * S);
-    const float trkR = trkH * 0.5f;
-    dl->AddRectFilled(ImVec2(pos.x, trkY - trkR), ImVec2(pos.x + w, trkY + trkR), IM_COL32(255, 255, 255, 24), trkR);
-
-    float fillX = pos.x + pad + std::max(0.0f, (w - pad * 2.0f) * pct);
-    dl->AddRectFilled(ImVec2(pos.x, trkY - trkR), ImVec2(fillX, trkY + trkR), UrushiUI::GetAccentU32(), trkR);
-
-    float thumbR = (6.0f + knobScale * 1.6f) * S;
-    dl->AddCircleFilled(ImVec2(fillX, trkY), thumbR + 1.5f * S, kColBgDock, 16);
-    dl->AddCircleFilled(ImVec2(fillX, trkY), thumbR, IM_COL32(246, 246, 250, 255), 16);
-}
-
-bool UrushiUI::SliderFloat(const std::string& label, float* value, float minVal, float maxVal, const char* fmt) {
-    if (!value || maxVal <= minVal) return false;
-    const float S = s_uiScale;
-    const float w = CurrentContentWidth();
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-
-    const char* hashPos = strstr(label.c_str(), "##");
-    std::string vis = hashPos ? label.substr(0, hashPos - label.c_str()) : label;
-
-    char valBuf[64];
-    snprintf(valBuf, sizeof(valBuf), fmt ? fmt : "%.2f", *value);
-
-    const float trackTop = DrawSliderHeader(dl, pos, w, S, vis.c_str(), valBuf);
-    const float hitH = 18.0f * S;
-    ImGui::SetCursorScreenPos(ImVec2(pos.x, trackTop));
-    ImGui::InvisibleButton(label.c_str(), ImVec2(w, hitH));
-    bool hovered = ImGui::IsItemHovered();
-    bool active = ImGui::IsItemActive();
-    ImGuiID key = ImGui::GetItemID();
-
-    bool changed = false;
-    if (active && ImGui::IsMouseDown(0)) {
-        float mouseX = ImGui::GetIO().MousePos.x;
-        float pad = 6.0f * S;
-        float t = std::clamp((mouseX - (pos.x + pad)) / std::max(1.0f, w - pad * 2.0f), 0.0f, 1.0f);
-        float newVal = minVal + (maxVal - minVal) * t;
-        if (std::fabs(newVal - *value) > 1e-5f) {
-            *value = newVal;
-            changed = true;
-        }
-    }
-
-    float pct = std::clamp((*value - minVal) / (maxVal - minVal), 0.0f, 1.0f);
-    DrawSliderTrackVisual(dl, pos, trackTop, w, hitH, S, pct, key, hovered, active);
-
-    ImGui::SetCursorScreenPos(ImVec2(pos.x, trackTop + hitH));
-    ImGui::Dummy(ImVec2(w, 2.0f * S));
-    return changed;
-}
-
-bool UrushiUI::SliderInt(const std::string& label, int* value, int minVal, int maxVal, const char* fmt) {
-    if (!value || maxVal <= minVal) return false;
-    const float S = s_uiScale;
-    const float w = CurrentContentWidth();
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-
-    const char* hashPos = strstr(label.c_str(), "##");
-    std::string vis = hashPos ? label.substr(0, hashPos - label.c_str()) : label;
-
-    char valBuf[64];
-    snprintf(valBuf, sizeof(valBuf), fmt ? fmt : "%d", *value);
-
-    const float trackTop = DrawSliderHeader(dl, pos, w, S, vis.c_str(), valBuf);
-    const float hitH = 18.0f * S;
-    ImGui::SetCursorScreenPos(ImVec2(pos.x, trackTop));
-    ImGui::InvisibleButton(label.c_str(), ImVec2(w, hitH));
-    bool hovered = ImGui::IsItemHovered();
-    bool active = ImGui::IsItemActive();
-    ImGuiID key = ImGui::GetItemID();
-
-    bool changed = false;
-    if (active && ImGui::IsMouseDown(0)) {
-        float mouseX = ImGui::GetIO().MousePos.x;
-        float pad = 6.0f * S;
-        float t = std::clamp((mouseX - (pos.x + pad)) / std::max(1.0f, w - pad * 2.0f), 0.0f, 1.0f);
-        int newVal = minVal + static_cast<int>(std::round(static_cast<float>(maxVal - minVal) * t));
-        newVal = std::clamp(newVal, minVal, maxVal);
-        if (newVal != *value) {
-            *value = newVal;
-            changed = true;
-        }
-    }
-
-    float pct = std::clamp(static_cast<float>(*value - minVal) / static_cast<float>(maxVal - minVal), 0.0f, 1.0f);
-    DrawSliderTrackVisual(dl, pos, trackTop, w, hitH, S, pct, key, hovered, active);
-
-    ImGui::SetCursorScreenPos(ImVec2(pos.x, trackTop + hitH));
-    ImGui::Dummy(ImVec2(w, 2.0f * S));
-    return changed;
-}
-
-bool UrushiUI::Segmented(const std::string& id, int* currentIdx, const std::vector<std::string>& options) {
-    if (!currentIdx || options.empty()) return false;
-    const float S = s_uiScale;
-    const int n = static_cast<int>(options.size());
-    *currentIdx = std::clamp(*currentIdx, 0, n - 1);
-
-    const float w = CurrentContentWidth();
-    const float h = 34.0f * S;
-    const float pad = 3.0f * S;
-    const float segW = (w - pad * 2.0f) / static_cast<float>(n);
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-
-    dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), kColBgControl, 8.0f * S);
-    dl->AddRect(pos, ImVec2(pos.x + w, pos.y + h), kColHairline, 8.0f * S);
-
-    ImGui::PushID(id.c_str());
-    ImGuiID pillKey = ImGui::GetID("##seg_pill");
-    float animIdx = AnimateTowards(pillKey, static_cast<float>(*currentIdx), 20.0f);
-
-    ImVec2 pillMin(pos.x + pad + animIdx * segW, pos.y + pad);
-    ImVec2 pillMax(pillMin.x + segW, pos.y + h - pad);
-    dl->AddRectFilled(pillMin, pillMax, kColBgRaised, 6.0f * S);
-    dl->AddRect(pillMin, pillMax, kColHairlineStrong, 6.0f * S);
-
-    bool changed = false;
-    for (int i = 0; i < n; ++i) {
-        ImVec2 sPos(pos.x + pad + static_cast<float>(i) * segW, pos.y + pad);
-        ImGui::SetCursorScreenPos(sPos);
-        ImGui::PushID(i);
-        if (ImGui::InvisibleButton("##seg", ImVec2(segW, h - pad * 2.0f))) {
-            if (*currentIdx != i) {
-                *currentIdx = i;
-                changed = true;
-            }
-        }
-        bool hov = ImGui::IsItemHovered();
-        ImGui::PopID();
-
-        ImU32 txtCol = (*currentIdx == i) ? kColTextPrimary : (hov ? kColTextPrimary : kColTextSecondary);
-        if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
-        ImVec2 tSz = ImGui::CalcTextSize(options[i].c_str());
-        const float segH = h - pad * 2.0f;
-        dl->PushClipRect(ImVec2(sPos.x + 3.0f * S, sPos.y), ImVec2(sPos.x + segW - 3.0f * S, sPos.y + segH), true);
-        float tx = sPos.x + (std::max)(4.0f * S, (segW - tSz.x) * 0.5f);
-        dl->AddText(ImVec2(tx, sPos.y + (segH - tSz.y) * 0.5f), txtCol, options[i].c_str());
-        dl->PopClipRect();
-        if (AppFonts::Small) ImGui::PopFont();
-    }
-    ImGui::PopID();
-
-    ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + h));
-    ImGui::Dummy(ImVec2(w, 2.0f * S));
-    return changed;
-}
-
-static void DrawRefreshIcon(ImDrawList* dl, ImVec2 center, float r, ImU32 col, float th) {
-    // 300 degree clockwise circular arc
-    dl->PathArcTo(center, r, -2.4f, 2.3f, 20);
-    dl->PathStroke(col, ImDrawFlags_None, th);
-    // Arrowhead at the end (angle ~ 2.3f)
-    const float a = 2.3f;
-    const float tx = center.x + r * cosf(a);
-    const float ty = center.y + r * sinf(a);
-    const float nx = -sinf(a);
-    const float ny = cosf(a);
-    const float px = -ny;
-    const float py = nx;
-    const float arrowLen = 3.6f * (th / 1.5f);
-    const float arrowWidth = 2.8f * (th / 1.5f);
-    ImVec2 pTip(tx, ty);
-    ImVec2 pBase(tx - nx * arrowLen, ty - ny * arrowLen);
-    ImVec2 p1(pBase.x + px * arrowWidth, pBase.y + py * arrowWidth);
-    ImVec2 p2(pBase.x - px * arrowWidth, pBase.y - py * arrowWidth);
-    dl->AddTriangleFilled(pTip, p1, p2, col);
-}
-
-static void DrawCheckIcon(ImDrawList* dl, ImVec2 center, float r, ImU32 col, float th) {
-    ImVec2 p1(center.x - r * 0.7f, center.y);
-    ImVec2 p2(center.x - r * 0.15f, center.y + r * 0.55f);
-    ImVec2 p3(center.x + r * 0.75f, center.y - r * 0.55f);
-    dl->AddLine(p1, p2, col, th);
-    dl->AddLine(p2, p3, col, th);
-}
-
-static void DrawCloseIcon(ImDrawList* dl, ImVec2 center, float r, ImU32 col, float th) {
-    const float sz = r * 0.75f;
-    dl->AddLine(ImVec2(center.x - sz, center.y - sz), ImVec2(center.x + sz, center.y + sz), col, th);
-    dl->AddLine(ImVec2(center.x + sz, center.y - sz), ImVec2(center.x - sz, center.y + sz), col, th);
-}
-
-bool UrushiUI::Button(const std::string& label, float width, float height, ButtonStyle style) {
-    const float S = s_uiScale;
-    float w = (width <= 0.0f) ? CurrentContentWidth() : width;
-    if (height <= 0.0f) height = 30.0f * S;
-
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    bool clicked = ImGui::InvisibleButton(label.c_str(), ImVec2(w, height));
-    bool hovered = ImGui::IsItemHovered();
-    bool active = ImGui::IsItemActive();
-    ImGuiID key = ImGui::GetItemID();
-
-    float hovT = AnimateTowards(key, hovered ? 1.0f : 0.0f, 22.0f);
-    const float pressInset = active ? (1.0f * S) : 0.0f;
-    const float btnR = 7.0f * S;
-
-    ImU32 bg = kColBgRaised;
-    ImU32 border = kColHairlineStrong;
-    ImU32 fg = kColTextPrimary;
-
-    if (style == ButtonStyle::Primary) {
-        bg = LerpCol(GetAccentU32(), GetAccentHoverU32(), hovT);
-        border = 0;
-        fg = GetAccentFgU32();
-    } else if (style == ButtonStyle::Danger) {
-        bg = LerpCol(IM_COL32(190, 56, 56, 48), IM_COL32(224, 68, 68, 76), hovT);
-        border = IM_COL32(232, 76, 76, 110);
-        fg = IM_COL32(252, 165, 165, 255);
-    } else if (style == ButtonStyle::Ghost) {
-        bg = LerpCol(IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 18), hovT);
-        border = kColHairline;
-        fg = hovered ? kColTextPrimary : kColTextSecondary;
-    } else {
-        bg = LerpCol(kColBgRaised, kColBgRaisedHover, hovT);
-        border = kColHairlineStrong;
-    }
-
-    ImVec2 bMin(pos.x + pressInset, pos.y + pressInset);
-    ImVec2 bMax(pos.x + w - pressInset, pos.y + height - pressInset);
-    dl->AddRectFilled(bMin, bMax, bg, btnR);
-    if ((border >> IM_COL32_A_SHIFT) > 0) {
-        dl->AddRect(bMin, bMax, border, btnR);
-    }
-
-    const char* hashPos = strstr(label.c_str(), "##");
-    std::string vis = hashPos ? label.substr(0, hashPos - label.c_str()) : label;
-
-    if (vis == "@refresh" || vis == "refresh" || vis == "\xe2\x86\xbb" || vis == "\xe2\x9f\xb3") {
-        const float iconSz = 14.0f * S;
-        ImVec2 ipos(pos.x + (w - iconSz) * 0.5f, pos.y + (height - iconSz) * 0.5f);
-        DrawAlphaMask(dl, ipos, iconSz, kLucideRefreshAlpha16, 16, 16, fg);
-    } else if (vis == "@check" || vis == "\xe2\x9c\x93") {
-        ImVec2 center(pos.x + w * 0.5f, pos.y + height * 0.5f);
-        DrawCheckIcon(dl, center, 6.0f * S, fg, std::max(1.2f, 1.8f * S));
-    } else if (vis == "@close" || vis == "\xe2\x9c\x95" || vis == "✕") {
-        ImVec2 center(pos.x + w * 0.5f, pos.y + height * 0.5f);
-        DrawCloseIcon(dl, center, 4.5f * S, fg, std::max(1.2f, 1.6f * S));
-    } else {
-        ImVec2 tSz = ImGui::CalcTextSize(vis.c_str());
-        dl->PushClipRect(ImVec2(bMin.x + 4.0f * S, bMin.y + 1.0f * S), ImVec2(bMax.x - 4.0f * S, bMax.y - 1.0f * S), true);
-        float tx = pos.x + (std::max)(6.0f * S, (w - tSz.x) * 0.5f);
-        dl->AddText(ImVec2(tx, pos.y + (height - tSz.y) * 0.5f), fg, vis.c_str());
-        dl->PopClipRect();
-    }
-
-    return clicked;
-}
-
-void UrushiUI::StatRow(const std::vector<StatItem>& items) {
-    if (items.empty()) return;
-    const float S = s_uiScale;
-    const float w = CurrentContentWidth();
-    const float gap = 8.0f * S;
-    const int n = static_cast<int>(items.size());
-    const float cellW = (w - gap * static_cast<float>(n - 1)) / static_cast<float>(n);
-    const float cellH = 54.0f * S;
-    const float cellR = 9.0f * S;
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-
-    for (int i = 0; i < n; ++i) {
-        ImVec2 cMin(pos.x + static_cast<float>(i) * (cellW + gap), pos.y);
-        ImVec2 cMax(cMin.x + cellW, cMin.y + cellH);
-        dl->AddRectFilled(cMin, cMax, kColBgCard, cellR);
-        dl->AddRect(cMin, cMax, kColHairline, cellR);
-
-        dl->PushClipRect(ImVec2(cMin.x + 6.0f * S, cMin.y + 4.0f * S), ImVec2(cMax.x - 6.0f * S, cMax.y - 4.0f * S), true);
-
-        if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
-        dl->AddText(ImVec2(cMin.x + 12.0f * S, cMin.y + 9.0f * S), kColTextSecondary, items[i].label.c_str());
-        if (AppFonts::Small) ImGui::PopFont();
-
-        ImFont* valFont = AppFonts::Large ? AppFonts::Large : AppFonts::Mono;
-        if (valFont) ImGui::PushFont(valFont);
-        ImVec2 valSz = ImGui::CalcTextSize(items[i].value.c_str());
-        if (valFont) ImGui::PopFont();
-
-        if (valSz.x > cellW - 22.0f * S && AppFonts::Regular) {
-            valFont = AppFonts::Regular;
-            ImGui::PushFont(valFont);
-            valSz = ImGui::CalcTextSize(items[i].value.c_str());
-            ImGui::PopFont();
-            if (valSz.x > cellW - 22.0f * S && AppFonts::Small) {
-                valFont = AppFonts::Small;
-            }
-        }
-
-        if (valFont) ImGui::PushFont(valFont);
-        ImVec2 drawSz = ImGui::CalcTextSize(items[i].value.c_str());
-        float valY = (cMin.y + 26.0f * S) + (20.0f * S - drawSz.y) * 0.5f;
-        dl->AddText(ImVec2(cMin.x + 12.0f * S, (std::max)(cMin.y + 25.0f * S, valY)), GetToneU32(items[i].tone), items[i].value.c_str());
-        if (valFont) ImGui::PopFont();
-
-        dl->PopClipRect();
-    }
-
-    ImGui::Dummy(ImVec2(w, cellH));
-}
-
-bool UrushiUI::CollapsingSection(const std::string& label, bool defaultOpen) {
-    const float S = s_uiScale;
-    const float w = CurrentContentWidth();
-    const float h = 28.0f * S;
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-
-    ImGuiStorage* storage = ImGui::GetStateStorage();
-    ImGuiID stateId = ImGui::GetID(label.c_str());
-    bool isOpen = storage->GetBool(stateId, defaultOpen);
-
-    if (ImGui::InvisibleButton(label.c_str(), ImVec2(w, h))) {
-        isOpen = !isOpen;
-        storage->SetBool(stateId, isOpen);
-    }
-    bool hov = ImGui::IsItemHovered();
-    dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), hov ? IM_COL32(255, 255, 255, 12) : IM_COL32(255, 255, 255, 5), 6.0f * S);
-
-    // Chevron
-    ImVec2 c(pos.x + 12.0f * S, pos.y + h * 0.5f);
-    if (isOpen) {
-        dl->AddTriangleFilled(ImVec2(c.x - 4.0f * S, c.y - 2.0f * S), ImVec2(c.x + 4.0f * S, c.y - 2.0f * S), ImVec2(c.x, c.y + 3.0f * S), kColTextSecondary);
-    } else {
-        dl->AddTriangleFilled(ImVec2(c.x - 2.0f * S, c.y - 4.0f * S), ImVec2(c.x + 3.0f * S, c.y), ImVec2(c.x - 2.0f * S, c.y + 4.0f * S), kColTextSecondary);
-    }
-
-    const char* hashPos = strstr(label.c_str(), "##");
-    std::string vis = hashPos ? label.substr(0, hashPos - label.c_str()) : label;
-    ImVec2 tSz = ImGui::CalcTextSize(vis.c_str());
-    dl->AddText(ImVec2(pos.x + 24.0f * S, pos.y + (h - tSz.y) * 0.5f), kColTextPrimary, vis.c_str());
-
-    return isOpen;
-}
-
-bool UrushiUI::Combo(const std::string& label, int* currentIdx, const std::vector<std::string>& items) {
-    if (!currentIdx) return false;
-    const float w = CurrentContentWidth();
-    const char* hashPos = strstr(label.c_str(), "##");
-    std::string vis = hashPos ? label.substr(0, hashPos - label.c_str()) : label;
-    if (!vis.empty()) {
-        if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
-        ImGui::TextColored(U32ToVec4(kColTextSecondary), "%s", vis.c_str());
-        if (AppFonts::Small) ImGui::PopFont();
-    }
-    std::string hiddenLabel = hashPos ? std::string(hashPos) : ("##" + label);
-
-    ImGui::PushItemWidth(w);
-    std::vector<const char*> ptrs;
-    ptrs.reserve(items.size());
-    for (const auto& it : items) ptrs.push_back(it.c_str());
-    bool ch = !ptrs.empty() && ImGui::Combo(hiddenLabel.c_str(), currentIdx, ptrs.data(), static_cast<int>(ptrs.size()));
-    ImGui::PopItemWidth();
-    return ch;
-}
-
-bool UrushiUI::InputText(const std::string& label, std::string& text, size_t maxLen) {
-    const float w = CurrentContentWidth();
-    const char* hashPos = strstr(label.c_str(), "##");
-    std::string vis = hashPos ? label.substr(0, hashPos - label.c_str()) : label;
-    if (!vis.empty()) {
-        if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
-        ImGui::TextColored(U32ToVec4(kColTextSecondary), "%s", vis.c_str());
-        if (AppFonts::Small) ImGui::PopFont();
-    }
-    std::string hiddenLabel = hashPos ? std::string(hashPos) : ("##" + label);
-
-    ImGui::PushItemWidth(w);
-    const size_t bufLen = (maxLen + 1 > 256) ? (maxLen + 1) : 256;
-    std::vector<char> buf(bufLen, 0);
-    strncpy_s(buf.data(), buf.size(), text.c_str(), buf.size() - 1);
-    bool ch = ImGui::InputText(hiddenLabel.c_str(), buf.data(), buf.size());
-    if (ch) text = buf.data();
-    ImGui::PopItemWidth();
-    return ch;
-}
-
-static bool ColorEditInternal(const std::string& label, float col[4], bool hasAlpha) {
-    const float S = UrushiUI::GetUiScale();
-    const float w = UrushiUI::CurrentContentWidth();
-    const float rowH = 26.0f * S;
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-
-    const char* hashPos = strstr(label.c_str(), "##");
-    std::string vis = hashPos ? label.substr(0, hashPos - label.c_str()) : label;
-
-    const float cr = std::clamp(col[0], 0.0f, 1.0f);
-    const float cg = std::clamp(col[1], 0.0f, 1.0f);
-    const float cb = std::clamp(col[2], 0.0f, 1.0f);
-    const float ca = hasAlpha ? std::clamp(col[3], 0.0f, 1.0f) : 1.0f;
-
-    const int ri = static_cast<int>(std::round(cr * 255.0f));
-    const int gi = static_cast<int>(std::round(cg * 255.0f));
-    const int bi = static_cast<int>(std::round(cb * 255.0f));
-    const int ai = static_cast<int>(std::round(ca * 255.0f));
-
-    char hexBuf[16];
-    if (hasAlpha) snprintf(hexBuf, sizeof(hexBuf), "#%02X%02X%02X%02X", ri, gi, bi, ai);
-    else snprintf(hexBuf, sizeof(hexBuf), "#%02X%02X%02X", ri, gi, bi);
-
-    if (AppFonts::Mono) ImGui::PushFont(AppFonts::Mono);
-    ImVec2 hexSz = ImGui::CalcTextSize(hexBuf);
-    if (AppFonts::Mono) ImGui::PopFont();
-
-    const float swW = 44.0f * S;
-    const float swH = 20.0f * S;
-    const float swGap = 8.0f * S;
-    ImVec2 swMin(pos.x + w - swW, pos.y + (rowH - swH) * 0.5f);
-    ImVec2 swMax(swMin.x + swW, swMin.y + swH);
-    const float hexX = swMin.x - swGap - hexSz.x;
-
-    ImGui::PushID(label.c_str());
-    bool clicked = ImGui::InvisibleButton("##clr_btn", ImVec2(w, rowH));
-    bool hovered = ImGui::IsItemHovered();
-    if (clicked) {
-        ImGui::OpenPopup("##clr_pop");
-    }
-
-    dl->PushClipRect(pos, ImVec2(std::max(pos.x + 8.0f * S, hexX - 8.0f * S), pos.y + rowH), true);
-    ImVec2 lblSz = ImGui::CalcTextSize(vis.c_str());
-    dl->AddText(ImVec2(pos.x, pos.y + (rowH - lblSz.y) * 0.5f),
-                hovered ? IM_COL32(255, 255, 255, 255) : kColTextPrimary, vis.c_str());
-    dl->PopClipRect();
-
-    if (AppFonts::Mono) ImGui::PushFont(AppFonts::Mono);
-    dl->AddText(ImVec2(hexX, pos.y + (rowH - hexSz.y) * 0.5f), kColTextSecondary, hexBuf);
-    if (AppFonts::Mono) ImGui::PopFont();
-
-    const float swR = 5.0f * S;
-    if (hasAlpha && ai < 255) {
-        dl->AddRectFilled(swMin, swMax, IM_COL32(42, 42, 50, 255), swR);
-        dl->AddRectFilled(swMin, ImVec2(swMin.x + swW * 0.5f, swMax.y), IM_COL32(ri, gi, bi, 255), swR, ImDrawFlags_RoundCornersLeft);
-        dl->AddRectFilled(ImVec2(swMin.x + swW * 0.5f, swMin.y), swMax, IM_COL32(ri, gi, bi, ai), swR, ImDrawFlags_RoundCornersRight);
-    } else {
-        dl->AddRectFilled(swMin, swMax, IM_COL32(ri, gi, bi, 255), swR);
-    }
-    dl->AddRect(swMin, swMax, hovered ? UrushiUI::GetAccentU32() : kColHairlineStrong, swR, 0, 1.0f);
-
-    bool changed = false;
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f * S, 12.0f * S));
-    ImGui::PushStyleColor(ImGuiCol_PopupBg, U32ToVec4(kColBgDock));
-    ImGui::PushStyleColor(ImGuiCol_Border, U32ToVec4(kColHairlineStrong));
-    if (ImGui::BeginPopup("##clr_pop")) {
-        ImGui::PushItemWidth(210.0f * S);
-        ImGuiColorEditFlags flags =
-            ImGuiColorEditFlags_PickerHueBar |
-            ImGuiColorEditFlags_NoSidePreview |
-            ImGuiColorEditFlags_NoLabel |
-            ImGuiColorEditFlags_NoOptions |
-            ImGuiColorEditFlags_DisplayRGB |
-            ImGuiColorEditFlags_DisplayHex;
-        if (hasAlpha) {
-            flags |= ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf;
-        } else {
-            flags |= ImGuiColorEditFlags_NoAlpha;
-        }
-        if (col[0] > 1.0f || col[1] > 1.0f || col[2] > 1.0f) {
-            flags |= ImGuiColorEditFlags_HDR;
-        }
-        if (ImGui::ColorPicker4("##pick", col, flags)) {
-            changed = true;
-        }
-        ImGui::PopItemWidth();
-        ImGui::EndPopup();
-    }
-    ImGui::PopStyleColor(2);
-    ImGui::PopStyleVar(1);
-    ImGui::PopID();
-
-    return changed;
-}
-
-bool UrushiUI::ColorEdit3(const std::string& label, float rgb[3]) {
-    if (!rgb) return false;
-    float tmp[4] = { rgb[0], rgb[1], rgb[2], 1.0f };
-    if (ColorEditInternal(label, tmp, false)) {
-        rgb[0] = tmp[0];
-        rgb[1] = tmp[1];
-        rgb[2] = tmp[2];
-        return true;
-    }
-    return false;
-}
-
-bool UrushiUI::ColorEdit4(const std::string& label, float rgba[4]) {
-    if (!rgba) return false;
-    return ColorEditInternal(label, rgba, true);
-}
-
-void UrushiUI::ProgressBar(float fraction, float width, float height, const char* overlay) {
-    const float S = s_uiScale;
-    float w = (width <= 0.0f) ? CurrentContentWidth() : width;
-    if (height <= 0.0f) height = 14.0f * S;
-    fraction = std::clamp(fraction, 0.0f, 1.0f);
-    ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-
-    dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + height), kColBgControl, height * 0.5f);
-    if (fraction > 0.0f) {
-        dl->AddRectFilled(pos, ImVec2(pos.x + std::max(height, w * fraction), pos.y + height), GetAccentU32(), height * 0.5f);
-    }
-    if (overlay && overlay[0]) {
-        if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
-        ImVec2 oSz = ImGui::CalcTextSize(overlay);
-        dl->AddText(ImVec2(pos.x + (w - oSz.x) * 0.5f, pos.y + (height - oSz.y) * 0.5f), kColTextPrimary, overlay);
-        if (AppFonts::Small) ImGui::PopFont();
-    }
-    ImGui::Dummy(ImVec2(w, height));
-}
-
-void UrushiUI::Badge(const std::string& text, Tone tone) {
-    const float S = s_uiScale;
-    if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
-    ImVec2 tSz = ImGui::CalcTextSize(text.c_str());
-    float bw = tSz.x + 22.0f * S;
-    float bh = tSz.y + 6.0f * S;
-    ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-
-    ImU32 dotCol = GetToneU32(tone);
-    dl->AddRectFilled(pos, ImVec2(pos.x + bw, pos.y + bh), kColBgControl, 6.0f * S);
-    dl->AddRect(pos, ImVec2(pos.x + bw, pos.y + bh), kColHairline, 6.0f * S);
-    dl->AddCircleFilled(ImVec2(pos.x + 8.0f * S, pos.y + bh * 0.5f), 2.5f * S, dotCol);
-    dl->AddText(ImVec2(pos.x + 15.0f * S, pos.y + 3.0f * S), dotCol, text.c_str());
-    if (AppFonts::Small) ImGui::PopFont();
-
-    ImGui::Dummy(ImVec2(bw, bh));
-}
-
-static std::string s_activeListeningKeybindId;
-
-bool UrushiUI::Keybind(const std::string& id, const std::string& label, KeybindState& state) {
-    const float S = s_uiScale;
-    const float w = CurrentContentWidth();
-    const float rowH = 30.0f * S;
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-
-    const bool isListening = (s_activeListeningKeybindId == id);
-
-    // Format display text
-    std::string keyText;
-    if (isListening) {
-        keyText = (s_language == Language::English) ? "Press any key..." : "Нажмите кнопку...";
-    } else {
-        if (state.source == "none" || state.code == 0) {
-            keyText = (s_language == Language::English) ? "None" : "Не назначен";
-        } else {
-            keyText = state.name.empty() ? "Bound" : state.name;
-        }
-    }
-
-    if (AppFonts::Mono) ImGui::PushFont(AppFonts::Mono);
-    ImVec2 tSz = ImGui::CalcTextSize(keyText.c_str());
-    if (AppFonts::Mono) ImGui::PopFont();
-
-    const float btnPadX = 12.0f * S;
-    const float minBtnW = 84.0f * S;
-    const float btnW = (std::max)(minBtnW, tSz.x + btnPadX * 2.0f);
-    const float btnH = 24.0f * S;
-    const float btnR = 6.0f * S;
-
-    const ImVec2 btnMin(pos.x + w - btnW, pos.y + (rowH - btnH) * 0.5f);
-    const ImVec2 btnMax(btnMin.x + btnW, btnMin.y + btnH);
-
-    // Label text on left
-    const char* hashPos = strstr(label.c_str(), "##");
-    std::string visLabel = hashPos ? label.substr(0, hashPos - label.c_str()) : label;
-
-    dl->PushClipRect(pos, ImVec2(btnMin.x - 8.0f * S, pos.y + rowH), true);
-    ImVec2 lblSz = ImGui::CalcTextSize(visLabel.c_str());
-    dl->AddText(ImVec2(pos.x, pos.y + (rowH - lblSz.y) * 0.5f), kColTextPrimary, visLabel.c_str());
-    dl->PopClipRect();
-
-    // Interactive button for keybind
-    ImGui::PushID(id.c_str());
-    ImGui::SetCursorScreenPos(btnMin);
-    bool clicked = ImGui::InvisibleButton("##kb_btn", ImVec2(btnW, btnH));
-    bool hovered = ImGui::IsItemHovered();
-    bool rightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
-
-    bool changed = false;
-
-    if (isListening) {
-        // Subtle pulse for listening border
-        float time = static_cast<float>(ImGui::GetTime());
-        float pulse = 0.5f + 0.5f * sinf(time * 6.0f);
-        ImU32 listeningBorder = ScaleAlpha(GetAccentU32(), 0.6f + 0.4f * pulse);
-        ImU32 listeningBg = ScaleAlpha(GetAccentU32(), 0.16f + 0.08f * pulse);
-
-        dl->AddRectFilled(btnMin, btnMax, listeningBg, btnR);
-        dl->AddRect(btnMin, btnMax, listeningBorder, btnR, 0, 1.5f * S);
-
-        if (AppFonts::Mono) ImGui::PushFont(AppFonts::Mono);
-        dl->AddText(ImVec2(btnMin.x + (btnW - tSz.x) * 0.5f, btnMin.y + (btnH - tSz.y) * 0.5f),
-                    GetAccentFgU32(), keyText.c_str());
-        if (AppFonts::Mono) ImGui::PopFont();
-
-        // Check for captured input
-        InputBinding captured;
-        bool cancelled = false;
-        bool cleared = false;
-        if (InputManager::PollAnyPressed(captured, cancelled, cleared)) {
-            if (cancelled) {
-                s_activeListeningKeybindId.clear();
-            } else if (cleared) {
-                state.source = "none";
-                state.code = 0;
-                state.modCode = 0;
-                state.name = (s_language == Language::English) ? "None" : "Не назначен";
-                s_activeListeningKeybindId.clear();
-                changed = true;
-            } else if (captured.IsValid()) {
-                state.source = (captured.source == InputSource::Gamepad) ? "gamepad" : "keyboard";
-                state.code = captured.code;
-                state.modCode = captured.modCode;
-                state.name = captured.name;
-                s_activeListeningKeybindId.clear();
-                changed = true;
-            }
-        } else if (clicked) {
-            // Click again cancels listening
-            s_activeListeningKeybindId.clear();
-        } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !hovered) {
-            // Click outside cancels listening
-            s_activeListeningKeybindId.clear();
-        }
-    } else {
-        // Normal state
-        if (rightClicked) {
-            // Right-click clears binding
-            state.source = "none";
-            state.code = 0;
-            state.modCode = 0;
-            state.name = (s_language == Language::English) ? "None" : "Не назначен";
-            changed = true;
-        } else if (clicked) {
-            s_activeListeningKeybindId = id;
-        }
-
-        ImU32 bg = hovered ? kColBgRaisedHover : kColBgControl;
-        ImU32 border = hovered ? GetAccentU32(0.8f) : kColHairlineStrong;
-        ImU32 txtCol = (state.source == "none" || state.code == 0) ? kColTextMuted : kColTextPrimary;
-
-        dl->AddRectFilled(btnMin, btnMax, bg, btnR);
-        dl->AddRect(btnMin, btnMax, border, btnR, 0, 1.0f);
-
-        if (AppFonts::Mono) ImGui::PushFont(AppFonts::Mono);
-        dl->AddText(ImVec2(btnMin.x + (btnW - tSz.x) * 0.5f, btnMin.y + (btnH - tSz.y) * 0.5f),
-                    txtCol, keyText.c_str());
-        if (AppFonts::Mono) ImGui::PopFont();
-    }
-
-    ImGui::PopID();
-    ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + rowH));
-    return changed;
-}
-
-void UrushiUI::Keycap(const std::string& keyText) {
-    const float S = s_uiScale;
-    if (AppFonts::Mono) ImGui::PushFont(AppFonts::Mono);
-    ImVec2 tSz = ImGui::CalcTextSize(keyText.c_str());
-    float kw = tSz.x + 12.0f * S;
-    float kh = tSz.y + 4.0f * S;
-    ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-
-    dl->AddRectFilled(pos, ImVec2(pos.x + kw, pos.y + kh), kColBgControl, 5.0f * S);
-    dl->AddRect(pos, ImVec2(pos.x + kw, pos.y + kh), kColHairlineStrong, 5.0f * S);
-    dl->AddText(ImVec2(pos.x + 6.0f * S, pos.y + 2.0f * S), kColTextPrimary, keyText.c_str());
-    if (AppFonts::Mono) ImGui::PopFont();
-
-    ImGui::Dummy(ImVec2(kw, kh));
-}
-
-void UrushiUI::Text(const std::string& text, Tone tone) {
-    ImGui::TextColored(GetToneVec4(tone), "%s", text.c_str());
-}
-
-void UrushiUI::TextWrapped(const std::string& text, Tone tone) {
-    float wrapX = ImGui::GetCursorPosX() + CurrentContentWidth();
-    ImGui::PushTextWrapPos(wrapX);
-    ImGui::TextColored(GetToneVec4(tone), "%s", text.c_str());
-    ImGui::PopTextWrapPos();
-}
-
-void UrushiUI::TextColored(const ImVec4& col, const std::string& text) {
-    ImGui::TextColored(col, "%s", text.c_str());
-}
-
-void UrushiUI::Separator() {
-    const float S = s_uiScale;
-    float w = CurrentContentWidth();
-    ImVec2 pos = ImGui::GetCursorScreenPos();
-    ImGui::GetWindowDrawList()->AddLine(pos, ImVec2(pos.x + w, pos.y), kColHairline);
-    ImGui::Dummy(ImVec2(w, 2.0f * S));
-}
-
-void UrushiUI::Spacing(float px) {
-    ImGui::Dummy(ImVec2(0.0f, px));
-}
-
 // UI Element Introspection & Config Auto-Discovery
 void UrushiUI::SetCurrentRenderingWindow(const std::string& winId) {
-    std::lock_guard<std::mutex> lock(s_uiElementMutex);
-    s_currentRenderingWindow = winId;
+    std::lock_guard<std::mutex> lock(g_uiElementMutex);
+    g_currentRenderingWindow = winId;
 }
 
 std::string UrushiUI::GetCurrentRenderingWindow() {
-    std::lock_guard<std::mutex> lock(s_uiElementMutex);
-    return s_currentRenderingWindow;
+    std::lock_guard<std::mutex> lock(g_uiElementMutex);
+    return g_currentRenderingWindow;
 }
 
 void UrushiUI::ParseElementId(const std::string& input, std::string& outLabel, std::string& outId) {
@@ -2431,9 +623,9 @@ void UrushiUI::ParseElementId(const std::string& input, std::string& outLabel, s
 
 void UrushiUI::RecordUiElement(const std::string& winId, const std::string& elemId, const std::string& label,
                               const std::string& type, bool bVal, double nVal, const std::string& sVal, bool changed) {
-    std::lock_guard<std::mutex> lock(s_uiElementMutex);
+    std::lock_guard<std::mutex> lock(g_uiElementMutex);
     std::string wKey = winId.empty() ? "general" : winId;
-    auto& elem = s_uiElements[wKey][elemId];
+    auto& elem = g_uiElements[wKey][elemId];
     elem.id = elemId;
     elem.label = label;
     elem.type = type;
@@ -2462,9 +654,9 @@ bool UrushiUI::ConsumeStoredString(const std::string& /*winId*/, const std::stri
 
 void UrushiUI::SetStoredUiElement(const std::string& winId, const std::string& elemId,
                                   const std::string& type, bool bVal, double nVal, const std::string& sVal) {
-    std::lock_guard<std::mutex> lock(s_uiElementMutex);
+    std::lock_guard<std::mutex> lock(g_uiElementMutex);
     std::string wKey = winId.empty() ? "general" : winId;
-    auto& elem = s_uiElements[wKey][elemId];
+    auto& elem = g_uiElements[wKey][elemId];
     elem.id = elemId;
     elem.type = type;
     elem.boolValue = bVal;
@@ -2475,10 +667,10 @@ void UrushiUI::SetStoredUiElement(const std::string& winId, const std::string& e
 }
 
 std::vector<std::pair<std::string, std::vector<UrushiUI::UiElementDesc>>> UrushiUI::GetAllUiElements() {
-    std::lock_guard<std::mutex> lock(s_uiElementMutex);
+    std::lock_guard<std::mutex> lock(g_uiElementMutex);
     std::vector<std::pair<std::string, std::vector<UiElementDesc>>> result;
-    result.reserve(s_uiElements.size());
-    for (const auto& wPair : s_uiElements) {
+    result.reserve(g_uiElements.size());
+    for (const auto& wPair : g_uiElements) {
         std::vector<UiElementDesc> elems;
         elems.reserve(wPair.second.size());
         for (const auto& ePair : wPair.second) {
@@ -2490,11 +682,11 @@ std::vector<std::pair<std::string, std::vector<UrushiUI::UiElementDesc>>> Urushi
 }
 
 std::vector<UrushiUI::UiElementDesc> UrushiUI::GetWindowUiElements(const std::string& winId) {
-    std::lock_guard<std::mutex> lock(s_uiElementMutex);
+    std::lock_guard<std::mutex> lock(g_uiElementMutex);
     std::vector<UiElementDesc> result;
     std::string wKey = winId.empty() ? "general" : winId;
-    auto it = s_uiElements.find(wKey);
-    if (it != s_uiElements.end()) {
+    auto it = g_uiElements.find(wKey);
+    if (it != g_uiElements.end()) {
         result.reserve(it->second.size());
         for (const auto& pair : it->second) {
             result.push_back(pair.second);
@@ -2504,7 +696,6 @@ std::vector<UrushiUI::UiElementDesc> UrushiUI::GetWindowUiElements(const std::st
 }
 
 void UrushiUI::ClearUiElements() {
-    std::lock_guard<std::mutex> lock(s_uiElementMutex);
-    s_uiElements.clear();
+    std::lock_guard<std::mutex> lock(g_uiElementMutex);
+    g_uiElements.clear();
 }
-

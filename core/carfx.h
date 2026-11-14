@@ -52,6 +52,13 @@ enum OverrideStealth : int {
 };
 
 struct TargetTexturesInput {
+    struct ExtraTexPair {
+        void* nativeAlbedoPtr = nullptr;
+        void* nativePackedPtr = nullptr;
+        bool albedoIsDefault = true;
+        bool packedIsDefault = true;
+    };
+
     void* nativeAlbedoPtr = nullptr;    // GetNativeTexturePtr_Injected return value (SRV or Resource)
     void* nativePackedPtr = nullptr;
     uint32_t albedoTexId = 0;
@@ -59,6 +66,7 @@ struct TargetTexturesInput {
     bool albedoIsDefault = true;
     bool packedIsDefault = true;
     bool valid = false;
+    std::vector<ExtraTexPair> extraPairs;
 };
 
 struct SpatialProximityInput {
@@ -149,6 +157,7 @@ void ClearTargetTextures(int target);
 
 // Shader management (thread-safe)
 bool LoadShader(int target, const std::string& pathUtf8, std::string* outError = nullptr);
+bool CompileShaderSource(int target, const std::string& source, const std::string& name = "dynamic_shader.hlsl", std::string* outError = nullptr);
 void UnloadShader(int target);
 bool ReloadShader(int target, std::string* outError = nullptr);
 void PollHotReload();

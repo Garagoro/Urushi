@@ -24,23 +24,23 @@ add_library(urushi SHARED
     hook_manager.h hook_manager.cpp
     pattern_scanner.h pattern_scanner.cpp
     game_build.h game_build.cpp
+    il2cpp_helpers.h il2cpp_helpers.cpp
     native_carx.h native_carx.cpp
-    steer_assist.h steer_assist.cpp
-    unity_bridge.h unity_bridge.cpp
-    ecs_collision.h ecs_collision.cpp
-    car_sim_optimizer.h car_sim_optimizer.cpp
+    unity_bridge.h unity_bridge_internal.h unity_bridge.cpp
+    unity_scene.cpp unity_carfx_sync.cpp unity_spatial.cpp unity_ghost.cpp unity_teleport.cpp
+    ecs_collision.h ecs_collision_internal.h ecs_collision.cpp ecs_physics.cpp
+    car_sim_optimizer.h car_sim_optimizer_internal.h car_sim_optimizer.cpp car_sim_optimizer_hooks.cpp
     d3d11_hook.h d3d11_hook.cpp
     carfx_shader_decl.h carfx_shader_decl.cpp
-    carfx.h carfx.cpp
+    carfx.h carfx_internal.h carfx.cpp carfx_shader.cpp carfx_draw.cpp
     replay_engine.h replay_engine.cpp
     file_watcher.h file_watcher.cpp
     lua_engine.h lua_engine.cpp
     ui_schema.h ui_schema.cpp
-    urushi_ui.h urushi_ui.cpp
+    urushi_ui.h urushi_ui_internal.h urushi_ui.cpp urushi_ui_dock.cpp urushi_ui_widgets.cpp
     dev_pipe.h dev_pipe.cpp
     updater.h updater.cpp
     bindings/lua_carx.h bindings/lua_carx.cpp
-    bindings/lua_steer.h bindings/lua_steer.cpp
     bindings/lua_carfx.h bindings/lua_carfx.cpp
     bindings/lua_imgui.h bindings/lua_imgui.cpp
     bindings/lua_replay.h bindings/lua_replay.cpp
@@ -49,6 +49,8 @@ add_library(urushi SHARED
     bindings/lua_optimizer.h bindings/lua_optimizer.cpp
     bindings/lua_urushi.h bindings/lua_urushi.cpp
     bindings/lua_cloud.h bindings/lua_cloud.cpp
+    bindings/lua_disasm.h bindings/lua_disasm.cpp
+    bindings/lua_pattern.h bindings/lua_pattern.cpp
     ${IMGUI_SOURCES}
 )
 
@@ -62,6 +64,7 @@ target_include_directories(urushi PRIVATE
 target_link_libraries(urushi PRIVATE
     minhook
     lua
+    Zydis
     d3d11
     dxgi
     shlwapi

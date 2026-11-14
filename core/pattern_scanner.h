@@ -44,4 +44,14 @@ public:
 
     // Find function entry with fallback RVA
     static uintptr_t FindFunctionEntryOrFallback(HMODULE hMod, const char* bodyPattern, uintptr_t fallbackRva, size_t maxBacktrack = 256, const char* name = nullptr);
+
+    // Find all occurrences of pattern across executable sections
+    static std::vector<uintptr_t> FindAll(HMODULE hMod, const char* idaPattern, size_t maxMatches = 100);
+
+    // Count occurrences of pattern (stops counting after stopAt to save time)
+    static size_t CountMatches(HMODULE hMod, const char* idaPattern, size_t stopAt = 100);
+
+    // Cached pattern find (transparent O(1) for repeated scans in game loop)
+    static uintptr_t FindCached(HMODULE hMod, const char* idaPattern, const char* name = nullptr);
+    static void ClearCache();
 };

@@ -34,6 +34,7 @@ ParsedPattern ParseIdaPattern(const char* pattern) {
 
 std::mutex s_cacheMutex;
 std::unordered_map<HMODULE, std::vector<PatternScanner::SectionInfo>> s_codeSectionsCache;
+std::unordered_map<std::string, uintptr_t> s_scanCache;
 
 // Isolated SEH helper for reading PE headers
 static bool SafeGetCodeSectionsFromPe(uintptr_t base, std::vector<PatternScanner::SectionInfo>* outSections) {
@@ -94,6 +95,38 @@ static const uint8_t* SafeScanRaw(const uint8_t* scanStart, const uint8_t* end,
         return nullptr;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return nullptr;
+    }
+}
+
+// Isolated SEH helper for scanning multiple matches without C++ objects in frame
+static size_t SafeScanAllRawSEH(const uint8_t* scanStart, const uint8_t* end,
+                                const int16_t* patBytes, size_t patLen,
+                                uintptr_t* outMatches, size_t maxMatches) {
+    const int16_t firstByte = patBytes[0];
+    size_t count = 0;
+    __try {
+        for (const uint8_t* p = scanStart; p <= end; ++p) {
+            if (firstByte != -1 && *p != static_cast<uint8_t>(firstByte)) continue;
+
+            bool match = true;
+            for (size_t i = 1; i < patLen; ++i) {
+                const int16_t expected = patBytes[i];
+                if (expected != -1 && p[i] != static_cast<uint8_t>(expected)) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                if (outMatches && count < maxMatches) {
+                    outMatches[count] = reinterpret_cast<uintptr_t>(p);
+                }
+                count++;
+                if (count >= maxMatches) break;
+            }
+        }
+        return count;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return count;
     }
 }
 
@@ -279,4 +312,86 @@ uintptr_t PatternScanner::FindFunctionEntryOrFallback(HMODULE hMod, const char* 
         return fallbackVa;
     }
     return 0;
+}
+
+std::vector<uintptr_t> PatternScanner::FindAll(HMODULE hMod, const char* idaPattern, size_t maxMatches) {
+    if (!hMod || !idaPattern || maxMatches == 0) return {};
+
+    const ParsedPattern parsed = ParseIdaPattern(idaPattern);
+    if (!parsed.valid) return {};
+
+    const auto sections = GetCodeSections(hMod);
+    if (sections.empty()) return {};
+
+    const size_t patLen = parsed.bytes.size();
+    std::vector<uintptr_t> matches;
+    matches.reserve(std::min<size_t>(maxMatches, 64));
+
+    std::vector<uintptr_t> tempBuf(maxMatches);
+
+    for (const auto& sec : sections) {
+        if (!sec.valid || sec.size < patLen) continue;
+
+        const uint8_t* scanStart = reinterpret_cast<const uint8_t*>(sec.start);
+        const uint8_t* end = scanStart + sec.size - patLen;
+        const size_t needed = maxMatches - matches.size();
+
+        size_t found = SafeScanAllRawSEH(scanStart, end, parsed.bytes.data(), patLen, tempBuf.data(), needed);
+        for (size_t i = 0; i < found; ++i) {
+            matches.push_back(tempBuf[i]);
+        }
+        if (matches.size() >= maxMatches) break;
+    }
+
+    return matches;
+}
+
+size_t PatternScanner::CountMatches(HMODULE hMod, const char* idaPattern, size_t stopAt) {
+    if (!hMod || !idaPattern || stopAt == 0) return 0;
+
+    const ParsedPattern parsed = ParseIdaPattern(idaPattern);
+    if (!parsed.valid) return 0;
+
+    const auto sections = GetCodeSections(hMod);
+    if (sections.empty()) return 0;
+
+    const size_t patLen = parsed.bytes.size();
+    size_t count = 0;
+
+    for (const auto& sec : sections) {
+        if (!sec.valid || sec.size < patLen) continue;
+
+        const uint8_t* scanStart = reinterpret_cast<const uint8_t*>(sec.start);
+        const uint8_t* end = scanStart + sec.size - patLen;
+        const size_t needed = stopAt - count;
+
+        size_t found = SafeScanAllRawSEH(scanStart, end, parsed.bytes.data(), patLen, nullptr, needed);
+        count += found;
+        if (count >= stopAt) break;
+    }
+
+    return count;
+}
+
+uintptr_t PatternScanner::FindCached(HMODULE hMod, const char* idaPattern, const char* name) {
+    if (!hMod || !idaPattern) return 0;
+    std::string key = std::to_string(reinterpret_cast<uintptr_t>(hMod)) + ":" + idaPattern;
+    {
+        std::lock_guard<std::mutex> lock(s_cacheMutex);
+        auto it = s_scanCache.find(key);
+        if (it != s_scanCache.end()) return it->second;
+    }
+
+    uintptr_t va = Find(hMod, idaPattern, name);
+    if (va != 0) {
+        std::lock_guard<std::mutex> lock(s_cacheMutex);
+        s_scanCache[key] = va;
+    }
+    return va;
+}
+
+void PatternScanner::ClearCache() {
+    std::lock_guard<std::mutex> lock(s_cacheMutex);
+    s_scanCache.clear();
+    s_codeSectionsCache.clear();
 }

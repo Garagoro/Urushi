@@ -20,16 +20,17 @@ Target: **CarX Drift Racing Online 2** (Unity 6000.3.19f1, IL2CPP, DX11, x64 Win
 | Settings | `core/settings.*` | `urushi_settings.ini` (crash policy, per-script enabled flags) |
 | Hooking | `core/hook_manager.*` | MinHook wrapper, in-flight counter for clean unload |
 | Overlay | `core/d3d11_hook.*` | Hooks `IDXGISwapChain::Present/ResizeBuffers`, `DrawIndexed(Instanced)`; WndProc subclass; ImGui init & frame loop |
-| UI | `core/urushi_ui.*` | Lacquered ImGui theme, dock/window manager, widgets (`BeginCard`, `Toggle`, `Segmented`, …) |
+| UI | `core/urushi_ui.cpp`, `urushi_ui_dock.cpp`, `urushi_ui_widgets.cpp` | Lacquered ImGui theme, dock/window manager, widgets (`BeginCard`, `Toggle`, `Segmented`, …) |
 | Declarative UI | `core/ui_schema.*` | Lua tables → ImGui panels (`on_action` / `on_change`) |
 | Lua | `core/lua_engine.*`, `core/lua_sandbox.*`, `core/lua_hardening.*`, `core/ptr_registry.h`, `core/bindings/lua_*.cpp` | VM lifecycle, callbacks, time-budget sandbox, **hardened stdlib** (no exec/net/bytecode, restricted `io.open`), pointer provenance, one binding file per Lua module |
 | Cloud scripts | `core/cloud_scripts.*`, `core/bindings/lua_cloud.cpp`, `tools/cloud_catalog.py` | Script library from the `verified` branch (catalog + SHA-256 verified install into `scripts/cloud/`) — see [CLOUD_SCRIPTS.md](CLOUD_SCRIPTS.md) |
+| Build database | `core/game_build.*` | Maps `GameAssembly.dll` TimeDateStamp → build index (Beta / Alpha) |
+| IL2CPP helpers | `core/il2cpp_helpers.*` | Shared SEH memory readers, dynamic `s_TypeInfoDefinitionTable` & method/interface metadata lookup |
 | Game access | `core/native_carx.*` | Hooks in `NativeCarX.dll` (car create/destroy, render matrices, tyres, telemetry) |
-| Unity access | `core/unity_bridge.*` (4.7k lines) | Hooks `ExecutePlayerLoop` in `UnityPlayer.dll` (**hard-coded offsets**), transforms, raycasts, spawn/teleport, ghost cars, main-thread task queue |
-| ECS / DOTS | `core/ecs_collision.*` | Selective ghosting (anti wrong-way), DOTS raycast/spherecast |
-| Physics tweaks | `core/steer_assist.*` | Code patches for the 155° steering-flip fix |
-| FPS optimizer | `core/car_sim_optimizer.*` | Hooks `DistanceBasedPhysicsSwitchingSubController::Update/IsFarCar`, `ApplyForceToDeformationSkeletonSystem::OnUpdate`, `BreakPhysicsJointSystem::OnUpdate`; damage/tyre-wear immunity |
-| Shaders | `core/carfx.*`, `core/carfx_shader_decl.*`, `shaders/*.hlsl` | Per-car pixel-shader replacement/overlay, sensors (wall, tandem, drift angle) |
+| Unity access | `core/unity_bridge.cpp`, `unity_scene.cpp`, `unity_carfx_sync.cpp`, `unity_spatial.cpp`, `unity_ghost.cpp`, `unity_teleport.cpp` | Hooks `ExecutePlayerLoop` in `UnityPlayer.dll`, scene/live-car resolution, CarFX sync, spatial proximity, ghost cars, player teleport |
+| ECS / DOTS | `core/ecs_collision.cpp`, `core/ecs_physics.cpp` | Selective ghosting (anti wrong-way), DOTS raycast/spherecast |
+| FPS optimizer | `core/car_sim_optimizer.cpp`, `car_sim_optimizer_hooks.cpp` | IL2CPP metadata + Burst hooks (`DistanceBasedPhysicsSwitchingSubController`, `CarPartsPhysicsController`, `BaseCollisionEffectBehaviour`, `ApplyForceToDeformationSkeletonSystem`, `BreakPhysicsJointSystem`, `PhysicsBehaviour::Detach`); damage/tyre-wear immunity |
+| Shaders | `core/carfx.cpp`, `carfx_shader.cpp`, `carfx_draw.cpp`, `core/carfx_shader_decl.*`, `shaders/*.hlsl` | Per-car pixel-shader replacement/overlay, hot-reload/WIC loader, RT/depth copy & draw dispatch |
 | Replays | `core/replay_engine.*` | `.cxr2` multi-car recording/playback, embeds CarFX config |
 | Input | `core/input_manager.*` | Keyboard + XInput gamepad, rebindable bindings |
 | Dev tooling | `core/dev_pipe.*`, `tools/urushi_dev_mcp.py` | Named pipe `\\.\pipe\urushi_dev`: backbuffer screenshots, UI inspect, Lua eval, reload |
@@ -54,7 +55,7 @@ InitThread (dllmain.cpp)
                                 → false : stay featureless (Safe / waiting for the user's answer)
 
 StartFeatures()  ("phase B" — everything that touches the game or runs scripts)
-  NativeCarX → SteerAssist → UnityBridge → CarSimOptimizer → ReplayEngine
+  NativeCarX → UnityBridge → CarSimOptimizer → ReplayEngine
   → LuaEngine::Init (runs scripts/main.lua) → FileWatcher → DevPipe → Updater
 ```
 
@@ -113,7 +114,7 @@ because panels call into Lua. `InputManager` and `NativeCarX` have their own mut
   `core/CMakeLists.txt`.
 
 ### Lua globals (registered in `LuaEngine::Init`)
-`carx` (cars, telemetry, tyres, physics, raycast, camera — `bindings/lua_carx.cpp`), `steer`, `carfx`, `replay`, `memory`,
+`carx` (cars, telemetry, tyres, physics, raycast, camera — `bindings/lua_carx.cpp`), `carfx`, `replay`, `memory`,
 `updater`, `cloud`, `optimizer`, `urushi` + `ui` + `input` (`bindings/lua_urushi.cpp`), `imgui` (`lua_imgui.cpp`), `events`, `log`.
 Stability-related `urushi.*`: `get_setting/set_setting(section,key,value)`, `list_scripts()`, `load_script(name)` (sandboxed),
 `reload_scripts()`, `get_last_crash()`, `open_crash_dir()`, `is_safe_mode()`.
@@ -149,7 +150,7 @@ schema table (declarative, `ui_schema`). It uses `T(ru, en)` from `i18n.lua` for
 | `teleport_mod.lua` | per-track checkpoints, teleport | `unity_bridge` (TeleportPose) |
 | `replay_mod.lua` | record/playback `.cxr2` | `replay_engine` |
 | `carfx_mod.lua` | shader picker/params | `carfx` |
-| `steer_assist_mod.lua` | 155° steering fix UI | `steer_assist` |
+| `steer_assist_mod.lua` | 155° steering fix (code patcher + trampoline + UI) | `memory` (`alloc_near`, `patch_bytes`, `scan`), `carx` |
 | `tires_mod.lua` | tyre wear/temp/pressure, damage toggle | `native_carx` TyreConfig, `car_sim_optimizer` |
 | `perf_optimizer.lua` | multiplayer physics LOD | `car_sim_optimizer` |
 | `config.lua` | the single JSON config (`urushi_data/config.json`) with autosave; `config.get/set/for_script` | — (pure Lua) |
@@ -198,7 +199,7 @@ hot-swap DLL). Crash analysis: `urushi_crash/*.txt` first, then `.dmp` (`tools/a
 
 ## 8. Fragile points / gotchas
 
-* `unity_bridge.cpp` and parts of `car_sim_optimizer.cpp` / `steer_assist.cpp` use **hard-coded Unity/NativeCarX offsets and byte
+* `unity_scene.cpp` / `native_carx.cpp` and parts of `car_sim_optimizer_hooks.cpp` / `steer_assist_mod.lua` use Unity/NativeCarX offsets and byte
   patterns** for Unity 6000.3.19f1 — a game update breaks them; bytes are verified before patching (`Stats.bytesVerified`).
 * Unity objects are not thread-safe: the render thread must not call into Unity (see §3). The garage-scene transition freed
   GraphicsBuffers while CarFX still referenced them (fixed in `c1b419e`) — clear texture/buffer references on scene changes.

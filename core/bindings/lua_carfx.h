@@ -11,6 +11,7 @@ public:
     static void Register(lua_State* L);
 
     static int Load(lua_State* L);
+    static int Compile(lua_State* L);
     static int Unload(lua_State* L);
     static int Reload(lua_State* L);
     static int SetEnabled(lua_State* L);

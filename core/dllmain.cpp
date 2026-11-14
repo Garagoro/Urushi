@@ -3,7 +3,6 @@
 #include "logger.h"
 #include "hook_manager.h"
 #include "native_carx.h"
-#include "steer_assist.h"
 #include "unity_bridge.h"
 #include "car_sim_optimizer.h"
 #include "d3d11_hook.h"
@@ -79,7 +78,6 @@ extern "C" __declspec(dllexport) void ScriptHook_Unload() {
     D3D11Hook::Shutdown();
     if (featuresUp) {
         UnityBridge::Shutdown();
-        SteerAssist::Shutdown();
         NativeCarX::Shutdown();
     }
     HookManager::Shutdown();
@@ -96,10 +94,6 @@ static void StartFeatures() {
 
         if (!NativeCarX::Init()) {
             Logger::Warn("NativeCarX failed initial hook, will continue...");
-        }
-
-        if (!SteerAssist::Init()) {
-            Logger::Warn("SteerAssist failed initial patch, will retry on access...");
         }
 
         if (!UnityBridge::Init()) {

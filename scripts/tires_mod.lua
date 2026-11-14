@@ -115,6 +115,13 @@ local function render_tires_window()
                 { label = T("Детали", "Parts"), value = no_dam and string.format(T("Блок: %d", "Block: %d"), joint_blocks) or T("Отрыв", "Detaching"), tone = no_dam and "green" or "yellow" },
                 { label = T("Геометрия", "Geometry"), value = no_dam and T("Идеал", "Locked") or T("Сток", "Stock"), tone = no_dam and "green" or "muted" },
             })
+
+            ui.spacing(3)
+            if ui.button(T("Починить авто сейчас##repair_now_btn", "Repair Car Now##repair_now_btn"), 0, 26, "primary") then
+                if carx and carx.repair_car then
+                    carx.repair_car()
+                end
+            end
         end)
 
         ui.card(T("Режим износа шин", "Tire Wear Mode"), nil, function()

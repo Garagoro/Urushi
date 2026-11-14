@@ -47,6 +47,7 @@ The `carx` global table exposes real-time vehicle dynamics and game states.
   ```lua
   local car = carx.get_player_car()
   if car then
+      print(car.addr)         -- integer: NativeCarX::Car pointer address
       print(car.speed_kmh)    -- float: Speed in km/h
       print(car.speed_mph)    -- float: Speed in mph
       print(car.rpm)          -- float: Current engine RPM
@@ -235,11 +236,11 @@ Controls the physics simulation scaling for high-population multiplayer lobbies.
 
 ---
 
-## 8. `steer_assist` Module — Steering Fixes
+## 8. `steer_assist` Module — Steering Fixes (Pure Lua: `scripts/steer_assist_mod.lua`)
 
-* `steer_assist.set_enabled(boolean)`: Toggles the `155°` backwards entry threshold fix.
+* `steer_assist.set_enabled(boolean)`: Toggles the `155°` backwards entry threshold fix (uses `memory.alloc_near` + `memory.patch_bytes` trampolines).
 * `steer_assist.set_threshold(degrees)`: Adjusts vector-flip threshold (default: `155.0°`).
-* `steer_assist.get_telemetry()`: Returns live front slip angles, assist multipliers, and lock status.
+* `steer_assist.get_stats()` / `steer_assist.get_telemetry()`: Returns patch status (`bytes_verified`, `near_alloc_ok`, `patches_applied`), live front slip angles, assist multipliers, and lock status.
 
 ---
 
@@ -254,7 +255,57 @@ Controls the physics simulation scaling for high-population multiplayer lobbies.
 
 ---
 
-## 10. Example: Creating a Custom Mod
+## 10. `il2cpp` & `unity` — Dynamic Reflection & AI Inspection
+
+URUSHI provides full reflection over Unity GameObjects and IL2CPP C# components at runtime, without needing C++ core modifications.
+
+### Unity Scene Primitives (`unity` Module)
+* `unity.find(name)`: Finds a native `GameObject` pointer by name in the active scene.
+* `unity.get_all_objects([max])`: Returns array of all active GameObjects `{ ptr, name, transform, x, y, z }`.
+* `unity.get_components(go)`: Returns all components attached to a GameObject:
+  ```lua
+  local comps = unity.get_components(go)
+  -- returns: { { cid = 66, name = "CarBehaviour", namespace = "Framework.Views.Cars", ptr = <managed>, class_addr = 0x... }, ... }
+  ```
+* `unity.get_position(transform)` / `unity.set_position(transform, x, y, z)`: Fast position access.
+* `unity.get_rotation(transform)` / `unity.set_rotation(transform, x, y, z, w)`: Quaternion rotation access.
+
+### IL2CPP Component Inspection (`il2cpp` Library)
+* `il2cpp.get_component(go, name)`: Finds a component by name or partial name on a GameObject.
+* `il2cpp.inspect(component_or_ptr)`: Inspects class metadata and returns:
+  * `info.name`, `info.namespace`, `info.full_name`
+  * `info.field_count`, `info.method_count`
+  * `info.fields`: Array of `{ name, offset, is_static, val_float, val_int, val_ptr }`
+  * `info.methods`: Array of `{ name, fn_ptr, params_count }`
+* `il2cpp.get_field(comp, field_name)`: Returns live float, int, and pointer values for a named field.
+* `il2cpp.set_field_float(comp, field_name, value)`: Modifies a float field directly in memory.
+* `il2cpp.set_field_int(comp, field_name, value)`: Modifies an integer field directly in memory.
+* `il2cpp.dump_class(comp)`: Generates Markdown documentation of the component.
+* `il2cpp.dump_object_for_ai(go)`: Formats a complete structured prompt for an AI assistant (ChatGPT, Claude) detailing all components, fields, and methods.
+* `il2cpp.export_ai_dump(go, filename)`: Writes the AI dump to `urushi_data/<filename>` and `urushi.log`.
+
+### Memory Primitives (`memory` Module)
+* `memory.read_u8 / u16 / u32 / i32 / u64 / ptr(addr)`
+* `memory.read_float(addr)`
+* `memory.read_bytes(addr, count)`
+* `memory.read_string(addr, [maxLen])`
+* `memory.write_u8 / u16 / u32 / i32 / u64 / ptr(addr, val)`
+* `memory.write_float(addr, val)`
+* `memory.write_bytes(addr, bytes_or_hex_string)`
+* `memory.patch_bytes(addr, bytes_or_hex_string)`: Safe patch with rollback tracking
+* `memory.restore_patch(addr)`: Rolls back patch at address
+* `memory.restore_all_patches()`: Rolls back all registered patches and releases near-allocated trampolines
+* `memory.alloc_near(module_name, [size])`: *(trusted built-in scripts only)* Allocates RWX executable memory within ±2 GB of a module for RIP-relative trampolines
+* `memory.free_alloc(addr)`: *(trusted built-in scripts only)* Releases a trampoline allocated by `memory.alloc_near`
+* `memory.scan(pattern, [module_name])`: Fast cached AOB signature scanner
+* `memory.resolve_rip(instr_addr, op_len, rip_offset)`: Resolves x64 RIP-relative pointer
+* `memory.call(fn_ptr, [arg1...arg8])`: Fastcall invocation with SEH protection (returns integer, ok)
+* `memory.call_float(fn_ptr, [arg1...arg8])`: Fastcall invocation with float return
+* `memory.call_main(fn_ptr, [arg1...arg8])`: Fastcall invocation on Unity main thread
+
+---
+
+## 11. Example: Creating a Custom Mod
 
 Save as `scripts/drift_sound_mod.lua`:
 
@@ -295,3 +346,123 @@ urushi.register_window({
 ```
 
 Drop the file into `scripts/` (e.g. `scripts/drift_sound_mod.lua`). It shows up in *the *Library* window*, disabled by default; enable it and press "Reload scripts" (or `Ctrl + F11`). Built-in modules are listed in `BUILTIN` inside `scripts/main.lua`.
+
+---
+
+## 8. Embedded Reverse-Engineering & Disassembly (`disasm`)
+
+URUSHI embeds the high-performance **Zydis x86_64 Disassembler**, allowing modders and AI agents to disassemble native functions, generate IDA signatures, resolve RIP targets, and patch instructions without external tools.
+
+### `disasm.decode(address, [count = 10])`
+Disassembles up to `count` instructions starting from `address`.
+- **Arguments:**
+  - `address`: Virtual address (`number`, `string` e.g. `"0x7FF8466C1000"`, or pointer)
+  - `count`: Maximum number of instructions (default `10`, max `256`)
+- **Returns:** Table of instruction records:
+  ```lua
+  {
+      {
+          address = 140704322173952,
+          address_hex = "0x7FF8466C1000",
+          rva = 4096,
+          rva_hex = "0x1000",
+          length = 7,
+          bytes = "48 8D 0D C9 2B B8 00",
+          mnemonic = "lea",
+          text = "lea rcx, [0x00007FF847243BD0]",
+          is_relative = true,
+          target = 140704327957456,
+          target_hex = "0x7FF847243BD0",
+      },
+      ...
+  }
+  ```
+
+### `disasm.make_signature(address, [module = "GameAssembly.dll"], [min_len = 14], [max_len = 64])`
+Automatically scans instructions at `address`, masks out relative jumps, calls, and RIP displacements with `?` wildcards, and ensures the signature is unique in the module.
+- **Returns:** `pattern_string, match_count, byte_count`
+  - If `match_count == 1`, the pattern is 100% unique!
+  ```lua
+  local sig, matches, len = disasm.make_signature(method_addr, "GameAssembly.dll")
+  print("IDA Pattern:", sig) -- "48 8D 0D ? ? ? ? E9 ? ? ? ? CC CC"
+  ```
+
+### `disasm.nop(address, [instruction_count = 1])`
+Safely overwrites `instruction_count` instructions with `0x90` (`NOP`) using `VirtualProtect` and flushes the instruction cache.
+- **Returns:** `ok, total_bytes_nopped`
+
+### `disasm.resolve_rip(address)`
+Decodes 1 instruction and calculates its absolute RIP-relative target.
+- **Returns:** `target_address, target_hex_string`
+
+---
+
+## 9. Memory Pattern Scanner (`pattern`)
+
+Scans all executable PE sections (`.text`, `il2cpp`, etc.) across game modules.
+
+### `pattern.find(module_name, ida_pattern, [name])`
+- Scans `module_name` (default: `"GameAssembly.dll"`) for an IDA-style hex pattern (e.g. `"48 89 5C 24 ? 48 83 EC"`).
+- Returns virtual address `va, hex_string` (or `nil` if not found).
+
+### `pattern.find_rip(module_name, ida_pattern, instr_len, rip_offset, [instr_offset = 0])`
+- Finds pattern and resolves the 32-bit RIP-relative displacement in one call.
+
+### `pattern.find_entry(module_name, body_pattern, [max_backtrack = 256])`
+- Finds unique signature inside a function body and automatically walks backwards to function prologue (`0xCC` / `0xC3`).
+
+### `pattern.count(module_name, ida_pattern)`
+- Returns number of occurrences in the module.
+
+### `pattern.get_module(module_name)`
+- Returns `{ base, base_hex, size, path }`.
+
+### `pattern.to_rva(module_name, address)` / `pattern.to_va(module_name, rva)`
+- Converts between virtual addresses and module RVAs.
+
+---
+
+## 10. In-Memory HLSL Shader Compilation (`carfx.compile`)
+
+Compile custom DirectX 11 Pixel Shaders directly from Lua strings at runtime without writing files to disk.
+
+### `carfx.compile(hlsl_source, [target = 0], [virtual_name = "dynamic.hlsl"])`
+- **Arguments:**
+  - `hlsl_source`: Full HLSL shader code (with `@mode`, `@param`, `@stealth` headers).
+  - `target`: `0` for Car Body, `1` for Internals, `2..9` for Ghosts.
+- **Returns:** `ok, error_message`
+- **Example:**
+  ```lua
+  local hlsl = [[
+  // @name GoldenGlow
+  // @mode replace
+  float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target {
+      return float4(1.0, 0.8, 0.2, 1.0);
+  }
+  ]]
+  local ok, err = carfx.compile(hlsl, 0)
+  if ok then carfx.set_enabled(true) end
+  ```
+
+---
+
+## 11. Memory Patching & Unity IL2CPP Reflection
+
+### `memory.write_bytes(address, hex_string_or_table)`
+Writes raw bytes to memory with automatic `VirtualProtect` (PAGE_EXECUTE_READWRITE) and instruction cache flush.
+```lua
+memory.write_bytes(addr, "90 90 90 90 90")
+memory.write_bytes(addr, { 0x90, 0x90, 0x90 })
+```
+
+### `il2cpp` Reflection & AI Dump
+- `il2cpp.get_components(gameObject)`
+- `il2cpp.inspect(component)` -> fields with offsets and types, methods with native function pointers
+- `il2cpp.get_field(comp, "fieldName")` / `set_field_float(comp, "fieldName", val)`
+- `il2cpp.get_method(comp, "methodName")` -> `{ name, fn_ptr, params_count }`
+- `il2cpp.call(comp, "methodName", ...)` -> invokes IL2CPP method with SEH protection
+- `il2cpp.repair_car()` -> requests full body mesh & detached parts repair on main thread
+- `il2cpp.disasm_method(comp, "methodName", count)` -> disassembled instructions via Zydis
+- `il2cpp.make_method_signature(comp, "methodName")` -> auto-generated unique IDA signature
+- `il2cpp.export_ai_dump(gameObject, filename)` -> complete class & field dump formatted for AI models
+

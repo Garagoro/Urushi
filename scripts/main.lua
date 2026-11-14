@@ -14,8 +14,8 @@ local function copy(t)
     return r
 end
 
--- Core modules: always loaded (UI language, config, keybinds)
-for _, id in ipairs({ "i18n", "config", "keybinds" }) do
+-- Core modules: always loaded (UI language, config, keybinds, reflection)
+for _, id in ipairs({ "i18n", "config", "keybinds", "il2cpp" }) do
     local ok, err = urushi.load_script(id)
     if not ok then log.error("Core script '" .. id .. "' failed: " .. tostring(err)) end
 end
@@ -94,7 +94,7 @@ local LUA_FUNCS = { "assert", "error", "ipairs", "pairs", "next", "pcall", "xpca
                     "type", "rawequal", "rawget", "rawset", "rawlen", "setmetatable", "print" }
 local LUA_LIBS = { "string", "table", "math", "utf8", "coroutine", "os", "debug" }
 local API_MODULES = { "carx", "steer_assist", "carfx", "replay", "memory", "unity", "optimizer", "ui", "input", "imgui", "gui",
-                      "events", "log", "i18n", "keybinds" }
+                      "events", "log", "i18n", "keybinds", "il2cpp" }
 local SETTINGS_NAMES = { settings = true, SETTINGS = true, config_data = true, CONFIG = true, state = true, STATE = true }
 
 local function make_env(script_id, cloud_id)
@@ -103,6 +103,10 @@ local function make_env(script_id, cloud_id)
     for _, n in ipairs(LUA_LIBS) do env[n] = copy(_G[n]) end
     for _, n in ipairs(API_MODULES) do
         if _G[n] then env[n] = copy(_G[n]) end
+    end
+    if env.memory then
+        env.memory.alloc_near = nil
+        env.memory.free_alloc = nil
     end
     local pub = {}
     for k, v in pairs(urushi) do
@@ -183,7 +187,7 @@ local BUILTIN = {
 }
 
 -- Files that are part of the framework and never listed as user scripts
-local RESERVED = { main = true, i18n = true, config = true, keybinds = true, system_mod = true, runner = true }
+local RESERVED = { main = true, i18n = true, config = true, keybinds = true, il2cpp = true, system_mod = true, runner = true }
 for _, b in ipairs(BUILTIN) do RESERVED[b.id] = true end
 
 local function enabled_flag(id, default)
