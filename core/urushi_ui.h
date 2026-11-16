@@ -128,8 +128,9 @@ public:
     static void SetSingleTabMode(bool enabled);
     static bool GetSingleTabMode();
 
-    static void SetLanguage(Language lang);
-    static bool SetLanguageByName(const std::string& name);
+    static void ToggleLanguage();
+    static void SetLanguage(Language lang, bool notifyLua = true);
+    static bool SetLanguageByName(const std::string& name, bool notifyLua = true);
     static Language GetLanguage();
     static std::string GetLanguageName();
     static bool IsEnglish();

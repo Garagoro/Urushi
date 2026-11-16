@@ -9,6 +9,7 @@
 #include "logger.h"
 #include "settings.h"
 #include "lua_sandbox.h"
+#include "lua_engine.h"
 
 extern "C" {
 #include <lua.h>
@@ -37,10 +38,7 @@ AccentDef g_customAccentDef = {
     IM_COL32(76, 199, 245, 40),
     IM_COL32(76, 199, 245, 102)
 };
-UrushiUI::Language g_language = []() {
-    LANGID lang = GetUserDefaultUILanguage();
-    return (PRIMARYLANGID(lang) == LANG_RUSSIAN) ? UrushiUI::Language::Russian : UrushiUI::Language::English;
-}();
+UrushiUI::Language g_language = UrushiUI::Language::English;
 bool g_singleTabMode = false;
 
 // UI Element Introspection & Config Auto-Discovery
@@ -490,18 +488,34 @@ bool UrushiUI::GetSingleTabMode() {
     return g_singleTabMode;
 }
 
-void UrushiUI::SetLanguage(Language lang) {
-    std::lock_guard<std::recursive_mutex> lock(g_mutex);
-    g_language = lang;
+void UrushiUI::ToggleLanguage() {
+    Language cur = GetLanguage();
+    Language next = (cur == Language::English) ? Language::Russian : Language::English;
+    SetLanguage(next, true);
 }
 
-bool UrushiUI::SetLanguageByName(const std::string& name) {
+void UrushiUI::SetLanguage(Language lang, bool notifyLua) {
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_mutex);
+        if (g_language == lang) return;
+        g_language = lang;
+    }
+    if (notifyLua) {
+        std::string out, err;
+        LuaEngine::Eval(
+            "if i18n and i18n.sync_titles then i18n.sync_titles() end\n"
+            "if config then config.set('ui', 'language', '" + GetLanguageName() + "') end",
+            out, err);
+    }
+}
+
+bool UrushiUI::SetLanguageByName(const std::string& name, bool notifyLua) {
     if (_stricmp(name.c_str(), "ru") == 0 || _stricmp(name.c_str(), "russian") == 0) {
-        SetLanguage(Language::Russian);
+        SetLanguage(Language::Russian, notifyLua);
         return true;
     }
     if (_stricmp(name.c_str(), "en") == 0 || _stricmp(name.c_str(), "english") == 0) {
-        SetLanguage(Language::English);
+        SetLanguage(Language::English, notifyLua);
         return true;
     }
     return false;

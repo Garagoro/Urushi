@@ -167,7 +167,7 @@ int Lua_UrushiGetCustomAccent(lua_State* L) {
 
 int Lua_UrushiSetLanguage(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
-    lua_pushboolean(L, UrushiUI::SetLanguageByName(name) ? 1 : 0);
+    lua_pushboolean(L, UrushiUI::SetLanguageByName(name, false) ? 1 : 0);
     return 1;
 }
 

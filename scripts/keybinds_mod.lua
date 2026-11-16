@@ -4,7 +4,7 @@
 
 local function T(ru, en)
     if i18n and i18n.t then return i18n.t(ru, en) end
-    local lang = (urushi.get_language and urushi.get_language()) or "ru"
+    local lang = (urushi.get_language and urushi.get_language()) or "en"
     return (lang == "en") and en or ru
 end
 

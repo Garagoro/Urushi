@@ -255,7 +255,7 @@ void RenderDock(bool menuOpen) {
 
     const float S = g_uiScale;
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const float dockW = 246.0f * S;
+    const float dockW = 276.0f * S;
     const float padX = 12.0f * S;
     const float padY = 12.0f * S;
     const float innerW = dockW - padX * 2.0f;
@@ -314,7 +314,7 @@ void RenderDock(bool menuOpen) {
         // Discord link button
         {
             const float tw = 20.0f * S;
-            const ImVec2 tp(hPos.x + 98.0f * S, hPos.y + 1.0f * S);
+            const ImVec2 tp(hPos.x + 88.0f * S, hPos.y + 1.0f * S);
             ImGui::SetCursorScreenPos(tp);
             if (ImGui::InvisibleButton("##dock_discord", ImVec2(tw, 20.0f * S))) {
                 ShellExecuteW(nullptr, L"open", L"https://discord.gg/jS6cc49EbT", nullptr, nullptr, SW_SHOWNORMAL);
@@ -324,7 +324,7 @@ void RenderDock(bool menuOpen) {
                 dl->AddRectFilled(tp, ImVec2(tp.x + tw, tp.y + 20.0f * S), IM_COL32(88, 101, 242, 45), 4.0f * S);
                 dl->AddRect(tp, ImVec2(tp.x + tw, tp.y + 20.0f * S), IM_COL32(88, 101, 242, 180), 4.0f * S);
                 ImGui::SetTooltip("%s", g_language == UrushiUI::Language::Russian
-                    ? u8"Discord: сообщество URUSHI (чат и поддержка)"
+                    ? "Discord: сообщество URUSHI (чат и поддержка)"
                     : "Discord: URUSHI community (chat & support)");
             }
             const ImU32 col = hv ? IM_COL32(88, 101, 242, 255) : kColTextMuted;
@@ -334,7 +334,7 @@ void RenderDock(bool menuOpen) {
         // GitHub link button
         {
             const float tw = 20.0f * S;
-            const ImVec2 tp(hPos.x + 124.0f * S, hPos.y + 1.0f * S);
+            const ImVec2 tp(hPos.x + 112.0f * S, hPos.y + 1.0f * S);
             ImGui::SetCursorScreenPos(tp);
             if (ImGui::InvisibleButton("##dock_github", ImVec2(tw, 20.0f * S))) {
                 ShellExecuteW(nullptr, L"open", L"https://github.com/Garagoro/Urushi", nullptr, nullptr, SW_SHOWNORMAL);
@@ -344,11 +344,38 @@ void RenderDock(bool menuOpen) {
                 dl->AddRectFilled(tp, ImVec2(tp.x + tw, tp.y + 20.0f * S), IM_COL32(255, 255, 255, 25), 4.0f * S);
                 dl->AddRect(tp, ImVec2(tp.x + tw, tp.y + 20.0f * S), IM_COL32(255, 255, 255, 120), 4.0f * S);
                 ImGui::SetTooltip("%s", g_language == UrushiUI::Language::Russian
-                    ? u8"GitHub: репозиторий, исходный код и релизы"
+                    ? "GitHub: репозиторий, исходный код и релизы"
                     : "GitHub: repository, source code & releases");
             }
             const ImU32 col = hv ? IM_COL32(255, 255, 255, 255) : kColTextMuted;
             DrawAlphaMask(dl, ImVec2(tp.x + 3.0f * S, tp.y + 3.0f * S), 14.0f * S, kGithubAlpha20, 20, 20, col);
+        }
+
+        // Language toggle pill button (EN / RU)
+        {
+            const float lw = 26.0f * S;
+            const ImVec2 lp(hPos.x + 138.0f * S, hPos.y + 1.0f * S);
+            ImGui::SetCursorScreenPos(lp);
+            if (ImGui::InvisibleButton("##dock_lang_btn", ImVec2(lw, 20.0f * S))) {
+                UrushiUI::ToggleLanguage();
+            }
+            const bool hv = ImGui::IsItemHovered();
+            if (hv) {
+                dl->AddRectFilled(lp, ImVec2(lp.x + lw, lp.y + 20.0f * S), IM_COL32(255, 255, 255, 25), 4.0f * S);
+                dl->AddRect(lp, ImVec2(lp.x + lw, lp.y + 20.0f * S), IM_COL32(255, 255, 255, 120), 4.0f * S);
+                ImGui::SetTooltip("%s", g_language == UrushiUI::Language::Russian
+                    ? "Язык: Русский (нажмите для переключения на English)"
+                    : "Language: English (click to switch to Русский)");
+            } else {
+                dl->AddRectFilled(lp, ImVec2(lp.x + lw, lp.y + 20.0f * S), IM_COL32(255, 255, 255, 12), 4.0f * S);
+                dl->AddRect(lp, ImVec2(lp.x + lw, lp.y + 20.0f * S), IM_COL32(255, 255, 255, 35), 4.0f * S);
+            }
+            const ImU32 col = hv ? UrushiUI::GetAccentU32() : kColTextMuted;
+            const char* code = (g_language == UrushiUI::Language::English) ? "EN" : "RU";
+            if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
+            ImVec2 txtSz = ImGui::CalcTextSize(code);
+            dl->AddText(ImVec2(lp.x + (lw - txtSz.x) * 0.5f, lp.y + (20.0f * S - txtSz.y) * 0.5f), col, code);
+            if (AppFonts::Small) ImGui::PopFont();
         }
 
         std::string verLabel = std::string("v") + Updater::GetVersion();
@@ -365,7 +392,7 @@ void RenderDock(bool menuOpen) {
                               ImVec2(verPos.x + verSz.x + 2.0f * S, verPos.y + 19.0f * S),
                               IM_COL32(255, 255, 255, 20), 4.0f * S);
             ImGui::SetTooltip("%s", g_language == UrushiUI::Language::Russian
-                ? u8"Реинжект URUSHI (нажмите для перезагрузки DLL)"
+                ? "Реинжект URUSHI (нажмите для перезагрузки DLL)"
                 : "Reinject URUSHI (click to hot-reload DLL)");
         }
         const ImU32 verCol = verHv ? UrushiUI::GetAccentU32() : kColTextMuted;
@@ -391,7 +418,7 @@ void RenderDock(bool menuOpen) {
                 dl->AddLine(ImVec2(tp.x + 4.0f * S, y), ImVec2(tp.x + tw - 4.0f * S, y), gc, 1.5f * S);
             }
             if (hv) ImGui::SetTooltip("%s", g_language == UrushiUI::Language::Russian
-                ? u8"Изменить порядок (перетаскивание)" : "Reorder (drag & drop)");
+                ? "Изменить порядок (перетаскивание)" : "Reorder (drag & drop)");
             ImGui::SetCursorScreenPos(hPos);
         }
 
@@ -408,7 +435,7 @@ void RenderDock(bool menuOpen) {
                 dl->AddRectFilled(rp, ImVec2(rp.x + rw, rp.y + 20.0f * S), IM_COL32(255, 255, 255, 25), 4.0f * S);
                 dl->AddRect(rp, ImVec2(rp.x + rw, rp.y + 20.0f * S), IM_COL32(255, 255, 255, 120), 4.0f * S);
                 ImGui::SetTooltip("%s", g_language == UrushiUI::Language::Russian
-                    ? u8"Реинжект URUSHI (перезагрузка DLL на лету)"
+                    ? "Реинжект URUSHI (перезагрузка DLL на лету)"
                     : "Reinject URUSHI (live hot-reload DLL)");
             }
             const ImU32 rc = hv ? UrushiUI::GetAccentU32() : kColTextMuted;

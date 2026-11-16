@@ -61,6 +61,10 @@ target_include_directories(urushi PRIVATE
     "${CMAKE_SOURCE_DIR}/third_party/lua"
 )
 
+if(MSVC)
+    target_compile_options(urushi PRIVATE /utf-8)
+endif()
+
 target_link_libraries(urushi PRIVATE
     minhook
     lua

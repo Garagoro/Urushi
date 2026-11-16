@@ -4,6 +4,10 @@ project(urushi LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
+
 # Version definition from dist/version.txt manifest
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/dist/version.txt")
     file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/dist/version.txt" VER_LINE REGEX "^version=")
