@@ -113,6 +113,52 @@ int Lua_UrushiRegisterWindow(lua_State* L) {
     return 1;
 }
 
+int Lua_UrushiUnregisterWindow(lua_State* L) {
+    const char* id = luaL_checkstring(L, 1);
+    UrushiUI::UnregisterWindow(id);
+    return 0;
+}
+
+int Lua_UrushiScriptExists(lua_State* L) {
+    const char* id = luaL_checkstring(L, 1);
+    if (!id || !*id) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    std::string name = id;
+    if (name.find_first_of("/\\:") != std::string::npos || name.find("..") != std::string::npos) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    std::wstring path = LuaEngine::GetScriptsDirectory() + L"\\" + Logger::ToWide(name) + L".lua";
+    DWORD attrs = GetFileAttributesW(path.c_str());
+    lua_pushboolean(L, (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY)) ? 1 : 0);
+    return 1;
+}
+
+int Lua_UrushiDeleteScript(lua_State* L) {
+    const char* id = luaL_checkstring(L, 1);
+    if (!id || !*id) {
+        lua_pushboolean(L, 0);
+        lua_pushstring(L, "invalid script name");
+        return 2;
+    }
+    std::string name = id;
+    if (name.find_first_of("/\\:") != std::string::npos || name.find("..") != std::string::npos) {
+        lua_pushboolean(L, 0);
+        lua_pushstring(L, "invalid characters in script name");
+        return 2;
+    }
+    std::wstring path = LuaEngine::GetScriptsDirectory() + L"\\" + Logger::ToWide(name) + L".lua";
+    if (DeleteFileW(path.c_str())) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, "failed to delete file");
+    return 2;
+}
+
 int Lua_UrushiSetWindowOpen(lua_State* L) {
     const char* id = luaL_checkstring(L, 1);
     bool open = lua_toboolean(L, 2) != 0;
@@ -538,6 +584,53 @@ int Lua_UiBadge(lua_State* L) {
     UrushiUI::Tone tone = ParseTone(luaL_optstring(L, 2, "accent"));
     UrushiUI::Badge(text, tone);
     return 0;
+}
+
+int Lua_UiScriptRow(lua_State* L) {
+    if (!lua_istable(L, 1)) {
+        lua_pushstring(L, "");
+        return 1;
+    }
+    UrushiUI::ScriptRowItem item;
+    lua_getfield(L, 1, "id");
+    item.id = luaL_optstring(L, -1, "");
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "title");
+    item.title = luaL_optstring(L, -1, item.id.c_str());
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "author");
+    item.author = luaL_optstring(L, -1, "URUSHI Team");
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "version");
+    item.version = luaL_optstring(L, -1, "");
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "desc");
+    item.desc = luaL_optstring(L, -1, "");
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "running");
+    item.running = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "downloaded");
+    item.downloaded = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "downloading");
+    item.downloading = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "has_update");
+    item.hasUpdate = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+
+    std::string act = UrushiUI::ScriptRow(item);
+    lua_pushstring(L, act.c_str());
+    return 1;
 }
 
 int Lua_UiKeycap(lua_State* L) {
@@ -1017,7 +1110,10 @@ int Lua_UrushiSetUiElement(lua_State* L) {
 }
 
 const luaL_Reg kUrushiFuncs[] = {
-    { "register_window", Lua_UrushiRegisterWindow },
+    { "register_window",   Lua_UrushiRegisterWindow },
+    { "unregister_window", Lua_UrushiUnregisterWindow },
+    { "script_exists",     Lua_UrushiScriptExists },
+    { "delete_script",     Lua_UrushiDeleteScript },
     { "set_window_open", Lua_UrushiSetWindowOpen },
     { "toggle_window",   Lua_UrushiToggleWindow },
     { "is_window_open",  Lua_UrushiIsWindowOpen },
@@ -1050,6 +1146,7 @@ const luaL_Reg kUrushiFuncs[] = {
     { "is_safe_mode",    Lua_UrushiIsSafeMode },
     { "get_ui_elements", Lua_UrushiGetUiElements },
     { "set_ui_element",  Lua_UrushiSetUiElement },
+    { "script_row",      Lua_UiScriptRow },
     { nullptr, nullptr }
 };
 
@@ -1057,6 +1154,7 @@ const luaL_Reg kUiFuncs[] = {
     { "card",         Lua_UiCard },
     { "begin_card",   Lua_UiBeginCard },
     { "end_card",     Lua_UiEndCard },
+    { "script_row",   Lua_UiScriptRow },
     { "toggle",       Lua_UiToggle },
     { "checkbox",     Lua_UiToggle },
     { "slider_float", Lua_UiSliderFloat },

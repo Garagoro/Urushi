@@ -112,6 +112,7 @@ public:
     static void ClearLuaRefs(lua_State* L);
 
     static void RegisterWindow(const WindowRegistration& reg);
+    static void UnregisterWindow(const std::string& id);
     static void Render(bool menuOpen, lua_State* L);
 
     // Window & shell controls
@@ -171,6 +172,20 @@ public:
     static void ProgressBar(float fraction, float width = -1.0f, float height = 10.0f, const char* overlay = nullptr);
 
     static void Badge(const std::string& text, Tone tone = Tone::Accent);
+
+    struct ScriptRowItem {
+        std::string id;
+        std::string title;
+        std::string author;
+        std::string version;
+        std::string desc;
+        bool running = false;
+        bool downloaded = false;
+        bool downloading = false;
+        bool hasUpdate = false;
+    };
+    static std::string ScriptRow(const ScriptRowItem& item);
+
     struct KeybindState {
         std::string source = "none"; // "keyboard" | "gamepad" | "none"
         int code = 0;

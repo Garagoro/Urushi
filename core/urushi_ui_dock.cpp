@@ -961,6 +961,17 @@ void UrushiUI::RegisterWindow(const WindowRegistration& reg) {
     });
 }
 
+void UrushiUI::UnregisterWindow(const std::string& id) {
+    if (id.empty()) return;
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    for (auto it = g_windows.begin(); it != g_windows.end(); ++it) {
+        if (it->id == id) {
+            g_windows.erase(it);
+            break;
+        }
+    }
+}
+
 void UrushiUI::Render(bool menuOpen, lua_State* L) {
     std::lock_guard<std::recursive_mutex> lock(g_mutex);
     RenderDock(menuOpen);

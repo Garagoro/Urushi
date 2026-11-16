@@ -717,6 +717,8 @@ void UpdateScriptAsync(const std::string& scriptId) {
         g_scriptUpdates[scriptId] = { scriptId, "updating", "" };
     }
     std::thread([exeDir = g_exeDir, scriptId]() {
+        std::wstring scDir = exeDir + L"\\scripts";
+        CreateDirectoryW(scDir.c_str(), nullptr);
         std::vector<uint8_t> remoteBytes;
         DWORD status = 0;
         const std::string repoPath = "scripts/" + scriptId + ".lua";
@@ -740,8 +742,35 @@ void UpdateScriptAsync(const std::string& scriptId) {
                     devOut.close();
                 }
             }
-            std::lock_guard<std::mutex> lk(g_mtx);
-            g_scriptUpdates[scriptId] = { scriptId, "updated", "" };
+
+            if (scriptId == "carfx_mod") {
+                const char* shaders[] = {
+                    "carfx.hlsli", "livery_chrome.hlsl", "livery_glass.hlsl", "livery_refract.hlsl",
+                    "livery_aurora_fluid.hlsl", "livery_cyber_pulse.hlsl", "livery_glow_overlay.hlsl",
+                    "livery_holo.hlsl", "livery_proximity_reactive.hlsl", "livery_tandem_angle.hlsl",
+                    "livery_wall_tap.hlsl", "internals_neon.hlsl"
+                };
+                std::wstring shDir = exeDir + L"\\shaders";
+                CreateDirectoryW(shDir.c_str(), nullptr);
+                for (const char* sh : shaders) {
+                    std::vector<uint8_t> shBytes;
+                    DWORD shStatus = 0;
+                    std::string curRef = Settings::GetString("cloud", "ref", kDefaultRef);
+                    Settings::SetString("cloud", "ref", "main");
+                    if (Fetch(std::string("shaders/") + sh, kMaxFileBytes, shBytes, shStatus) && shStatus == 200) {
+                        std::ofstream shOut(shDir + L"\\" + Logger::ToWide(sh), std::ios::binary);
+                        if (shOut.is_open()) {
+                            shOut.write(reinterpret_cast<const char*>(shBytes.data()), shBytes.size());
+                        }
+                    }
+                    Settings::SetString("cloud", "ref", curRef);
+                }
+            }
+
+            {
+                std::lock_guard<std::mutex> lk(g_mtx);
+                g_scriptUpdates[scriptId] = { scriptId, "updated", "" };
+            }
             Logger::Info("Script '" + scriptId + "' successfully updated from GitHub.");
         } else {
             std::lock_guard<std::mutex> lk(g_mtx);

@@ -21,7 +21,7 @@ local WINDOW_TITLES = {
     hud           = { "Телеметрия HUD", "Telemetry HUD" },
     fps_net       = { "FPS и Сеть",     "FPS & Network" },
     system        = { "Система",        "System" },
-    library       = { "Библиотека",     "Library" },
+    library       = { "Скрипты",        "Scripts" },
     keybinds      = { "Горячие клавиши", "Keybinds" },
 }
 

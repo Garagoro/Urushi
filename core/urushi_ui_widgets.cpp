@@ -409,6 +409,49 @@ bool UrushiUI::Button(const std::string& label, float width, float height, Butto
     } else if (vis == "@close" || vis == "\xe2\x9c\x95" || vis == "✕") {
         ImVec2 center(pos.x + w * 0.5f, pos.y + height * 0.5f);
         DrawCloseIcon(dl, center, 4.5f * S, fg, std::max(1.2f, 1.6f * S));
+    } else if (vis == "@settings" || vis == "@gear") {
+        ImVec2 center(pos.x + w * 0.5f, pos.y + height * 0.5f);
+        DrawModuleIcon(dl, center, "settings", fg, S * 0.85f);
+    } else if (vis == "@trash" || vis == "@delete") {
+        ImVec2 center(pos.x + w * 0.5f, pos.y + height * 0.5f);
+        const float th = (std::max)(1.2f, 1.4f * S);
+        dl->AddLine(ImVec2(center.x - 5.0f * S, center.y - 3.5f * S), ImVec2(center.x + 5.0f * S, center.y - 3.5f * S), fg, th);
+        dl->AddLine(ImVec2(center.x - 2.0f * S, center.y - 5.0f * S), ImVec2(center.x + 2.0f * S, center.y - 5.0f * S), fg, th);
+        dl->AddRect(ImVec2(center.x - 4.0f * S, center.y - 3.0f * S), ImVec2(center.x + 4.0f * S, center.y + 5.5f * S), fg, 1.2f * S, 0, th);
+        dl->AddLine(ImVec2(center.x - 1.5f * S, center.y - 0.5f * S), ImVec2(center.x - 1.5f * S, center.y + 3.5f * S), fg, th * 0.9f);
+        dl->AddLine(ImVec2(center.x + 1.5f * S, center.y - 0.5f * S), ImVec2(center.x + 1.5f * S, center.y + 3.5f * S), fg, th * 0.9f);
+    } else if (vis == "@play" || vis.rfind("@play ", 0) == 0) {
+        std::string txt = (vis.length() > 6) ? vis.substr(6) : "";
+        const float triSz = 4.0f * S;
+        const float iconW = 7.0f * S;
+        ImVec2 tSz = txt.empty() ? ImVec2(0, 0) : ImGui::CalcTextSize(txt.c_str());
+        const float gap = txt.empty() ? 0.0f : (5.0f * S);
+        const float totalW = iconW + gap + tSz.x;
+        const float startX = pos.x + (std::max)(4.0f * S, (w - totalW) * 0.5f);
+        const float centerY = pos.y + height * 0.5f;
+
+        dl->AddTriangleFilled(ImVec2(startX, centerY - triSz), ImVec2(startX, centerY + triSz), ImVec2(startX + iconW, centerY), fg);
+        if (!txt.empty()) {
+            dl->PushClipRect(ImVec2(bMin.x + 4.0f * S, bMin.y + 1.0f * S), ImVec2(bMax.x - 4.0f * S, bMax.y - 1.0f * S), true);
+            dl->AddText(ImVec2(startX + iconW + gap, centerY - tSz.y * 0.5f), fg, txt.c_str());
+            dl->PopClipRect();
+        }
+    } else if (vis == "@stop" || vis.rfind("@stop ", 0) == 0) {
+        std::string txt = (vis.length() > 6) ? vis.substr(6) : "";
+        const float sqSz = 3.5f * S;
+        const float iconW = sqSz * 2.0f;
+        ImVec2 tSz = txt.empty() ? ImVec2(0, 0) : ImGui::CalcTextSize(txt.c_str());
+        const float gap = txt.empty() ? 0.0f : (5.0f * S);
+        const float totalW = iconW + gap + tSz.x;
+        const float startX = pos.x + (std::max)(4.0f * S, (w - totalW) * 0.5f);
+        const float centerY = pos.y + height * 0.5f;
+
+        dl->AddRectFilled(ImVec2(startX, centerY - sqSz), ImVec2(startX + iconW, centerY + sqSz), fg, 1.0f * S);
+        if (!txt.empty()) {
+            dl->PushClipRect(ImVec2(bMin.x + 4.0f * S, bMin.y + 1.0f * S), ImVec2(bMax.x - 4.0f * S, bMax.y - 1.0f * S), true);
+            dl->AddText(ImVec2(startX + iconW + gap, centerY - tSz.y * 0.5f), fg, txt.c_str());
+            dl->PopClipRect();
+        }
     } else {
         ImVec2 tSz = ImGui::CalcTextSize(vis.c_str());
         dl->PushClipRect(ImVec2(bMin.x + 4.0f * S, bMin.y + 1.0f * S), ImVec2(bMax.x - 4.0f * S, bMax.y - 1.0f * S), true);
@@ -698,6 +741,243 @@ void UrushiUI::Badge(const std::string& text, Tone tone) {
     if (AppFonts::Small) ImGui::PopFont();
 
     ImGui::Dummy(ImVec2(bw, bh));
+}
+
+std::string UrushiUI::ScriptRow(const ScriptRowItem& item) {
+    const float S = g_uiScale;
+    const float w = CurrentContentWidth();
+    const float h = 46.0f * S;
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    // 1. Invisible button covering the whole row for hover detection
+    std::string rowId = "##row_" + item.id;
+    ImGui::InvisibleButton(rowId.c_str(), ImVec2(w, h));
+    bool rowHovered = ImGui::IsItemHovered();
+
+    // Background & border
+    ImU32 bg = rowHovered ? IM_COL32(23, 27, 34, 230) : IM_COL32(14, 17, 22, 210);
+    ImU32 border = item.running ? GetAccentLineU32() : (rowHovered ? IM_COL32(255, 255, 255, 24) : kColHairline);
+    const float cornerR = 6.0f * S;
+
+    ImVec2 rMin = pos;
+    ImVec2 rMax(pos.x + w, pos.y + h);
+    dl->AddRectFilled(rMin, rMax, bg, cornerR);
+    dl->AddRect(rMin, rMax, border, cornerR);
+
+    // Left accent bar if running
+    if (item.running) {
+        dl->AddRectFilled(ImVec2(rMin.x, rMin.y + 6.0f * S), ImVec2(rMin.x + 3.0f * S, rMax.y - 6.0f * S), GetAccentU32(), 1.5f * S);
+    }
+
+    // 2. Buttons right-to-left layout
+    std::string action = "";
+    float rx = rMax.x - 8.0f * S;
+    const float btnH = 26.0f * S;
+    const float btnY = pos.y + (h - btnH) * 0.5f;
+
+    // --- Main action button (Load / Stop / Loading) ---
+    const float mainBtnW = 76.0f * S;
+    rx -= mainBtnW;
+    const ImVec2 mbMin(rx, btnY);
+    const ImVec2 mbMax(rx + mainBtnW, btnY + btnH);
+
+    ImGui::SetCursorScreenPos(mbMin);
+    bool mbHovered = false;
+
+    if (item.downloading) {
+        ImGui::InvisibleButton(("##mb_dl_" + item.id).c_str(), ImVec2(mainBtnW, btnH));
+        dl->AddRectFilled(mbMin, mbMax, IM_COL32(255, 255, 255, 14), 5.0f * S);
+        dl->AddRect(mbMin, mbMax, IM_COL32(255, 255, 255, 30), 5.0f * S);
+        if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
+        ImVec2 tSz = ImGui::CalcTextSize("Loading...");
+        dl->AddText(ImVec2(mbMin.x + (mainBtnW - tSz.x) * 0.5f, mbMin.y + (btnH - tSz.y) * 0.5f), kColTextSecondary, "Loading...");
+        if (AppFonts::Small) ImGui::PopFont();
+    } else if (item.running) {
+        if (ImGui::InvisibleButton(("##mb_stop_" + item.id).c_str(), ImVec2(mainBtnW, btnH))) {
+            action = "stop";
+        }
+        mbHovered = ImGui::IsItemHovered();
+        ImU32 stopBg = mbHovered ? IM_COL32(190, 50, 55, 220) : IM_COL32(32, 18, 20, 220);
+        ImU32 stopBorder = mbHovered ? IM_COL32(240, 70, 75, 255) : IM_COL32(210, 55, 60, 160);
+        ImU32 stopFg = mbHovered ? IM_COL32(255, 255, 255, 255) : IM_COL32(245, 165, 165, 255);
+        dl->AddRectFilled(mbMin, mbMax, stopBg, 5.0f * S);
+        dl->AddRect(mbMin, mbMax, stopBorder, 5.0f * S);
+
+        // Vector Stop Icon (square) + text
+        const bool isRu = (g_language == Language::Russian);
+        const char* sTxt = isRu ? "Стоп" : "Stop";
+        ImVec2 tSz = ImGui::CalcTextSize(sTxt);
+        const float sqSz = 3.5f * S;
+        const float iconW = sqSz * 2.0f;
+        const float gap = 5.0f * S;
+        const float totalW = iconW + gap + tSz.x;
+        const float startX = mbMin.x + (mainBtnW - totalW) * 0.5f;
+        const float centerY = mbMin.y + btnH * 0.5f;
+
+        dl->AddRectFilled(ImVec2(startX, centerY - sqSz), ImVec2(startX + iconW, centerY + sqSz), stopFg, 1.0f * S);
+        dl->AddText(ImVec2(startX + iconW + gap, centerY - tSz.y * 0.5f), stopFg, sTxt);
+    } else {
+        if (ImGui::InvisibleButton(("##mb_load_" + item.id).c_str(), ImVec2(mainBtnW, btnH))) {
+            action = "load";
+        }
+        mbHovered = ImGui::IsItemHovered();
+        ImU32 loadBg = mbHovered ? GetAccentHoverU32() : GetAccentU32();
+        ImU32 loadFg = GetAccentFgU32();
+        dl->AddRectFilled(mbMin, mbMax, loadBg, 5.0f * S);
+
+        // Vector Play Triangle + text
+        const bool isRu = (g_language == Language::Russian);
+        const char* lTxt = isRu ? "Запуск" : "Load";
+        ImVec2 tSz = ImGui::CalcTextSize(lTxt);
+        const float triSz = 4.0f * S;
+        const float iconW = 7.0f * S;
+        const float gap = 5.0f * S;
+        const float totalW = iconW + gap + tSz.x;
+        const float startX = mbMin.x + (mainBtnW - totalW) * 0.5f;
+        const float centerY = mbMin.y + btnH * 0.5f;
+
+        dl->AddTriangleFilled(ImVec2(startX, centerY - triSz), ImVec2(startX, centerY + triSz), ImVec2(startX + iconW, centerY), loadFg);
+        dl->AddText(ImVec2(startX + iconW + gap, centerY - tSz.y * 0.5f), loadFg, lTxt);
+    }
+
+    // --- Secondary Icon Buttons ---
+    const float iconBtnW = 24.0f * S;
+    const float gap = 4.0f * S;
+
+    // 1. Delete / Trash Button (shown if downloaded)
+    bool delHovered = false;
+    if (item.downloaded) {
+        rx -= (iconBtnW + gap);
+        ImVec2 dMin(rx, btnY);
+        ImVec2 dMax(rx + iconBtnW, btnY + btnH);
+        ImGui::SetCursorScreenPos(dMin);
+        if (ImGui::InvisibleButton(("##del_" + item.id).c_str(), ImVec2(iconBtnW, btnH))) {
+            action = "delete";
+        }
+        delHovered = ImGui::IsItemHovered();
+        if (delHovered) {
+            dl->AddRectFilled(dMin, dMax, IM_COL32(220, 50, 50, 40), 4.0f * S);
+            dl->AddRect(dMin, dMax, IM_COL32(220, 50, 50, 120), 4.0f * S);
+            ImGui::SetTooltip("%s", (g_language == Language::Russian) ? "Удалить с диска" : "Delete from disk");
+        }
+        ImU32 delCol = delHovered ? IM_COL32(240, 80, 80, 255) : kColTextMuted;
+        ImVec2 center(dMin.x + iconBtnW * 0.5f, dMin.y + btnH * 0.5f);
+        const float th = (std::max)(1.2f, 1.4f * S);
+        dl->AddLine(ImVec2(center.x - 4.5f * S, center.y - 3.5f * S), ImVec2(center.x + 4.5f * S, center.y - 3.5f * S), delCol, th);
+        dl->AddLine(ImVec2(center.x - 2.0f * S, center.y - 5.0f * S), ImVec2(center.x + 2.0f * S, center.y - 5.0f * S), delCol, th);
+        dl->AddRect(ImVec2(center.x - 3.5f * S, center.y - 3.0f * S), ImVec2(center.x + 3.5f * S, center.y + 5.0f * S), delCol, 1.0f * S, 0, th);
+        dl->AddLine(ImVec2(center.x - 1.2f * S, center.y - 0.5f * S), ImVec2(center.x - 1.2f * S, center.y + 3.0f * S), delCol, th * 0.9f);
+        dl->AddLine(ImVec2(center.x + 1.2f * S, center.y - 0.5f * S), ImVec2(center.x + 1.2f * S, center.y + 3.0f * S), delCol, th * 0.9f);
+    }
+
+    // 2. Refresh / Update Button (shown if update available, or if running)
+    bool updHovered = false;
+    if (item.hasUpdate || item.running) {
+        rx -= (iconBtnW + gap);
+        ImVec2 uMin(rx, btnY);
+        ImVec2 uMax(rx + iconBtnW, btnY + btnH);
+        ImGui::SetCursorScreenPos(uMin);
+        if (ImGui::InvisibleButton(("##upd_" + item.id).c_str(), ImVec2(iconBtnW, btnH))) {
+            action = "update";
+        }
+        updHovered = ImGui::IsItemHovered();
+        if (updHovered) {
+            dl->AddRectFilled(uMin, uMax, IM_COL32(255, 255, 255, 20), 4.0f * S);
+            dl->AddRect(uMin, uMax, IM_COL32(255, 255, 255, 60), 4.0f * S);
+            ImGui::SetTooltip("%s", (item.hasUpdate)
+                ? ((g_language == Language::Russian) ? "Доступно обновление (нажмите для скачивания)" : "Update available (click to download)")
+                : ((g_language == Language::Russian) ? "Проверить обновление на GitHub" : "Check GitHub for update"));
+        }
+        ImU32 updCol = item.hasUpdate ? IM_COL32(245, 180, 50, 255) : (updHovered ? kColTextPrimary : kColTextMuted);
+        const float iconSz = 13.0f * S;
+        ImVec2 ipos(uMin.x + (iconBtnW - iconSz) * 0.5f, uMin.y + (btnH - iconSz) * 0.5f);
+        DrawAlphaMask(dl, ipos, iconSz, kLucideRefreshAlpha16, 16, 16, updCol);
+    }
+
+    // 3. Settings Gear Button (shown if running)
+    bool cfgHovered = false;
+    if (item.running) {
+        rx -= (iconBtnW + gap);
+        ImVec2 sMin(rx, btnY);
+        ImVec2 sMax(rx + iconBtnW, btnY + btnH);
+        ImGui::SetCursorScreenPos(sMin);
+        if (ImGui::InvisibleButton(("##cfg_" + item.id).c_str(), ImVec2(iconBtnW, btnH))) {
+            action = "settings";
+        }
+        cfgHovered = ImGui::IsItemHovered();
+        if (cfgHovered) {
+            dl->AddRectFilled(sMin, sMax, IM_COL32(255, 255, 255, 20), 4.0f * S);
+            dl->AddRect(sMin, sMax, IM_COL32(255, 255, 255, 60), 4.0f * S);
+            ImGui::SetTooltip("%s", (g_language == Language::Russian) ? "Открыть настройки модуля" : "Open module settings");
+        }
+        ImU32 cfgCol = cfgHovered ? GetAccentU32() : kColTextSecondary;
+        ImVec2 center(sMin.x + iconBtnW * 0.5f, sMin.y + btnH * 0.5f);
+        DrawModuleIcon(dl, center, "settings", cfgCol, S * 0.8f);
+    }
+
+    // 3. Left side text (Title & Subtext)
+    float textMaxX = rx - 8.0f * S;
+    float startTextX = pos.x + (item.running ? (15.0f * S) : (12.0f * S));
+
+    dl->PushClipRect(ImVec2(startTextX, pos.y), ImVec2(textMaxX, pos.y + h), true);
+
+    // Title line
+    ImVec2 titlePos(startTextX, pos.y + 6.0f * S);
+    ImU32 titleCol = item.running ? kColTextPrimary : IM_COL32(220, 225, 230, 255);
+    dl->AddText(titlePos, titleCol, item.title.c_str());
+
+    if (item.running) {
+        ImVec2 tSz = ImGui::CalcTextSize(item.title.c_str());
+        dl->AddText(ImVec2(titlePos.x + tSz.x + 2.0f * S, titlePos.y), GetAccentU32(), " *");
+    }
+
+    // Subtext line (Neverlose style: "Author: URUSHI Team • v1.2.1")
+    ImVec2 subPos(startTextX, pos.y + 25.0f * S);
+    if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
+
+    const bool isRu = (g_language == Language::Russian);
+    const char* authLabel = isRu ? "Автор: " : "Author: ";
+    ImVec2 alSz = ImGui::CalcTextSize(authLabel);
+    dl->AddText(subPos, kColTextMuted, authLabel);
+
+    float curX = subPos.x + alSz.x;
+    ImVec2 anSz = ImGui::CalcTextSize(item.author.c_str());
+    dl->AddText(ImVec2(curX, subPos.y), GetAccentU32(), item.author.c_str());
+    curX += anSz.x;
+
+    if (!item.version.empty()) {
+        std::string verStr = "  •  v" + item.version;
+        dl->AddText(ImVec2(curX, subPos.y), kColTextMuted, verStr.c_str());
+        curX += ImGui::CalcTextSize(verStr.c_str()).x;
+    }
+
+    if (item.hasUpdate) {
+        const char* updTxt = isRu ? "  •  Обновление" : "  •  Update";
+        dl->AddText(ImVec2(curX, subPos.y), IM_COL32(245, 180, 50, 255), updTxt);
+    } else if (!item.downloaded) {
+        const char* cldTxt = isRu ? "  •  Облако" : "  •  Cloud";
+        dl->AddText(ImVec2(curX, subPos.y), IM_COL32(80, 200, 255, 200), cldTxt);
+    }
+
+    if (AppFonts::Small) ImGui::PopFont();
+    dl->PopClipRect();
+
+    // 4. Description Tooltip on row hover (only if NOT hovering buttons)
+    if (rowHovered && !mbHovered && !delHovered && !updHovered && !cfgHovered) {
+        if (!item.desc.empty()) {
+            ImGui::BeginTooltip();
+            ImGui::Text("%s", item.title.c_str());
+            if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", item.desc.c_str());
+            if (AppFonts::Small) ImGui::PopFont();
+            ImGui::EndTooltip();
+        }
+    }
+
+    // Advance cursor to next item
+    ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + h + 3.0f * S));
+    return action;
 }
 
 static std::string s_activeListeningKeybindId;

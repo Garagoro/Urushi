@@ -97,203 +97,199 @@ local function first_line(s)
     return (s:match("^[^\n]*")) or s
 end
 
-local function render_scripts_card()
-    if not urushi_scripts then return end
-    ui.card(T("Скачанные", "Downloaded"), T("Включение, отключение и обновление скриптов", "Enable, disable and update scripts"), function()
-        local up_snap = (cloud and cloud.get_script_updates) and cloud.get_script_updates() or { checking = false, items = {} }
-        local avail_w = ui.avail_width()
+-- ==================== Neverlose-Style Unified Scripts Manager ====================
+local OFFICIAL_MODULES = {
+    {
+        id = "carfx_mod",
+        win_id = "carfx",
+        name = "CarFX Shaders",
+        name_ru = "CarFX Шейдеры",
+        author = "URUSHI Team",
+        version = "1.2.1",
+        desc = "Custom body shaders, glass reflections, neon glow & tinting",
+        desc_ru = "Кастомные шейдеры кузова, стекол, неоновые эффекты, тонировка",
+    },
+    {
+        id = "perf_optimizer",
+        win_id = "perf",
+        name = "FPS Optimizer",
+        name_ru = "Оптимизатор FPS",
+        author = "URUSHI Team",
+        version = "1.2.1",
+        desc = "Physics solver optimization, component auto-sleep, FPS boost",
+        desc_ru = "Оптимизация физики симулятора, автослип узлов, буст FPS",
+    },
+    {
+        id = "replay_mod",
+        win_id = "replay",
+        alt_win_ids = { "anticollision" },
+        name = "Replays & Anti-Collision",
+        name_ru = "Реплеи и Анти-встречка",
+        author = "URUSHI Team",
+        version = "1.2.1",
+        desc = "3D trajectory replay, ghost car and TTC anti-collision defense",
+        desc_ru = "3D реплеи, призрак траектории и защита от столкновений",
+    },
+    {
+        id = "steer_assist_mod",
+        win_id = "steer_assist",
+        name = "Steering Assist (155°)",
+        name_ru = "Помощь руля (155°)",
+        author = "URUSHI Team",
+        version = "1.2.1",
+        desc = "Smart wheel angle assist for deep drift angles up to 155°",
+        desc_ru = "Умная коррекция выворота колес под угол заноса до 155°",
+    },
+    {
+        id = "tires_mod",
+        win_id = "tires",
+        name = "Body & Tires",
+        name_ru = "Кузов и шины",
+        author = "URUSHI Team",
+        version = "1.2.1",
+        desc = "Dense tire smoke, infinite tire wear, pressure and visual damage",
+        desc_ru = "Густой дым, блокировка износа шин, давление и деформация",
+    },
+    {
+        id = "teleport_mod",
+        win_id = "teleport",
+        name = "Checkpoint Teleport",
+        name_ru = "Телепорт по точкам",
+        author = "URUSHI Team",
+        version = "1.2.1",
+        desc = "Quick save & instant teleport to checkpoints on any track",
+        desc_ru = "Быстрое сохранение и мгновенный телепорт по точкам трека",
+    },
+    {
+        id = "telemetry_hud",
+        win_id = "hud",
+        alt_win_ids = { "fps_net" },
+        name = "Telemetry HUD",
+        name_ru = "Телеметрия HUD",
+        author = "URUSHI Team",
+        version = "1.2.1",
+        desc = "Compact on-screen HUD: speed, drift angle, RPM, FPS & ping",
+        desc_ru = "Наэкранный оверлей: скорость, угол заноса, RPM, FPS и сеть",
+    },
+    {
+        id = "keybinds_mod",
+        win_id = "keybinds",
+        name = "Keybinds & Controls",
+        name_ru = "Горячие клавиши",
+        author = "URUSHI Team",
+        version = "1.2.1",
+        desc = "Rebind actions to keyboard keys and gamepad buttons (XInput)",
+        desc_ru = "Назначение кнопок клавиатуры и кнопок геймпада (XInput)",
+    },
+}
 
-        if up_snap.checking then
-            ui.text(T("Проверка обновлений...", "Checking updates..."), "accent")
-            ui.spacing(4)
-        else
-            local chk_w = math.min(140, avail_w)
-            if ui.button(T("Проверить все##chk_all_scr", "Check All##chk_all_scr"), chk_w, 24, "ghost") then
-                if cloud and cloud.check_script_updates then
-                    cloud.check_script_updates()
-                end
-            end
-            if ui.tooltip then
-                ui.tooltip(T("Проверить обновления для всех скриптов на GitHub", "Check updates for all scripts on GitHub"))
-            end
-            ui.spacing(4)
-        end
+local downloading_scripts = {}
+local script_filter_idx = 1 -- 1: All, 2: Loaded, 3: Available
 
+local function is_script_running(id)
+    if urushi_scripts and urushi_scripts.list then
         for _, e in ipairs(urushi_scripts.list) do
-            local title
-            if e.cloud then
-                title = e.cloud_id .. "/" .. ((e.entry and e.entry ~= "") and e.entry or "(shaders)") .. "  v" .. tostring(e.version)
-            else
-                title = e.id .. ".lua"
+            if e.id == id or e.id == ("cloud:" .. id) then
+                return e.enabled and (e.status == "ok")
             end
-            if e.isolated then title = title .. "  [" .. T("изолирован", "isolated") .. "]" end
-
-            local it = up_snap.items and up_snap.items[e.id]
-            local has_upd = it and (it.state == "update_available")
-            local is_upd_ing = it and (it.state == "updating")
-            local is_upd_ed = it and (it.state == "updated")
-            local is_ign = it and (it.state == "ignored")
-            local is_chk = it and (it.state == "checking")
-
-            local sw_w = 40
-            local gap = 6
-            local actions_w = has_upd and (76 + 4 + 22) or (is_upd_ing and 76 or 26)
-            local right_pos = avail_w - sw_w - gap - actions_w
-
-            -- 1. Script title on the left
-            ui.text(title)
-
-            -- 2. Action button(s) right before the switch
-            ui.same_line(right_pos, 0)
-
-            if has_upd then
-                if ui.button(T("Обновить##upd_", "Update##upd_") .. e.id, 76, 24, "primary") then
-                    if cloud and cloud.update_script then
-                        cloud.update_script(e.id)
-                        urushi_scripts.dirty = true
-                    end
-                end
-                if ui.tooltip then
-                    ui.tooltip(T("Доступна новая версия на GitHub! Нажмите для обновления", "New version available on GitHub! Click to update"))
-                end
-                ui.same_line(0, 4)
-                if ui.button("@close##ign_" .. e.id, 22, 24, "ghost") then
-                    if cloud and cloud.toggle_script_ignore then
-                        cloud.toggle_script_ignore(e.id)
-                    end
-                end
-                if ui.tooltip then
-                    ui.tooltip(T("Игнорировать обновления этого скрипта", "Ignore updates for this script"))
-                end
-            elseif is_upd_ing then
-                ui.button(T("...##upd_", "...##upd_") .. e.id, 76, 24, "accent")
-                if ui.tooltip then ui.tooltip(T("Загрузка обновления...", "Downloading update...")) end
-            elseif is_upd_ed then
-                ui.button("@check##upd_" .. e.id, 26, 24, "ghost")
-                if ui.tooltip then ui.tooltip(T("Обновлен! Перезагрузите скрипты", "Updated! Reload scripts")) end
-            elseif is_chk then
-                ui.button("...##upd_" .. e.id, 26, 24, "ghost")
-                if ui.tooltip then ui.tooltip(T("Проверка...", "Checking...")) end
-            elseif is_ign then
-                if ui.button("—##upd_" .. e.id, 26, 24, "ghost") then
-                    if cloud and cloud.toggle_script_ignore then
-                        cloud.toggle_script_ignore(e.id)
-                    end
-                end
-                if ui.tooltip then ui.tooltip(T("Игнорируется. Нажмите, чтобы включить проверку", "Ignored. Click to enable checks")) end
-            else
-                -- Idle / up to date: vector refresh icon button, checks THIS single script
-                if ui.button("@refresh##upd_" .. e.id, 26, 24, "ghost") then
-                    if cloud and cloud.check_script_updates then
-                        cloud.check_script_updates(e.id)
-                    end
-                end
-                if ui.tooltip then
-                    if it and it.state == "up_to_date" then
-                        ui.tooltip(T("Скрипт актуален. Нажмите для проверки", "Script is up to date. Click to check"))
-                    else
-                        ui.tooltip(T("Проверить обновление для этого скрипта", "Check update for this script"))
-                    end
-                end
-            end
-
-            -- 3. Toggle switch on the far right
-            ui.same_line(avail_w - sw_w, 0)
-            local ch, val = ui.toggle("##sw_" .. e.id, e.enabled, sw_w)
-            if ch then
-                e.enabled = val
-                urushi.set_setting("scripts", e.id, val)
-                urushi_scripts.dirty = true
-            end
-
-            if e.status == "error" then
-                ui.text_wrapped(T("Ошибка: ", "Error: ") .. first_line(e.err), "red")
-            elseif e.user and not e.enabled then
-                ui.text_dim(T("Пользовательский скрипт (выключен)", "User script (off)"))
-            end
-            ui.spacing(2)
         end
-
-        ui.spacing(4)
-        if urushi_scripts.dirty then
-            ui.text(T("Изменения применятся после перезагрузки скриптов.", "Changes apply after reloading scripts."), "yellow")
-        end
-        if ui.button(T("Перезагрузить скрипты##scr_reload", "Reload scripts##scr_reload"), ui.avail_width(), 30,
-                     urushi_scripts.dirty and "primary" or nil) then
-            if config then config.save() end   -- flush pending changes before the Lua state is recreated
-            urushi.reload_scripts()
-        end
-    end)
+    end
+    local v = urushi.get_setting and urushi.get_setting("scripts", id, "0")
+    return v == "1"
 end
 
-local function render_library_card()
-    if not cloud then return end
-    ui.card(T("Библиотека скриптов", "Script Library"),
-            T("Проверенные скрипты (ветка verified)", "Reviewed scripts (verified branch)"), function()
-        local st = cloud.status()
-        local w = ui.avail_width()
-        if st.state == "fetching" then
-            ui.text(T("Загрузка списка...", "Loading list..."), "accent")
-        elseif ui.button(T("Обновить список##lib_refresh", "Refresh list##lib_refresh"), w, 28) then
-            cloud.refresh()
+local function is_script_downloaded(id)
+    if urushi.script_exists then
+        return urushi.script_exists(id)
+    end
+    if urushi.list_scripts then
+        for _, name in ipairs(urushi.list_scripts()) do
+            if name == id then return true end
         end
-        if st.state == "idle" then
-            ui.text_dim(T("Ничего не скачивается автоматически. Нажмите «Обновить список».",
-                          "Nothing is downloaded automatically. Press \"Refresh list\"."))
-        elseif st.state == "error" then
-            ui.text_wrapped(T("Ошибка: ", "Error: ") .. tostring(st.error), "red")
-        elseif st.state == "ready" and #st.items == 0 then
-            ui.text_dim(T("В каталоге пока нет скриптов.", "The catalog is empty."))
+    end
+    return false
+end
+
+local function start_script(id)
+    local downloaded = is_script_downloaded(id)
+    if not downloaded then
+        downloading_scripts[id] = true
+        if cloud and cloud.update_script then
+            cloud.update_script(id)
         end
+        return
+    end
 
-        for _, it in ipairs(st.items) do
-            ui.separator()
-            ui.text(it.id .. "  v" .. it.version, "accent")
-            if it.author ~= "" then ui.text_dim(it.author) end
-            local desc = T((it.description_ru ~= "" and it.description_ru or it.description), it.description)
-            if desc ~= "" then ui.text_wrapped(desc, "muted") end
-
-            if it.state == "installing" then
-                ui.text(T("Установка...", "Installing..."), "accent")
-            elseif not it.installed then
-                if ui.button(T("Установить##lib_i_", "Install##lib_i_") .. it.id, w, 28, "primary") then cloud.install(it.id) end
-            else
-                if it.update then
-                    if ui.button(T("Обновить до v", "Update to v") .. it.version .. "##lib_u_" .. it.id, w, 28, "primary") then
-                        cloud.install(it.id)
-                    end
-                else
-                    ui.badge(T("Установлено", "Installed") .. " v" .. it.installed_version, "green")
-                end
-                if ui.button(T("Удалить##lib_r_", "Remove##lib_r_") .. it.id, w, 26, "ghost") then
-                    local ok, err = cloud.remove(it.id)
-                    if ok then urushi_scripts.dirty = true end
-                end
-                if urushi_scripts.cloud_loaded[it.id] ~= it.installed_version then
-                    ui.text(T("Нажмите «Перезагрузить скрипты», чтобы применить.", "Press \"Reload scripts\" to apply."), "yellow")
-                    urushi_scripts.dirty = true
+    if urushi.set_setting then urushi.set_setting("scripts", id, "1") end
+    local ok, err = urushi.load_script(id)
+    if ok then
+        if urushi_scripts and urushi_scripts.list then
+            local found = false
+            for _, e in ipairs(urushi_scripts.list) do
+                if e.id == id then
+                    e.enabled = true
+                    e.status = "ok"
+                    found = true
+                    break
                 end
             end
-            if it.state == "error" then ui.text_wrapped(T("Ошибка: ", "Error: ") .. it.error, "red") end
+            if not found then
+                table.insert(urushi_scripts.list, { id = id, enabled = true, status = "ok" })
+            end
         end
-    end)
+        for _, m in ipairs(OFFICIAL_MODULES) do
+            if m.id == id then
+                if urushi.set_window_open then
+                    urushi.set_window_open(m.win_id, true)
+                end
+                break
+            end
+        end
+        log.info("Started script: " .. id)
+    else
+        log.error("Failed to start script '" .. id .. "': " .. tostring(err))
+    end
 end
 
--- ==================== persisted UI preferences (scripts/config.lua -> urushi_data/config.json) ====================
-local function apply_saved_prefs()
-    if not config then return end
-    local lang = config.get("ui", "language")
-    if lang and urushi.set_language then urushi.set_language(lang) end
-    local accent = config.get("ui", "accent")
-    if accent and urushi.set_accent then urushi.set_accent(accent) end
-    local ca = config.get("ui", "custom_accent")
-    if type(ca) == "table" and urushi.set_custom_accent then urushi.set_custom_accent(ca[1] or 1, ca[2] or 1, ca[3] or 1) end
-    local sc = config.get("ui", "scale")
-    if sc and urushi.set_ui_scale then urushi.set_ui_scale(sc) end
+local function stop_script(id)
+    if urushi.set_setting then urushi.set_setting("scripts", id, "0") end
+    if urushi_scripts and urushi_scripts.list then
+        for _, e in ipairs(urushi_scripts.list) do
+            if e.id == id or e.id == ("cloud:" .. id) then
+                e.enabled = false
+                e.status = "disabled"
+                break
+            end
+        end
+    end
+    for _, m in ipairs(OFFICIAL_MODULES) do
+        if m.id == id then
+            if urushi.unregister_window then
+                urushi.unregister_window(m.win_id)
+                if m.alt_win_ids then
+                    for _, alt in ipairs(m.alt_win_ids) do
+                        urushi.unregister_window(alt)
+                    end
+                end
+            end
+            break
+        end
+    end
+    if urushi.unregister_window then
+        urushi.unregister_window(id)
+    end
+    if urushi.reload_scripts then
+        urushi.reload_scripts()
+    end
 end
-apply_saved_prefs()
 
--- Separate "Library" window: script toggles (installed / built-in / user) + the cloud script library
+local function delete_script(id)
+    stop_script(id)
+    if urushi.delete_script then
+        urushi.delete_script(id)
+    end
+end
+
 local function any_script_update_available()
     if cloud and cloud.get_script_updates then
         local up_snap = cloud.get_script_updates()
@@ -315,20 +311,174 @@ local function update_library_indicator(force)
         last_lib_has_upd = has_upd
         if urushi and urushi.set_window_title then
             local is_en = (i18n and i18n.is_en and i18n.is_en())
-            local base_t = is_en and "Library" or "Библиотека"
+            local base_t = is_en and "Scripts" or "Скрипты"
             urushi.set_window_title("library", base_t .. (has_upd and " •" or ""))
         end
     end
 end
 
-local library_tab = 1
-local function render_library_window()
-    local has_upd = any_script_update_available()
-    local t_down = has_upd and T("Скачанные (•)", "Downloaded (•)") or T("Скачанные", "Downloaded")
-    local t_cloud = T("Облачные", "Cloud")
-    local ch, idx = ui.segmented("lib_tab_seg", library_tab, { t_down, t_cloud })
-    if ch then library_tab = idx end
-    if library_tab == 1 then render_scripts_card() else render_library_card() end
+local function render_scripts_manager_window()
+    local w = ui.avail_width()
+    local up_snap = (cloud and cloud.get_script_updates) and cloud.get_script_updates() or { checking = false, items = {} }
+
+    -- Top bar: Filter chips
+    local filter_labels = T({ "Все", "Запущенные", "В облаке" }, { "All", "Running", "Available" })
+    local ch, f_idx = ui.segmented("scr_filter_seg", script_filter_idx, filter_labels)
+    if ch then script_filter_idx = f_idx end
+
+    ui.spacing(3)
+
+    -- Check all updates button
+    if up_snap.checking then
+        ui.text(T("Проверка обновлений на GitHub...", "Checking updates on GitHub..."), "accent")
+    else
+        if ui.button(T("@refresh Проверить обновления на GitHub##chk_all_git", "@refresh Check GitHub for Updates##chk_all_git"), w, 24, "ghost") then
+            if cloud and cloud.check_script_updates then
+                cloud.check_script_updates()
+            end
+        end
+    end
+
+    ui.spacing(4)
+
+    -- Official Modules List (Neverlose-Style Compact Rows)
+    for _, mod in ipairs(OFFICIAL_MODULES) do
+        local running = is_script_running(mod.id)
+        local downloaded = is_script_downloaded(mod.id)
+        local downloading = downloading_scripts[mod.id] == true
+        local it = up_snap.items and up_snap.items[mod.id]
+        local has_upd = it and (it.state == "update_available")
+        local is_upd_ing = it and (it.state == "updating")
+        if is_upd_ing then downloading = true end
+
+        local pass = true
+        if script_filter_idx == 2 and not running then pass = false end
+        if script_filter_idx == 3 and (running or downloaded) then pass = false end
+
+        if pass then
+            local act = ui.script_row({
+                id = mod.id,
+                title = T(mod.name_ru, mod.name),
+                author = mod.author,
+                version = mod.version,
+                desc = T(mod.desc_ru, mod.desc),
+                running = running,
+                downloaded = downloaded,
+                downloading = downloading,
+                has_update = has_upd,
+            })
+
+            if act == "load" then
+                start_script(mod.id)
+            elseif act == "stop" then
+                stop_script(mod.id)
+            elseif act == "settings" then
+                if urushi.set_window_open then
+                    urushi.set_window_open(mod.win_id, true)
+                end
+            elseif act == "update" then
+                downloading_scripts[mod.id] = true
+                if cloud and cloud.update_script then
+                    cloud.update_script(mod.id)
+                end
+            elseif act == "delete" then
+                delete_script(mod.id)
+            end
+        end
+    end
+
+    -- User scripts
+    local user_scripts = {}
+    if urushi.list_scripts then
+        local known = { main = true, i18n = true, config = true, keybinds = true, il2cpp = true, system_mod = true }
+        for _, m in ipairs(OFFICIAL_MODULES) do known[m.id] = true end
+        for _, name in ipairs(urushi.list_scripts()) do
+            if not known[name] then
+                table.insert(user_scripts, name)
+            end
+        end
+    end
+
+    if #user_scripts > 0 and script_filter_idx ~= 3 then
+        ui.spacing(4)
+        ui.separator()
+        ui.spacing(2)
+        ui.text(T("Пользовательские скрипты", "User Scripts"), "accent")
+        ui.spacing(2)
+        for _, uname in ipairs(user_scripts) do
+            local running = is_script_running(uname)
+            if (script_filter_idx == 1) or (script_filter_idx == 2 and running) then
+                local act = ui.script_row({
+                    id = uname,
+                    title = uname,
+                    author = T("Локальный", "Local"),
+                    version = "lua",
+                    desc = uname .. ".lua",
+                    running = running,
+                    downloaded = true,
+                    downloading = false,
+                    has_update = false,
+                })
+
+                if act == "load" then
+                    start_script(uname)
+                elseif act == "stop" then
+                    stop_script(uname)
+                elseif act == "delete" then
+                    delete_script(uname)
+                end
+            end
+        end
+    end
+
+    -- Community scripts (verified catalog)
+    if cloud and cloud.status then
+        local cst = cloud.status()
+        if cst and cst.items and #cst.items > 0 then
+            local shown_community_hdr = false
+            for _, cit in ipairs(cst.items) do
+                local running = is_script_running("cloud:" .. cit.id)
+                local pass = true
+                if script_filter_idx == 2 and not running then pass = false end
+                if script_filter_idx == 3 and running then pass = false end
+                if pass then
+                    if not shown_community_hdr then
+                        shown_community_hdr = true
+                        ui.spacing(4)
+                        ui.separator()
+                        ui.spacing(2)
+                        ui.text(T("Сообщество (verified)", "Community (verified)"), "accent")
+                        ui.spacing(2)
+                    end
+
+                    local cdesc = T((cit.description_ru ~= "" and cit.description_ru or cit.description), cit.description)
+                    local act = ui.script_row({
+                        id = "cld_" .. cit.id,
+                        title = cit.name,
+                        author = (cit.author ~= "" and cit.author or "Community"),
+                        version = cit.version,
+                        desc = cdesc,
+                        running = running,
+                        downloaded = cit.installed,
+                        downloading = (cit.state == "installing"),
+                        has_update = false,
+                    })
+
+                    if act == "load" then
+                        if cit.installed then
+                            start_script("cloud:" .. cit.id)
+                        else
+                            cloud.install(cit.id)
+                        end
+                    elseif act == "stop" then
+                        stop_script("cloud:" .. cit.id)
+                    elseif act == "delete" then
+                        cloud.remove(cit.id)
+                    end
+                end
+            end
+        end
+    end
 end
 
 -- ==================== Updater Logic & Preferences ====================
@@ -348,6 +498,21 @@ local last_check_time = os.clock()
 if events and events.on_update then
     events.on_update(function(dt)
         update_library_indicator()
+
+        -- Watch downloading scripts
+        if next(downloading_scripts) ~= nil then
+            local up_snap = (cloud and cloud.get_script_updates) and cloud.get_script_updates() or { items = {} }
+            for id, _ in pairs(downloading_scripts) do
+                local it = up_snap.items and up_snap.items[id]
+                if it and it.state == "updated" then
+                    downloading_scripts[id] = nil
+                    start_script(id)
+                elseif it and it.state == "error" then
+                    downloading_scripts[id] = nil
+                end
+            end
+        end
+
         if not updater or not updater.get_status then return end
         local now = os.clock()
         local interval = tonumber(upd_cfg.check_interval) or 180
@@ -534,15 +699,15 @@ if urushi and urushi.register_window then
 
     urushi.register_window({
         id = "library",
-        title = T("Библиотека", "Library"),
+        title = T("Скрипты", "Scripts"),
         icon = "library",
-        order = 68,
+        order = 25,
         default_open = false,
         default_pinned = false,
         x = 310,
         y = 60,
-        width = 430,
-        render = render_library_window,
+        width = 460,
+        render = render_scripts_manager_window,
     })
 end
 
