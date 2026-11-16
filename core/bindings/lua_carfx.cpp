@@ -204,6 +204,8 @@ const PartName kParts[] = {
     { "suspension", CarFX::kPartSuspension },
     { "brakes",     CarFX::kPartBrakes },
     { "wheels",     CarFX::kPartWheels },
+    { "tires",      CarFX::kPartTires },
+    { "lights",     CarFX::kPartLights },
     { "interior",   CarFX::kPartInterior },
 };
 } // namespace

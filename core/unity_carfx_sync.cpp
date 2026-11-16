@@ -369,18 +369,32 @@ static uint32_t InternalsPartOfMaterial(const char* name) {
     for (; name[n] && n + 1 < sizeof(l); ++n) l[n] = static_cast<char>(tolower(static_cast<unsigned char>(name[n])));
     auto has = [&](const char* s) { return strstr(l, s) != nullptr; };
 
-    // Explicit exclusions: body, shadows, glass/windows, lights, plates, proxies, collision
+    // Explicit exclusions: body, shadows, glass/windows, collision/proxies
     if (has("car_body") || has("body") || has("shadow") || has("glass") || has("window") ||
-        has("windshield") || has("light") || has("lamp") || has("lens") || has("flare") ||
-        has("glow") || has("plate") || has("number") || has("wheel_motion") || has("proxy") ||
-        has("collider") || has("decal") || has("badge") || has("emblem") || has("grill") ||
-        has("grid") || has("smoke") || has("particle") || has("undercar") || has("asphalt") ||
-        has("road") || has("dummy")) {
+        has("windshield") || has("wheel_motion") || has("proxy") || has("collider") ||
+        has("smoke") || has("particle") || has("undercar") || has("asphalt") || has("road") ||
+        has("dummy")) {
         return 0;
     }
 
-    // Wheels
-    if (has("rim") || has("yolo") || has("wheel") || has("tire") || has("tyre") || has("defaultdiffuse")) {
+    // Lights: headlights, taillights, indicators, fog lights (checked before interior!)
+    if (has("headlight") || has("taillight") || has("turnlight") || has("foglight") ||
+        has("reverselight") || has("brakelight") || has("lights_front") || has("lights_rear") ||
+        has("lights_head") || has("lights_tail") || has("light_front") || has("light_rear") ||
+        has("front_light") || has("rear_light") || has("head_light") || has("tail_light") ||
+        has("car_stock_lights") || has("headlamp") || has("taillamp") || has("lamp_front") ||
+        has("lamp_rear") || has("lens") || has("reflector") || has("light_cone") ||
+        ((has("light") || has("lamp")) && (has("front") || has("rear") || has("head") || has("tail") || has("stock")))) {
+        return CarFX::kPartLights;
+    }
+
+    // Tires: rubber only (checked before wheels!)
+    if (has("tire") || has("tyre") || has("rubber") || has("yolo") || has("defaultdiffuse")) {
+        return CarFX::kPartTires;
+    }
+
+    // Wheels: rims, alloys, discs, hubcaps
+    if (has("rim") || has("wheel") || has("alloy") || has("hubcap")) {
         return CarFX::kPartWheels;
     }
 
@@ -402,12 +416,13 @@ static uint32_t InternalsPartOfMaterial(const char* name) {
         return CarFX::kPartEngine;
     }
 
-    // Interior
+    // Interior (steering wheel, dash, instruments, gauges, displays, screens, rollcage, seats, trim, cockpit, interior lights)
     if (has("interior") || has("salon") || has("seat") || has("steer") || has("dash") || has("gauge") ||
         has("cockpit") || has("cage") || has("rollcage") || has("pedal") || has("shifter") || has("gear") ||
         has("belt") || has("trim") || has("cabin") || has("door_panel") || has("doorpanel") || has("carpet") ||
         has("tach") || has("speedo") || has("console") || has("carbon") || has("fabric") || has("leather") ||
-        has("plastic") || has("logos")) {
+        has("plastic") || has("logos") || has("chrome") || has("display") || has("screen") || has("meter") ||
+        has("cluster") || has("dial") || has("light") || has("glow") || has("lamp")) {
         return CarFX::kPartInterior;
     }
 

@@ -800,7 +800,8 @@ bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, Draw
     ID3D11ShaderResourceView* tex2 = ts.userTex[2].load(std::memory_order_acquire);
     ID3D11ShaderResourceView* tex3 = ts.userTex[3].load(std::memory_order_acquire);
 
-    k.frameInfo[0] = albedoSrv ? 1.0f : 0.0f;
+    const bool isBodyLivery = (matchedTarget == kTargetBody && albedoSrv != nullptr);
+    k.frameInfo[0] = isBodyLivery ? 1.0f : 0.0f;
     k.frameInfo[1] = tex0 ? 1.0f : 0.0f;
     k.frameInfo[2] = tex1 ? 1.0f : 0.0f;
     k.frameInfo[3] = static_cast<float>(mode);
@@ -879,7 +880,7 @@ bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, Draw
         tex2,                               // t35: g_fxTex2
         tex3,                               // t36: g_fxTex3
         needDepth ? g_depthSrv : nullptr,   // t37: g_fxDepth
-        albedoSrv                           // t38: g_fxLivery
+        isBodyLivery ? albedoSrv : nullptr  // t38: g_fxLivery
     };
     ID3D11SamplerState* samplers[2] = { g_samplerLinear, g_samplerPoint };
 

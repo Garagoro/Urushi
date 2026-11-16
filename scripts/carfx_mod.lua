@@ -54,8 +54,10 @@ local PARTS = {
     { "engine",     "Двигатель",  "Engine" },
     { "suspension", "Подвеска",   "Suspension" },
     { "brakes",     "Тормоза",    "Brakes" },
-    { "wheels",     "Колёса",     "Wheels" },
-    { "interior",   "Салон и прочее", "Interior & other" },
+    { "wheels",     "Диски",      "Rims / Wheels" },
+    { "tires",      "Шины",       "Tires" },
+    { "lights",     "Фары",       "Lights" },
+    { "interior",   "Салон",      "Interior" },
 }
 
 local cfx_settings = {
@@ -69,12 +71,18 @@ local cfx_settings = {
         suspension = true,
         brakes = true,
         wheels = true,
+        tires = false,
+        lights = true,
         interior = true,
     },
     tex_paths = { [0] = "", [1] = "", [2] = "", [3] = "" },
 }
 if config and config.bind then
     cfx_settings = config.bind("carfx", cfx_settings)
+end
+if cfx_settings.parts then
+    if cfx_settings.parts.tires == nil then cfx_settings.parts.tires = false end
+    if cfx_settings.parts.lights == nil then cfx_settings.parts.lights = true end
 end
 
 local pending_restore = true

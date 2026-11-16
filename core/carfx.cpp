@@ -504,7 +504,7 @@ void ClearTargetTextures(int target) {
 }
 
 static std::atomic<uint32_t> s_internalsPartMask{ kPartsDefault };
-void SetInternalsPartMask(uint32_t mask) { s_internalsPartMask.store(mask & 0x1Fu, std::memory_order_relaxed); }
+void SetInternalsPartMask(uint32_t mask) { s_internalsPartMask.store(mask & 0x7Fu, std::memory_order_relaxed); }
 uint32_t GetInternalsPartMask() { return s_internalsPartMask.load(std::memory_order_relaxed); }
 
 void SetInternalsTextures(const std::vector<void*>& nativePtrs) {
