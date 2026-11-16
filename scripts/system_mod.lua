@@ -301,19 +301,19 @@ local function render_library_window()
     if library_tab == 1 then render_scripts_card() else render_library_card() end
 end
 
--- ==================== Auto-Updater Logic & Preferences ====================
+-- ==================== Updater Logic & Preferences ====================
 local upd_cfg = {
     auto_check = true,
-    auto_install = true,
+    auto_install = false,   -- default FALSE: no automatic background freezes during gameplay
     check_interval = 180,
 }
 if config and config.bind then
     upd_cfg = config.bind("updater", upd_cfg)
 end
+-- Force auto_install to false so existing configs with true won't lag the user
+upd_cfg.auto_install = false
 
 local last_check_time = os.clock()
-local install_triggered = false
-local manual_update_requested = false
 
 if events and events.on_update then
     events.on_update(function(dt)
@@ -321,25 +321,13 @@ if events and events.on_update then
         local now = os.clock()
         local interval = tonumber(upd_cfg.check_interval) or 180
 
-        -- 1. Periodic background check
+        -- Periodic background check ONLY checks for updates; downloading & reinjection are strictly manual via UI button.
         if upd_cfg.auto_check and (now - last_check_time >= interval) then
             last_check_time = now
             local ust = updater.get_status()
             if ust.state == "idle" or ust.state == "up_to_date" then
                 updater.check()
             end
-        end
-
-        -- 2. Auto-install when update is ready
-        local ust = updater.get_status()
-        if ust.state == "update_available" and (upd_cfg.auto_install or manual_update_requested) and not install_triggered then
-            install_triggered = true
-            manual_update_requested = false
-            log.info(string.format("Auto-updater: update detected (v%s, %d files), installing and reinjecting...",
-                     tostring(ust.remote_version), ust.files_total or 0))
-            updater.install()
-        elseif ust.state ~= "update_available" then
-            install_triggered = false
         end
     end)
 end
@@ -438,23 +426,24 @@ local function render_system_window()
             end
 
             ui.spacing(4)
-            local ac_ch, ac_val = ui.toggle(T("Авто-проверка обновлений##sys_upd_ac", "Auto-check for updates##sys_upd_ac"), upd_cfg.auto_check)
+            local ac_ch, ac_val = ui.toggle(T("Авто-проверка обновлений (уведомления)##sys_upd_ac", "Auto-check for updates (notify only)##sys_upd_ac"), upd_cfg.auto_check)
             if ac_ch then
                 upd_cfg.auto_check = ac_val
                 if config then config.mark_dirty() end
             end
 
-            local ai_ch, ai_val = ui.toggle(T("Авто-установка на лету##sys_upd_ai", "Auto-install updates live##sys_upd_ai"), upd_cfg.auto_install)
-            if ai_ch then
-                upd_cfg.auto_install = ai_val
-                if config then config.mark_dirty() end
-            end
-
-            ui.spacing(4)
+            ui.spacing(6)
             local bw = ui.avail_width()
             if ust.state == "update_available" then
-                if ui.button(T("Обновить##sys_upd_inst", "Update##sys_upd_inst"), bw, 32, "primary") then
+                local ver_target = ust.remote_version or "?"
+                if ui.button(T(string.format("Скачать и обновить до v%s (Реинжект)##sys_upd_inst", ver_target),
+                               string.format("Download & Update to v%s (Reinject)##sys_upd_inst", ver_target)),
+                             bw, 34, "primary") then
                     updater.install()
+                end
+                ui.spacing(3)
+                if ui.button(T("Реинжектить текущую версию (Hot-Reload)##sys_upd_reinj_curr", "Reinject Current Version (Hot-Reload)##sys_upd_reinj_curr"), bw, 28, "ghost") then
+                    if updater.reinject then updater.reinject() end
                 end
             elseif ust.state == "restart_required" then
                 if ui.button(T("Реинжектить на лету##sys_upd_reinj_live", "Reinject Live##sys_upd_reinj_live"), bw, 30, "accent") then
@@ -467,14 +456,13 @@ local function render_system_window()
             elseif ust.state == "downloading" or ust.state == "reinjecting" or ust.state == "checking" then
                 ui.text_dim(T("Пожалуйста, подождите...", "Please wait..."))
             else
-                if ui.button(T("Обновить##sys_upd_chk", "Update##sys_upd_chk"), bw, 32, "primary") then
-                    last_check_time = os.clock()
-                    manual_update_requested = true
-                    updater.check()
-                end
-                ui.spacing(2)
-                if ui.button(T("Реинжектить DLL (Hot-Reload)##sys_upd_reinj", "Reinject DLL (Hot-Reload)##sys_upd_reinj"), bw, 26, "ghost") then
+                if ui.button(T("Перезагрузить URUSHI (Реинжект DLL)##sys_upd_reinj", "Hot-Reload URUSHI DLL##sys_upd_reinj"), bw, 32, "primary") then
                     if updater.reinject then updater.reinject() end
+                end
+                ui.spacing(3)
+                if ui.button(T("Проверить обновления на GitHub##sys_upd_chk", "Check for Updates on GitHub##sys_upd_chk"), bw, 28, "secondary") then
+                    last_check_time = os.clock()
+                    updater.check()
                 end
             end
         end)

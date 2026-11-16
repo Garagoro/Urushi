@@ -778,11 +778,47 @@ void SetDismissed(bool dismissed) {
     s_bannerDismissed = dismissed;
 }
 
+const char* GetVersion() {
+    static std::string s_ver;
+    if (s_ver.empty()) {
+        const char* candidatePaths[] = {
+            "version.txt",
+            "Urushi/version.txt",
+            "Urushi/dist/version.txt",
+            "dist/version.txt"
+        };
+        for (const char* cp : candidatePaths) {
+            FILE* f = fopen(cp, "r");
+            if (f) {
+                char buf[256];
+                while (fgets(buf, sizeof(buf), f)) {
+                    if (strncmp(buf, "version=", 8) == 0) {
+                        char* p = buf + 8;
+                        while (*p == ' ' || *p == '\t') p++;
+                        size_t l = strlen(p);
+                        while (l > 0 && (p[l - 1] == '\r' || p[l - 1] == '\n' || p[l - 1] == ' ' || p[l - 1] == '\t')) {
+                            p[--l] = '\0';
+                        }
+                        if (l > 0) {
+                            s_ver = p;
+                            fclose(f);
+                            return s_ver.c_str();
+                        }
+                    }
+                }
+                fclose(f);
+            }
+        }
+        s_ver = URUSHI_VERSION;
+    }
+    return s_ver.c_str();
+}
+
 StatusSnapshot GetStatus() {
     std::lock_guard<std::mutex> lk(s_mtx);
     StatusSnapshot st;
     st.state = s_state;
-    st.localVersion = URUSHI_VERSION;
+    st.localVersion = GetVersion();
     st.remoteVersion = s_remoteVersion;
     st.releaseNotes = s_releaseNotes;
     st.statusText = s_statusText;

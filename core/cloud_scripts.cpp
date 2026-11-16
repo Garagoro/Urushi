@@ -410,7 +410,7 @@ void SetFetchForTests(FetchFn fn) { g_fetchOverride = fn; }
 // ------------------------------------------------------------------ install / remove / list
 bool InstallBlocking(const Item& item, std::string& err) {
     if (!ValidId(item.id)) { err = "invalid id"; return false; }
-    if (!item.minUrushi.empty() && !VersionAtLeast(URUSHI_VERSION, item.minUrushi)) {
+    if (!item.minUrushi.empty() && !VersionAtLeast(Updater::GetVersion(), item.minUrushi)) {
         err = "requires URUSHI " + item.minUrushi + " or newer";
         return false;
     }

@@ -351,15 +351,30 @@ void RenderDock(bool menuOpen) {
             DrawAlphaMask(dl, ImVec2(tp.x + 3.0f * S, tp.y + 3.0f * S), 14.0f * S, kGithubAlpha20, 20, 20, col);
         }
 
-        std::string verLabel = std::string("v") + URUSHI_VERSION;
+        std::string verLabel = std::string("v") + Updater::GetVersion();
         if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
         ImVec2 verSz = ImGui::CalcTextSize(verLabel.c_str());
-        dl->AddText(ImVec2(hPos.x + innerW - verSz.x, hPos.y + 4.0f * S), kColTextMuted, verLabel.c_str());
+        const ImVec2 verPos(hPos.x + innerW - verSz.x, hPos.y + 3.0f * S);
+        ImGui::SetCursorScreenPos(verPos);
+        if (ImGui::InvisibleButton("##dock_ver_reinj", ImVec2(verSz.x, 20.0f * S))) {
+            Updater::Reinject();
+        }
+        const bool verHv = ImGui::IsItemHovered();
+        if (verHv) {
+            dl->AddRectFilled(ImVec2(verPos.x - 2.0f * S, verPos.y - 1.0f * S),
+                              ImVec2(verPos.x + verSz.x + 2.0f * S, verPos.y + 19.0f * S),
+                              IM_COL32(255, 255, 255, 20), 4.0f * S);
+            ImGui::SetTooltip("%s", g_language == UrushiUI::Language::Russian
+                ? u8"Реинжект URUSHI (нажмите для перезагрузки DLL)"
+                : "Reinject URUSHI (click to hot-reload DLL)");
+        }
+        const ImU32 verCol = verHv ? UrushiUI::GetAccentU32() : kColTextMuted;
+        dl->AddText(ImVec2(verPos.x, verPos.y + 1.0f * S), verCol, verLabel.c_str());
         if (AppFonts::Small) ImGui::PopFont();
 
         // reorder toggle (left of the version label)
+        const float tw = 20.0f * S;
         {
-            const float tw = 20.0f * S;
             const ImVec2 tp(hPos.x + innerW - verSz.x - 6.0f * S - tw, hPos.y + 1.0f * S);
             ImGui::SetCursorScreenPos(tp);
             if (ImGui::InvisibleButton("##dockedit", ImVec2(tw, 20.0f * S))) {
@@ -377,6 +392,35 @@ void RenderDock(bool menuOpen) {
             }
             if (hv) ImGui::SetTooltip("%s", g_language == UrushiUI::Language::Russian
                 ? u8"Изменить порядок (перетаскивание)" : "Reorder (drag & drop)");
+            ImGui::SetCursorScreenPos(hPos);
+        }
+
+        // Dedicated Reinject button (left of the reorder toggle)
+        {
+            const float rw = 20.0f * S;
+            const ImVec2 rp(hPos.x + innerW - verSz.x - 6.0f * S - tw - 4.0f * S - rw, hPos.y + 1.0f * S);
+            ImGui::SetCursorScreenPos(rp);
+            if (ImGui::InvisibleButton("##dock_reinject_btn", ImVec2(rw, 20.0f * S))) {
+                Updater::Reinject();
+            }
+            const bool hv = ImGui::IsItemHovered();
+            if (hv) {
+                dl->AddRectFilled(rp, ImVec2(rp.x + rw, rp.y + 20.0f * S), IM_COL32(255, 255, 255, 25), 4.0f * S);
+                dl->AddRect(rp, ImVec2(rp.x + rw, rp.y + 20.0f * S), IM_COL32(255, 255, 255, 120), 4.0f * S);
+                ImGui::SetTooltip("%s", g_language == UrushiUI::Language::Russian
+                    ? u8"Реинжект URUSHI (перезагрузка DLL на лету)"
+                    : "Reinject URUSHI (live hot-reload DLL)");
+            }
+            const ImU32 rc = hv ? UrushiUI::GetAccentU32() : kColTextMuted;
+            const ImVec2 c(rp.x + rw * 0.5f, rp.y + 10.0f * S);
+            const float r = 4.8f * S;
+            dl->PathArcTo(c, r, -2.5f, 1.9f, 16);
+            dl->PathStroke(rc, 0, 1.4f * S);
+            const float endA = 1.9f;
+            const ImVec2 tip(c.x + r * cosf(endA), c.y + r * sinf(endA));
+            dl->AddTriangleFilled(tip,
+                                  ImVec2(tip.x + 2.4f * S, tip.y - 3.2f * S),
+                                  ImVec2(tip.x - 2.0f * S, tip.y - 2.8f * S), rc);
             ImGui::SetCursorScreenPos(hPos);
         }
 

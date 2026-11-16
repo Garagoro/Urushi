@@ -4,6 +4,16 @@ project(urushi LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Version definition from dist/version.txt manifest
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/dist/version.txt")
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/dist/version.txt" VER_LINE REGEX "^version=")
+    string(REGEX REPLACE "^version=" "" URUSHI_VER_FROM_FILE "${VER_LINE}")
+    string(STRIP "${URUSHI_VER_FROM_FILE}" URUSHI_VER_FROM_FILE)
+    if(URUSHI_VER_FROM_FILE)
+        add_compile_definitions(URUSHI_VERSION="${URUSHI_VER_FROM_FILE}")
+    endif()
+endif()
+
 # MinHook
 add_subdirectory(third_party/minhook)
 
@@ -34,6 +44,7 @@ set(GAME_DIR "C:/Program Files (x86)/Steam/steamapps/common/CarX Drift Racing On
 add_custom_target(deploy
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:version>" "${GAME_DIR}/version.dll"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:urushi>" "${GAME_DIR}/urushi.dll"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/dist/version.txt" "${GAME_DIR}/version.txt"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/scripts" "${GAME_DIR}/scripts"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/shaders" "${GAME_DIR}/shaders"
     DEPENDS version urushi
