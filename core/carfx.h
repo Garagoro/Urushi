@@ -184,6 +184,7 @@ enum InternalsPart : uint32_t {
     kPartInterior   = 1u << 4,   // seats, dashboard, cage, driver, dials, screens, cluster...
     kPartLights     = 1u << 5,   // headlights, taillights, indicators
     kPartTires      = 1u << 6,   // tyres, rubber
+    kPartGlass      = 1u << 7,   // windows, windshield, glass
     kPartsDefault   = kPartEngine | kPartSuspension | kPartBrakes | kPartWheels | kPartInterior | kPartLights
 };
 void SetInternalsPartMask(uint32_t mask);

@@ -57,6 +57,7 @@ local PARTS = {
     { "wheels",     "Диски",      "Rims / Wheels" },
     { "tires",      "Шины",       "Tires" },
     { "lights",     "Фары",       "Lights" },
+    { "glass",      "Стёкла",     "Glass" },
     { "interior",   "Салон",      "Interior" },
 }
 
@@ -73,6 +74,7 @@ local cfx_settings = {
         wheels = true,
         tires = false,
         lights = true,
+        glass = false,
         interior = true,
     },
     tex_paths = { [0] = "", [1] = "", [2] = "", [3] = "" },
@@ -83,6 +85,7 @@ end
 if cfx_settings.parts then
     if cfx_settings.parts.tires == nil then cfx_settings.parts.tires = false end
     if cfx_settings.parts.lights == nil then cfx_settings.parts.lights = true end
+    if cfx_settings.parts.glass == nil then cfx_settings.parts.glass = false end
 end
 
 local pending_restore = true

@@ -305,28 +305,17 @@ static bool SafeExtractMasterMatTexPairSEH(void* rootGo, uint32_t targetTypeId,
             }
             if (!curNatAlb && !curNatPack) continue;
 
-            if (tid == targetTypeId && !foundPrimary) {
+            if (tid == targetTypeId) {
                 *outNatAlbedo = curNatAlb;
                 *outNatPacked = curNatPack;
                 *outAlbTexId = curAlbId;
                 *outPackTexId = curPackId;
                 foundPrimary = true;
-            } else if (outExtraPairs) {
-                outExtraPairs->push_back({ curNatAlb, curNatPack, curAlbId, curPackId });
+                break;
             }
         }
 
-        if (!foundPrimary && outExtraPairs && !outExtraPairs->empty()) {
-            MasterPartTexPair p = outExtraPairs->front();
-            outExtraPairs->erase(outExtraPairs->begin());
-            *outNatAlbedo = p.natAlb;
-            *outNatPacked = p.natPack;
-            *outAlbTexId = p.albTexId;
-            *outPackTexId = p.packTexId;
-            foundPrimary = true;
-        }
-
-        return (*outNatAlbedo != nullptr) || (*outNatPacked != nullptr);
+        return foundPrimary;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         *outNatAlbedo = nullptr;
         *outNatPacked = nullptr;
@@ -369,12 +358,17 @@ static uint32_t InternalsPartOfMaterial(const char* name) {
     for (; name[n] && n + 1 < sizeof(l); ++n) l[n] = static_cast<char>(tolower(static_cast<unsigned char>(name[n])));
     auto has = [&](const char* s) { return strstr(l, s) != nullptr; };
 
-    // Explicit exclusions: body, shadows, glass/windows, collision/proxies
-    if (has("car_body") || has("body") || has("shadow") || has("glass") || has("window") ||
-        has("windshield") || has("wheel_motion") || has("proxy") || has("collider") ||
+    // Explicit exclusions: body, shadows, mirrors, collision/proxies
+    if (has("car_body") || has("body") || has("shadow") || has("mirror") ||
+        has("wheel_motion") || has("proxy") || has("collider") ||
         has("smoke") || has("particle") || has("undercar") || has("asphalt") || has("road") ||
         has("dummy")) {
         return 0;
+    }
+
+    // Glass: windows, windshield, light glass
+    if (has("glass") || has("window") || has("windshield")) {
+        return CarFX::kPartGlass;
     }
 
     // Lights: headlights, taillights, indicators, fog lights (checked before interior!)
@@ -1037,10 +1031,10 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
                     char mn[64] = {};
                     if (!mid || !SafeReadMatNameSEH(unityBase, mid, mn, sizeof(mn))) continue;
                     const uint32_t part = InternalsPartOfMaterial(mn);
-                    if (part == 0 || !(partMask & part)) continue;   // body / glass / shadow proxies, or a group switched off
                     if (loggedMats.insert(mn).second) {
-                        Logger::Info("CarFX internals matched part=" + std::to_string(part) + ": " + mn);
+                        Logger::Info("CarFX mat: " + std::string(mn) + " (part=" + std::to_string(part) + ")");
                     }
+                    if (part == 0 || !(partMask & part)) continue;   // body / glass / shadow proxies, or a group switched off
                     void* natMat = SafeIdToObjectSEH(unityBase, mid);
                     if (!natMat) continue;
                     void* alb = SafeGetMatTextureSEH(unityBase, natMat, 380);
