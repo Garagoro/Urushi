@@ -225,8 +225,8 @@ jobs:
           - 🪞 **Visual & Mirror Fixes**: Isolated body livery strictly to car body, preventing side mirrors from glitching or becoming transparent.
           - 🛡️ **Anti-Collision TTC Vector Prediction**: Real-time trajectory prediction, AFK obstacle auto-ghosting, and standing car ramming defense.
           - 🧠 **C++ UI Element Introspection & Registry**: UI elements declared by Lua scripts are automatically identified, registered, and introspected by the C++ core.
-          - 💾 **Universal Auto-Persistence**: Full bi-directional persistence — settings are restored into the C++ UI on startup and automatically saved back to 'urushi_data/config.json'.
-          - 🔄 **Live Hot-Reinject**: Zero-downtime updates — `urushi.dll` hot-reloads live inside the running game process via `version.dll` event.
+          - 💾 **Universal Auto-Persistence**: Full bi-directional persistence — settings are restored into the C++ UI on startup and automatically saved back to urushi_data/config.json.
+          - 🔄 **Live Hot-Reinject**: Zero-downtime updates — urushi.dll hot-reloads live inside the running game process via version.dll event.
           - 📦 **Automated CI/CD**: Automatic builds, release packaging, and live in-game auto-updater.'''
 
           if len(desc) > 4000:
@@ -241,7 +241,7 @@ jobs:
                       'color': 0x2ECC71,
                       'description': desc,
                       'fields': [
-                          {'name': '🏷️ Version', 'value': f'`{tag}`', 'inline': True},
+                          {'name': '🏷️ Version', 'value': f'{tag}', 'inline': True},
                           {'name': '⬇️ Download', 'value': f'[Urushi-{tag}.zip]({dl_url})', 'inline': True}
                       ],
                       'footer': {
