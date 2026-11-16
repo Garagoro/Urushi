@@ -342,19 +342,6 @@ local function render_scripts_manager_window()
         ui.spacing(3)
     end
 
-    -- Check all updates button
-    if up_snap.checking then
-        ui.text(T("Проверка обновлений на GitHub...", "Checking updates on GitHub..."), "accent")
-    else
-        if ui.button(T("@refresh Проверить обновления на GitHub##chk_all_git", "@refresh Check GitHub for Updates##chk_all_git"), w, 24, "ghost") then
-            if cloud and cloud.check_script_updates then
-                cloud.check_script_updates()
-            end
-        end
-    end
-
-    ui.spacing(4)
-
     -- Official Modules List (Neverlose-Style Compact Rows)
     for _, mod in ipairs(OFFICIAL_MODULES) do
         local running = is_script_running(mod.id)
@@ -386,17 +373,6 @@ local function render_scripts_manager_window()
                 start_script(mod.id)
             elseif act == "stop" then
                 stop_script(mod.id)
-            elseif act == "settings" then
-                if urushi.set_window_open then
-                    urushi.set_window_open(mod.win_id, true)
-                end
-            elseif act == "update" then
-                downloading_scripts[mod.id] = true
-                if cloud and cloud.update_script then
-                    cloud.update_script(mod.id)
-                end
-            elseif act == "delete" then
-                delete_script(mod.id)
             end
         end
     end
@@ -438,8 +414,6 @@ local function render_scripts_manager_window()
                     start_script(uname)
                 elseif act == "stop" then
                     stop_script(uname)
-                elseif act == "delete" then
-                    delete_script(uname)
                 end
             end
         end
@@ -486,8 +460,6 @@ local function render_scripts_manager_window()
                         end
                     elseif act == "stop" then
                         stop_script("cloud:" .. cit.id)
-                    elseif act == "delete" then
-                        cloud.remove(cit.id)
                     end
                 end
             end
