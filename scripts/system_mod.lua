@@ -237,14 +237,6 @@ local function start_script(id)
                 table.insert(urushi_scripts.list, { id = id, enabled = true, status = "ok" })
             end
         end
-        for _, m in ipairs(OFFICIAL_MODULES) do
-            if m.id == id then
-                if urushi.set_window_open then
-                    urushi.set_window_open(m.win_id, true)
-                end
-                break
-            end
-        end
         log.info("Started script: " .. id)
     else
         log.error("Failed to start script '" .. id .. "': " .. tostring(err))
