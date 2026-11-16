@@ -255,7 +255,7 @@ void RenderDock(bool menuOpen) {
 
     const float S = g_uiScale;
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const float dockW = 276.0f * S;
+    const float dockW = 252.0f * S;
     const float padX = 12.0f * S;
     const float padY = 12.0f * S;
     const float innerW = dockW - padX * 2.0f;
@@ -351,10 +351,10 @@ void RenderDock(bool menuOpen) {
             DrawAlphaMask(dl, ImVec2(tp.x + 3.0f * S, tp.y + 3.0f * S), 14.0f * S, kGithubAlpha20, 20, 20, col);
         }
 
-        // Language toggle pill button (EN / RU)
+        // Language toggle pill button (EN / RU) - far right corner
+        const float lw = 26.0f * S;
         {
-            const float lw = 26.0f * S;
-            const ImVec2 lp(hPos.x + 138.0f * S, hPos.y + 1.0f * S);
+            const ImVec2 lp(hPos.x + innerW - lw, hPos.y + 1.0f * S);
             ImGui::SetCursorScreenPos(lp);
             if (ImGui::InvisibleButton("##dock_lang_btn", ImVec2(lw, 20.0f * S))) {
                 UrushiUI::ToggleLanguage();
@@ -376,33 +376,13 @@ void RenderDock(bool menuOpen) {
             ImVec2 txtSz = ImGui::CalcTextSize(code);
             dl->AddText(ImVec2(lp.x + (lw - txtSz.x) * 0.5f, lp.y + (20.0f * S - txtSz.y) * 0.5f), col, code);
             if (AppFonts::Small) ImGui::PopFont();
+            ImGui::SetCursorScreenPos(hPos);
         }
 
-        std::string verLabel = std::string("v") + Updater::GetVersion();
-        if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
-        ImVec2 verSz = ImGui::CalcTextSize(verLabel.c_str());
-        const ImVec2 verPos(hPos.x + innerW - verSz.x, hPos.y + 3.0f * S);
-        ImGui::SetCursorScreenPos(verPos);
-        if (ImGui::InvisibleButton("##dock_ver_reinj", ImVec2(verSz.x, 20.0f * S))) {
-            Updater::Reinject();
-        }
-        const bool verHv = ImGui::IsItemHovered();
-        if (verHv) {
-            dl->AddRectFilled(ImVec2(verPos.x - 2.0f * S, verPos.y - 1.0f * S),
-                              ImVec2(verPos.x + verSz.x + 2.0f * S, verPos.y + 19.0f * S),
-                              IM_COL32(255, 255, 255, 20), 4.0f * S);
-            ImGui::SetTooltip("%s", g_language == UrushiUI::Language::Russian
-                ? "Реинжект URUSHI (нажмите для перезагрузки DLL)"
-                : "Reinject URUSHI (click to hot-reload DLL)");
-        }
-        const ImU32 verCol = verHv ? UrushiUI::GetAccentU32() : kColTextMuted;
-        dl->AddText(ImVec2(verPos.x, verPos.y + 1.0f * S), verCol, verLabel.c_str());
-        if (AppFonts::Small) ImGui::PopFont();
-
-        // reorder toggle (left of the version label)
+        // reorder toggle (left of the language button)
         const float tw = 20.0f * S;
         {
-            const ImVec2 tp(hPos.x + innerW - verSz.x - 6.0f * S - tw, hPos.y + 1.0f * S);
+            const ImVec2 tp(hPos.x + innerW - lw - 6.0f * S - tw, hPos.y + 1.0f * S);
             ImGui::SetCursorScreenPos(tp);
             if (ImGui::InvisibleButton("##dockedit", ImVec2(tw, 20.0f * S))) {
                 g_dockEdit = !g_dockEdit;
@@ -425,7 +405,7 @@ void RenderDock(bool menuOpen) {
         // Dedicated Reinject button (left of the reorder toggle)
         {
             const float rw = 20.0f * S;
-            const ImVec2 rp(hPos.x + innerW - verSz.x - 6.0f * S - tw - 4.0f * S - rw, hPos.y + 1.0f * S);
+            const ImVec2 rp(hPos.x + innerW - lw - 6.0f * S - tw - 4.0f * S - rw, hPos.y + 1.0f * S);
             ImGui::SetCursorScreenPos(rp);
             if (ImGui::InvisibleButton("##dock_reinject_btn", ImVec2(rw, 20.0f * S))) {
                 Updater::Reinject();
