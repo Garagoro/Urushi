@@ -66,6 +66,7 @@ struct WindowState {
     float posX = 264.0f;
     float posY = 36.0f;
     float width = 410.0f;
+    float maxHeight = 0.0f;
     float lastBodyH = 120.0f;
     float actualW = 410.0f;
     float actualH = 180.0f;

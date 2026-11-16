@@ -184,7 +184,7 @@ local OFFICIAL_MODULES = {
 }
 
 local downloading_scripts = {}
-local script_filter_idx = 1 -- 1: All, 2: Loaded, 3: Available
+local script_search_query = ""
 
 local function is_script_running(id)
     if urushi_scripts and urushi_scripts.list then
@@ -313,11 +313,11 @@ local function render_scripts_manager_window()
     local w = ui.avail_width()
     local up_snap = (cloud and cloud.get_script_updates) and cloud.get_script_updates() or { checking = false, items = {} }
 
-    -- Top bar: Filter chips
-    local filter_labels = T({ "Все", "Запущенные", "В облаке" }, { "All", "Running", "Available" })
-    local ch, f_idx = ui.segmented("scr_filter_seg", script_filter_idx, filter_labels)
-    if ch then script_filter_idx = f_idx end
-
+    -- Search bar
+    local s_ch, s_text = ui.search_input("##scripts_search", script_search_query, T("Поиск скриптов...", "Search scripts..."))
+    if s_ch then
+        script_search_query = s_text
+    end
     ui.spacing(3)
 
     -- Pack download button & progress
@@ -355,21 +355,33 @@ local function render_scripts_manager_window()
 
     ui.spacing(4)
 
+    -- Search query matching helper
+    local query = script_search_query:lower()
+    local function query_matches(name, name_ru, id, desc, desc_ru, author)
+        if query == "" then return true end
+        if name and name:lower():find(query, 1, true) then return true end
+        if name_ru and name_ru:lower():find(query, 1, true) then return true end
+        if id and id:lower():find(query, 1, true) then return true end
+        if desc and desc:lower():find(query, 1, true) then return true end
+        if desc_ru and desc_ru:lower():find(query, 1, true) then return true end
+        if author and author:lower():find(query, 1, true) then return true end
+        return false
+    end
+
+    local total_shown = 0
+
     -- Official Modules List (Neverlose-Style Compact Rows)
     for _, mod in ipairs(OFFICIAL_MODULES) do
-        local running = is_script_running(mod.id)
-        local downloaded = is_script_downloaded(mod.id)
-        local downloading = downloading_scripts[mod.id] == true
-        local it = up_snap.items and up_snap.items[mod.id]
-        local has_upd = it and (it.state == "update_available")
-        local is_upd_ing = it and (it.state == "updating")
-        if is_upd_ing then downloading = true end
+        if query_matches(mod.name, mod.name_ru, mod.id, mod.desc, mod.desc_ru, mod.author) then
+            total_shown = total_shown + 1
+            local running = is_script_running(mod.id)
+            local downloaded = is_script_downloaded(mod.id)
+            local downloading = downloading_scripts[mod.id] == true
+            local it = up_snap.items and up_snap.items[mod.id]
+            local has_upd = it and (it.state == "update_available")
+            local is_upd_ing = it and (it.state == "updating")
+            if is_upd_ing then downloading = true end
 
-        local pass = true
-        if script_filter_idx == 2 and not running then pass = false end
-        if script_filter_idx == 3 and (running or downloaded) then pass = false end
-
-        if pass then
             local act = ui.script_row({
                 id = mod.id,
                 title = T(mod.name_ru, mod.name),
@@ -386,10 +398,6 @@ local function render_scripts_manager_window()
                 start_script(mod.id)
             elseif act == "stop" then
                 stop_script(mod.id)
-            elseif act == "settings" then
-                if urushi.set_window_open then
-                    urushi.set_window_open(mod.win_id, true)
-                end
             elseif act == "update" then
                 downloading_scripts[mod.id] = true
                 if cloud and cloud.update_script then
@@ -413,15 +421,21 @@ local function render_scripts_manager_window()
         end
     end
 
-    if #user_scripts > 0 and script_filter_idx ~= 3 then
-        ui.spacing(4)
-        ui.separator()
-        ui.spacing(2)
-        ui.text(T("Пользовательские скрипты", "User Scripts"), "accent")
-        ui.spacing(2)
+    if #user_scripts > 0 then
+        local shown_user_hdr = false
         for _, uname in ipairs(user_scripts) do
-            local running = is_script_running(uname)
-            if (script_filter_idx == 1) or (script_filter_idx == 2 and running) then
+            if query_matches(uname, nil, uname, nil, nil, "Local") then
+                total_shown = total_shown + 1
+                if not shown_user_hdr then
+                    shown_user_hdr = true
+                    ui.spacing(4)
+                    ui.separator()
+                    ui.spacing(2)
+                    ui.text(T("Пользовательские скрипты", "User Scripts"), "accent")
+                    ui.spacing(2)
+                end
+
+                local running = is_script_running(uname)
                 local act = ui.script_row({
                     id = uname,
                     title = uname,
@@ -451,11 +465,9 @@ local function render_scripts_manager_window()
         if cst and cst.items and #cst.items > 0 then
             local shown_community_hdr = false
             for _, cit in ipairs(cst.items) do
-                local running = is_script_running("cloud:" .. cit.id)
-                local pass = true
-                if script_filter_idx == 2 and not running then pass = false end
-                if script_filter_idx == 3 and running then pass = false end
-                if pass then
+                local cdesc = T((cit.description_ru ~= "" and cit.description_ru or cit.description), cit.description)
+                if query_matches(cit.name, cit.description_ru, cit.id, cit.description, nil, cit.author) then
+                    total_shown = total_shown + 1
                     if not shown_community_hdr then
                         shown_community_hdr = true
                         ui.spacing(4)
@@ -465,7 +477,7 @@ local function render_scripts_manager_window()
                         ui.spacing(2)
                     end
 
-                    local cdesc = T((cit.description_ru ~= "" and cit.description_ru or cit.description), cit.description)
+                    local running = is_script_running("cloud:" .. cit.id)
                     local act = ui.script_row({
                         id = "cld_" .. cit.id,
                         title = cit.name,
@@ -491,6 +503,16 @@ local function render_scripts_manager_window()
                     end
                 end
             end
+        end
+    end
+
+    if total_shown == 0 and script_search_query ~= "" then
+        ui.spacing(8)
+        ui.text_dim(T("Ничего не найдено по запросу: \"" .. script_search_query .. "\"",
+                      "No scripts found matching: \"" .. script_search_query .. "\""))
+        ui.spacing(4)
+        if ui.button(T("Очистить поиск##clr_srch", "Clear search##clr_srch"), 130, 24, "ghost") then
+            script_search_query = ""
         end
     end
 end
@@ -732,6 +754,7 @@ if urushi and urushi.register_window then
         x = 310,
         y = 60,
         width = 460,
+        max_height = 460,
         render = render_scripts_manager_window,
     })
 end

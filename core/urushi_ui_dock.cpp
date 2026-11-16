@@ -303,133 +303,120 @@ void RenderDock(bool menuOpen) {
 
         // 1. Brand Header
         const ImVec2 hPos = ImGui::GetCursorScreenPos();
-        dl->AddRectFilled(hPos, ImVec2(hPos.x + 22.0f * S, hPos.y + 22.0f * S), kColBgCard, 6.0f * S);
-        dl->AddRect(hPos, ImVec2(hPos.x + 22.0f * S, hPos.y + 22.0f * S), kColHairlineStrong, 6.0f * S);
-        dl->AddCircleFilled(ImVec2(hPos.x + 11.0f * S, hPos.y + 11.0f * S), 4.5f * S, UrushiUI::GetAccentU32());
+        const float headerBoxH = 22.0f * S;
+        const float centerY = hPos.y + headerBoxH * 0.5f;
 
+        // Brand dot badge
+        dl->AddRectFilled(hPos, ImVec2(hPos.x + headerBoxH, hPos.y + headerBoxH), kColBgCard, 6.0f * S);
+        dl->AddRect(hPos, ImVec2(hPos.x + headerBoxH, hPos.y + headerBoxH), kColHairlineStrong, 6.0f * S);
+        dl->AddCircleFilled(ImVec2(hPos.x + headerBoxH * 0.5f, centerY), 4.5f * S, UrushiUI::GetAccentU32());
+
+        // Brand text "URUSHI" (vertically centered on centerY)
         if (AppFonts::Large) ImGui::PushFont(AppFonts::Large);
-        dl->AddText(ImVec2(hPos.x + 31.0f * S, hPos.y + 1.0f * S), kColTextPrimary, "URUSHI");
+        ImVec2 txtSz = ImGui::CalcTextSize("URUSHI");
+        const float textX = hPos.x + headerBoxH + 8.0f * S;
+        const float textY = centerY - txtSz.y * 0.5f;
+        dl->AddText(ImVec2(textX, textY), kColTextPrimary, "URUSHI");
         if (AppFonts::Large) ImGui::PopFont();
 
-        // Discord link button
+        const float textRight = textX + txtSz.x;
+        const float iconBtnW = 22.0f * S;
+        const float iconBtnH = 22.0f * S;
+        const float iconSz = 14.0f * S;
+        const float iconY = centerY - iconBtnH * 0.5f;
+
+        // Discord link button (vertically centered on centerY, spaced comfortably after text)
         {
-            const float tw = 20.0f * S;
-            const ImVec2 tp(hPos.x + 88.0f * S, hPos.y + 1.0f * S);
-            ImGui::SetCursorScreenPos(tp);
-            if (ImGui::InvisibleButton("##dock_discord", ImVec2(tw, 20.0f * S))) {
+            const ImVec2 dp(textRight + 10.0f * S, iconY);
+            ImGui::SetCursorScreenPos(dp);
+            if (ImGui::InvisibleButton("##dock_discord", ImVec2(iconBtnW, iconBtnH))) {
                 ShellExecuteW(nullptr, L"open", L"https://discord.gg/jS6cc49EbT", nullptr, nullptr, SW_SHOWNORMAL);
             }
             const bool hv = ImGui::IsItemHovered();
             if (hv) {
-                dl->AddRectFilled(tp, ImVec2(tp.x + tw, tp.y + 20.0f * S), IM_COL32(88, 101, 242, 45), 4.0f * S);
-                dl->AddRect(tp, ImVec2(tp.x + tw, tp.y + 20.0f * S), IM_COL32(88, 101, 242, 180), 4.0f * S);
+                dl->AddRectFilled(dp, ImVec2(dp.x + iconBtnW, dp.y + iconBtnH), IM_COL32(88, 101, 242, 45), 5.0f * S);
+                dl->AddRect(dp, ImVec2(dp.x + iconBtnW, dp.y + iconBtnH), IM_COL32(88, 101, 242, 180), 5.0f * S);
                 ImGui::SetTooltip("%s", g_language == UrushiUI::Language::Russian
                     ? "Discord: сообщество URUSHI (чат и поддержка)"
                     : "Discord: URUSHI community (chat & support)");
             }
             const ImU32 col = hv ? IM_COL32(88, 101, 242, 255) : kColTextMuted;
-            DrawAlphaMask(dl, ImVec2(tp.x + 3.0f * S, tp.y + 3.0f * S), 14.0f * S, kDiscordAlpha20, 20, 20, col);
+            const ImVec2 dIconPos(dp.x + (iconBtnW - iconSz) * 0.5f, centerY - iconSz * 0.5f);
+            DrawAlphaMask(dl, dIconPos, iconSz, kDiscordAlpha20, 20, 20, col);
         }
 
-        // GitHub link button
+        // GitHub link button (vertically centered on centerY)
         {
-            const float tw = 20.0f * S;
-            const ImVec2 tp(hPos.x + 112.0f * S, hPos.y + 1.0f * S);
-            ImGui::SetCursorScreenPos(tp);
-            if (ImGui::InvisibleButton("##dock_github", ImVec2(tw, 20.0f * S))) {
+            const ImVec2 gp(textRight + 10.0f * S + iconBtnW + 4.0f * S, iconY);
+            ImGui::SetCursorScreenPos(gp);
+            if (ImGui::InvisibleButton("##dock_github", ImVec2(iconBtnW, iconBtnH))) {
                 ShellExecuteW(nullptr, L"open", L"https://github.com/Garagoro/Urushi", nullptr, nullptr, SW_SHOWNORMAL);
             }
             const bool hv = ImGui::IsItemHovered();
             if (hv) {
-                dl->AddRectFilled(tp, ImVec2(tp.x + tw, tp.y + 20.0f * S), IM_COL32(255, 255, 255, 25), 4.0f * S);
-                dl->AddRect(tp, ImVec2(tp.x + tw, tp.y + 20.0f * S), IM_COL32(255, 255, 255, 120), 4.0f * S);
+                dl->AddRectFilled(gp, ImVec2(gp.x + iconBtnW, gp.y + iconBtnH), IM_COL32(255, 255, 255, 25), 5.0f * S);
+                dl->AddRect(gp, ImVec2(gp.x + iconBtnW, gp.y + iconBtnH), IM_COL32(255, 255, 255, 120), 5.0f * S);
                 ImGui::SetTooltip("%s", g_language == UrushiUI::Language::Russian
                     ? "GitHub: репозиторий, исходный код и релизы"
                     : "GitHub: repository, source code & releases");
             }
             const ImU32 col = hv ? IM_COL32(255, 255, 255, 255) : kColTextMuted;
-            DrawAlphaMask(dl, ImVec2(tp.x + 3.0f * S, tp.y + 3.0f * S), 14.0f * S, kGithubAlpha20, 20, 20, col);
+            const ImVec2 gIconPos(gp.x + (iconBtnW - iconSz) * 0.5f, centerY - iconSz * 0.5f);
+            DrawAlphaMask(dl, gIconPos, iconSz, kGithubAlpha20, 20, 20, col);
         }
 
         // Language toggle pill button (EN / RU) - far right corner
-        const float lw = 26.0f * S;
+        const float lw = 28.0f * S;
+        const float lh = 22.0f * S;
+        const ImVec2 lp(hPos.x + innerW - lw, centerY - lh * 0.5f);
         {
-            const ImVec2 lp(hPos.x + innerW - lw, hPos.y + 1.0f * S);
             ImGui::SetCursorScreenPos(lp);
-            if (ImGui::InvisibleButton("##dock_lang_btn", ImVec2(lw, 20.0f * S))) {
+            if (ImGui::InvisibleButton("##dock_lang_btn", ImVec2(lw, lh))) {
                 UrushiUI::ToggleLanguage();
             }
             const bool hv = ImGui::IsItemHovered();
             if (hv) {
-                dl->AddRectFilled(lp, ImVec2(lp.x + lw, lp.y + 20.0f * S), IM_COL32(255, 255, 255, 25), 4.0f * S);
-                dl->AddRect(lp, ImVec2(lp.x + lw, lp.y + 20.0f * S), IM_COL32(255, 255, 255, 120), 4.0f * S);
+                dl->AddRectFilled(lp, ImVec2(lp.x + lw, lp.y + lh), IM_COL32(255, 255, 255, 25), 5.0f * S);
+                dl->AddRect(lp, ImVec2(lp.x + lw, lp.y + lh), IM_COL32(255, 255, 255, 120), 5.0f * S);
                 ImGui::SetTooltip("%s", g_language == UrushiUI::Language::Russian
                     ? "Язык: Русский (нажмите для переключения на English)"
                     : "Language: English (click to switch to Русский)");
             } else {
-                dl->AddRectFilled(lp, ImVec2(lp.x + lw, lp.y + 20.0f * S), IM_COL32(255, 255, 255, 12), 4.0f * S);
-                dl->AddRect(lp, ImVec2(lp.x + lw, lp.y + 20.0f * S), IM_COL32(255, 255, 255, 35), 4.0f * S);
+                dl->AddRectFilled(lp, ImVec2(lp.x + lw, lp.y + lh), IM_COL32(255, 255, 255, 12), 5.0f * S);
+                dl->AddRect(lp, ImVec2(lp.x + lw, lp.y + lh), IM_COL32(255, 255, 255, 35), 5.0f * S);
             }
             const ImU32 col = hv ? UrushiUI::GetAccentU32() : kColTextMuted;
             const char* code = (g_language == UrushiUI::Language::English) ? "EN" : "RU";
             if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
-            ImVec2 txtSz = ImGui::CalcTextSize(code);
-            dl->AddText(ImVec2(lp.x + (lw - txtSz.x) * 0.5f, lp.y + (20.0f * S - txtSz.y) * 0.5f), col, code);
+            ImVec2 lTxtSz = ImGui::CalcTextSize(code);
+            dl->AddText(ImVec2(lp.x + (lw - lTxtSz.x) * 0.5f, centerY - lTxtSz.y * 0.5f), col, code);
             if (AppFonts::Small) ImGui::PopFont();
-            ImGui::SetCursorScreenPos(hPos);
         }
 
-        // reorder toggle (left of the language button)
-        const float tw = 20.0f * S;
+        // Reorder toggle (left of the language button)
+        const float tw = 22.0f * S;
+        const float th = 22.0f * S;
         {
-            const ImVec2 tp(hPos.x + innerW - lw - 6.0f * S - tw, hPos.y + 1.0f * S);
+            const ImVec2 tp(lp.x - 6.0f * S - tw, centerY - th * 0.5f);
             ImGui::SetCursorScreenPos(tp);
-            if (ImGui::InvisibleButton("##dockedit", ImVec2(tw, 20.0f * S))) {
+            if (ImGui::InvisibleButton("##dockedit", ImVec2(tw, th))) {
                 g_dockEdit = !g_dockEdit;
             }
             const bool hv = ImGui::IsItemHovered();
             if (g_dockEdit || hv) {
-                dl->AddRectFilled(tp, ImVec2(tp.x + tw, tp.y + 20.0f * S),
-                                  g_dockEdit ? UrushiUI::GetAccentU32() : IM_COL32(255, 255, 255, 20), 4.0f * S);
+                dl->AddRectFilled(tp, ImVec2(tp.x + tw, tp.y + th),
+                                  g_dockEdit ? UrushiUI::GetAccentU32() : IM_COL32(255, 255, 255, 20), 5.0f * S);
             }
             const ImU32 gc = g_dockEdit ? IM_COL32(20, 20, 24, 255) : (hv ? kColTextPrimary : kColTextMuted);
             for (int k = 0; k < 3; ++k) {   // three bars = "reorder"
-                const float y = tp.y + (6.0f + 4.0f * k) * S;
-                dl->AddLine(ImVec2(tp.x + 4.0f * S, y), ImVec2(tp.x + tw - 4.0f * S, y), gc, 1.5f * S);
+                const float y = centerY + (-4.0f + 4.0f * k) * S;
+                dl->AddLine(ImVec2(tp.x + 4.5f * S, y), ImVec2(tp.x + tw - 4.5f * S, y), gc, 1.5f * S);
             }
             if (hv) ImGui::SetTooltip("%s", g_language == UrushiUI::Language::Russian
                 ? "Изменить порядок (перетаскивание)" : "Reorder (drag & drop)");
-            ImGui::SetCursorScreenPos(hPos);
         }
 
-        // Dedicated Reinject button (left of the reorder toggle)
-        {
-            const float rw = 20.0f * S;
-            const ImVec2 rp(hPos.x + innerW - lw - 6.0f * S - tw - 4.0f * S - rw, hPos.y + 1.0f * S);
-            ImGui::SetCursorScreenPos(rp);
-            if (ImGui::InvisibleButton("##dock_reinject_btn", ImVec2(rw, 20.0f * S))) {
-                Updater::Reinject();
-            }
-            const bool hv = ImGui::IsItemHovered();
-            if (hv) {
-                dl->AddRectFilled(rp, ImVec2(rp.x + rw, rp.y + 20.0f * S), IM_COL32(255, 255, 255, 25), 4.0f * S);
-                dl->AddRect(rp, ImVec2(rp.x + rw, rp.y + 20.0f * S), IM_COL32(255, 255, 255, 120), 4.0f * S);
-                ImGui::SetTooltip("%s", g_language == UrushiUI::Language::Russian
-                    ? "Реинжект URUSHI (перезагрузка DLL на лету)"
-                    : "Reinject URUSHI (live hot-reload DLL)");
-            }
-            const ImU32 rc = hv ? UrushiUI::GetAccentU32() : kColTextMuted;
-            const ImVec2 c(rp.x + rw * 0.5f, rp.y + 10.0f * S);
-            const float r = 4.8f * S;
-            dl->PathArcTo(c, r, -2.5f, 1.9f, 16);
-            dl->PathStroke(rc, 0, 1.4f * S);
-            const float endA = 1.9f;
-            const ImVec2 tip(c.x + r * cosf(endA), c.y + r * sinf(endA));
-            dl->AddTriangleFilled(tip,
-                                  ImVec2(tip.x + 2.4f * S, tip.y - 3.2f * S),
-                                  ImVec2(tip.x - 2.0f * S, tip.y - 2.8f * S), rc);
-            ImGui::SetCursorScreenPos(hPos);
-        }
+        ImGui::SetCursorScreenPos(hPos);
 
         ImGui::Dummy(ImVec2(innerW, 24.0f * S));
         dl->AddLine(ImVec2(hPos.x, hPos.y + 29.0f * S), ImVec2(hPos.x + innerW, hPos.y + 29.0f * S), kColHairline);
@@ -689,10 +676,15 @@ void RenderFloatingWindows(bool menuOpen, lua_State* L) {
         w.openAnim += (1.0f - w.openAnim) * (1.0f - std::exp(-22.0f * dt));
         if (w.openAnim > 0.99f) w.openAnim = 1.0f;
 
+        const float winLimitH = (w.maxHeight > 20.0f)
+            ? std::min(w.maxHeight * S, vp->WorkSize.y * 0.90f)
+            : maxWinH;
+        const float winMaxBodyH = std::max(60.0f * S, winLimitH - headerH - bodyPadTop - bodyPadBot);
+
         const float targetW = std::min(w.width * S, std::max(220.0f * S, vp->WorkSize.x - 24.0f * S));
-        const float targetBodyH = std::clamp(w.lastBodyH * S, 28.0f * S, maxBodyH);
+        const float targetBodyH = std::clamp(w.lastBodyH * S, 28.0f * S, winMaxBodyH);
         const float outerH = w.shaded ? headerH : (headerH + bodyPadTop + targetBodyH + bodyPadBot);
-        w.scrollable = (!w.shaded && (w.lastBodyH * S) > maxBodyH + 1.0f);
+        w.scrollable = (!w.shaded && (w.lastBodyH * S) > winMaxBodyH + 1.0f);
 
         const float maxPosX = std::max(12.0f * S, vp->WorkSize.x - targetW - 12.0f * S);
         const float maxPosY = std::max(12.0f * S, vp->WorkSize.y - std::max(headerH + 40.0f * S, outerH) - 12.0f * S);
@@ -918,6 +910,7 @@ void UrushiUI::RegisterWindow(const WindowRegistration& reg) {
         existing->defaultX = reg.defaultX;
         existing->defaultY = reg.defaultY;
         existing->width = reg.width;
+        existing->maxHeight = reg.maxHeight;
         if (!existing->userMoved) {
             if (g_layoutWorkW > 1.0f && g_layoutWorkH > 1.0f) {
                 const float targetW = std::min(existing->width * g_uiScale, std::max(220.0f * g_uiScale, g_layoutWorkW - 24.0f * g_uiScale));
@@ -947,6 +940,7 @@ void UrushiUI::RegisterWindow(const WindowRegistration& reg) {
         st.posX = reg.defaultX * g_uiScale;
         st.posY = reg.defaultY * g_uiScale;
         st.width = reg.width;
+        st.maxHeight = reg.maxHeight;
         st.luaRenderRef = reg.luaRenderRef;
         st.registeredInPass = true;
         g_windows.push_back(std::move(st));

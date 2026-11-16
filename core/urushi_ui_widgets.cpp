@@ -590,6 +590,81 @@ bool UrushiUI::InputText(const std::string& label, std::string& text, size_t max
     return ch;
 }
 
+bool UrushiUI::SearchInput(const std::string& label, std::string& text, const std::string& hint) {
+    const float S = g_uiScale;
+    const float w = CurrentContentWidth();
+    const float h = 28.0f * S;
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    const char* hashPos = strstr(label.c_str(), "##");
+    std::string hiddenId = hashPos ? std::string(hashPos) : ("##" + label);
+
+    ImVec2 rMin = pos;
+    ImVec2 rMax(pos.x + w, pos.y + h);
+
+    ImU32 bgCol = IM_COL32(18, 22, 28, 220);
+    const float cornerR = 6.0f * S;
+    dl->AddRectFilled(rMin, rMax, bgCol, cornerR);
+
+    const float iconCx = pos.x + 14.0f * S;
+    const float iconCy = pos.y + h * 0.5f;
+    const float iconR = 3.8f * S;
+    const float lineTh = (std::max)(1.2f, 1.4f * S);
+
+    const float padLeft = 28.0f * S;
+    const float padRight = text.empty() ? (10.0f * S) : (26.0f * S);
+    const float inputW = std::max(40.0f * S, w - padLeft - padRight);
+
+    ImGui::SetCursorScreenPos(ImVec2(pos.x + padLeft, pos.y + (h - ImGui::GetTextLineHeight()) * 0.5f - 1.0f * S));
+    ImGui::PushItemWidth(inputW);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
+
+    std::vector<char> buf(256, 0);
+    strncpy_s(buf.data(), buf.size(), text.c_str(), buf.size() - 1);
+    const char* hintStr = hint.empty() ? ((g_language == Language::Russian) ? "Поиск..." : "Search...") : hint.c_str();
+    bool changed = ImGui::InputTextWithHint(hiddenId.c_str(), hintStr, buf.data(), buf.size());
+    if (changed) {
+        text = buf.data();
+    }
+    bool isFocused = ImGui::IsItemActive();
+    bool isHovered = ImGui::IsItemHovered();
+
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(2);
+    ImGui::PopItemWidth();
+
+    ImU32 borderCol = isFocused ? GetAccentU32() : (isHovered ? IM_COL32(255, 255, 255, 45) : kColHairline);
+    dl->AddRect(rMin, rMax, borderCol, cornerR);
+
+    ImU32 iconCol = isFocused ? GetAccentU32() : kColTextMuted;
+    dl->AddCircle(ImVec2(iconCx, iconCy), iconR, iconCol, 16, lineTh);
+    dl->AddLine(ImVec2(iconCx + iconR * 0.707f, iconCy + iconR * 0.707f),
+                ImVec2(iconCx + iconR * 1.6f, iconCy + iconR * 1.6f), iconCol, lineTh * 1.1f);
+
+    if (!text.empty()) {
+        const float clrSz = 18.0f * S;
+        ImVec2 clrMin(pos.x + w - 22.0f * S, pos.y + (h - clrSz) * 0.5f);
+        ImVec2 clrMax(clrMin.x + clrSz, clrMin.y + clrSz);
+        ImGui::SetCursorScreenPos(clrMin);
+        if (ImGui::InvisibleButton(("##clr_" + hiddenId).c_str(), ImVec2(clrSz, clrSz))) {
+            text.clear();
+            changed = true;
+        }
+        bool clrHovered = ImGui::IsItemHovered();
+        ImU32 clrCol = clrHovered ? kColTextPrimary : kColTextMuted;
+        ImVec2 cCenter(clrMin.x + clrSz * 0.5f, clrMin.y + clrSz * 0.5f);
+        const float xR = 3.2f * S;
+        dl->AddLine(ImVec2(cCenter.x - xR, cCenter.y - xR), ImVec2(cCenter.x + xR, cCenter.y + xR), clrCol, lineTh);
+        dl->AddLine(ImVec2(cCenter.x + xR, cCenter.y - xR), ImVec2(cCenter.x - xR, cCenter.y + xR), clrCol, lineTh);
+    }
+
+    ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + h + 4.0f * S));
+    return changed;
+}
+
 static bool ColorEditInternal(const std::string& label, float col[4], bool hasAlpha) {
     const float S = UrushiUI::GetUiScale();
     const float w = UrushiUI::CurrentContentWidth();
@@ -892,28 +967,7 @@ std::string UrushiUI::ScriptRow(const ScriptRowItem& item) {
         DrawAlphaMask(dl, ipos, iconSz, kLucideRefreshAlpha16, 16, 16, updCol);
     }
 
-    // 3. Settings Gear Button (shown if running)
-    bool cfgHovered = false;
-    if (item.running) {
-        rx -= (iconBtnW + gap);
-        ImVec2 sMin(rx, btnY);
-        ImVec2 sMax(rx + iconBtnW, btnY + btnH);
-        ImGui::SetCursorScreenPos(sMin);
-        if (ImGui::InvisibleButton(("##cfg_" + item.id).c_str(), ImVec2(iconBtnW, btnH))) {
-            action = "settings";
-        }
-        cfgHovered = ImGui::IsItemHovered();
-        if (cfgHovered) {
-            dl->AddRectFilled(sMin, sMax, IM_COL32(255, 255, 255, 20), 4.0f * S);
-            dl->AddRect(sMin, sMax, IM_COL32(255, 255, 255, 60), 4.0f * S);
-            ImGui::SetTooltip("%s", (g_language == Language::Russian) ? "Открыть настройки модуля" : "Open module settings");
-        }
-        ImU32 cfgCol = cfgHovered ? GetAccentU32() : kColTextSecondary;
-        ImVec2 center(sMin.x + iconBtnW * 0.5f, sMin.y + btnH * 0.5f);
-        DrawModuleIcon(dl, center, "settings", cfgCol, S * 0.8f);
-    }
-
-    // 3. Left side text (Title & Subtext)
+    // Left side text (Title & Subtext)
     float textMaxX = rx - 8.0f * S;
     float startTextX = pos.x + (item.running ? (15.0f * S) : (12.0f * S));
 
@@ -961,7 +1015,7 @@ std::string UrushiUI::ScriptRow(const ScriptRowItem& item) {
     dl->PopClipRect();
 
     // 4. Description Tooltip on row hover (only if NOT hovering buttons)
-    if (rowHovered && !mbHovered && !delHovered && !updHovered && !cfgHovered) {
+    if (rowHovered && !mbHovered && !delHovered && !updHovered) {
         if (!item.desc.empty()) {
             ImGui::BeginTooltip();
             ImGui::Text("%s", item.title.c_str());

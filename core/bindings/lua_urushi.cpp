@@ -102,6 +102,10 @@ int Lua_UrushiRegisterWindow(lua_State* L) {
     if (lua_isnumber(L, -1)) reg.width = static_cast<float>(lua_tonumber(L, -1));
     lua_pop(L, 1);
 
+    lua_getfield(L, 1, "max_height");
+    if (lua_isnumber(L, -1)) reg.maxHeight = static_cast<float>(lua_tonumber(L, -1));
+    lua_pop(L, 1);
+
     lua_getfield(L, 1, "render");
     if (lua_isfunction(L, -1)) {
         reg.luaRenderRef = luaL_ref(L, LUA_REGISTRYINDEX);
@@ -532,6 +536,17 @@ int Lua_UiInputText(lua_State* L) {
     bool ch = UrushiUI::InputText(label, text, maxLen);
     UrushiUI::RecordUiElement(winId, elemId, cleanLabel, "input_text", false, 0.0, text, ch);
 
+    lua_pushboolean(L, ch ? 1 : 0);
+    lua_pushstring(L, text.c_str());
+    return 2;
+}
+
+int Lua_UiSearchInput(lua_State* L) {
+    const char* label = luaL_checkstring(L, 1);
+    std::string text = luaL_optstring(L, 2, "");
+    std::string hint = luaL_optstring(L, 3, "");
+
+    bool ch = UrushiUI::SearchInput(label, text, hint);
     lua_pushboolean(L, ch ? 1 : 0);
     lua_pushstring(L, text.c_str());
     return 2;
@@ -1185,6 +1200,7 @@ const luaL_Reg kUiFuncs[] = {
     { "collapsing",   Lua_UiCollapsing },
     { "combo",        Lua_UiCombo },
     { "input_text",   Lua_UiInputText },
+    { "search_input", Lua_UiSearchInput },
     { "color_edit3",  Lua_UiColorEdit3 },
     { "color_edit4",  Lua_UiColorEdit4 },
     { "progress_bar", Lua_UiProgressBar },

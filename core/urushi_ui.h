@@ -59,6 +59,7 @@ public:
         float defaultX = 264.0f;
         float defaultY = 36.0f;
         float width = 410.0f;
+        float maxHeight = 0.0f;
         int luaRenderRef = -1;
     };
 
@@ -167,6 +168,7 @@ public:
 
     static bool Combo(const std::string& label, int* currentIdx, const std::vector<std::string>& items);
     static bool InputText(const std::string& label, std::string& text, size_t maxLen = 256);
+    static bool SearchInput(const std::string& label, std::string& text, const std::string& hint = "");
     static bool ColorEdit3(const std::string& label, float rgb[3]);
     static bool ColorEdit4(const std::string& label, float rgba[4]);
     static void ProgressBar(float fraction, float width = -1.0f, float height = 10.0f, const char* overlay = nullptr);
