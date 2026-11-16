@@ -180,6 +180,16 @@ int Lua_CloudIsScriptIgnored(lua_State* L) {
     return 1;
 }
 
+int Lua_CloudDownloadPack(lua_State* L) {
+    CloudScripts::DownloadPackAsync();
+    return 0;
+}
+
+int Lua_CloudIsPackDownloading(lua_State* L) {
+    lua_pushboolean(L, CloudScripts::IsPackDownloading() ? 1 : 0);
+    return 1;
+}
+
 const luaL_Reg kCloudFuncs[] = {
     { "refresh",              Lua_CloudRefresh },
     { "status",               Lua_CloudStatus },
@@ -191,6 +201,8 @@ const luaL_Reg kCloudFuncs[] = {
     { "check_script_updates", Lua_CloudCheckScriptUpdates },
     { "get_script_updates",   Lua_CloudGetScriptUpdates },
     { "update_script",        Lua_CloudUpdateScript },
+    { "download_pack",        Lua_CloudDownloadPack },
+    { "is_pack_downloading",  Lua_CloudIsPackDownloading },
     { "toggle_script_ignore", Lua_CloudToggleScriptIgnore },
     { "is_script_ignored",    Lua_CloudIsScriptIgnored },
     { nullptr, nullptr }

@@ -750,18 +750,15 @@ std::string UrushiUI::ScriptRow(const ScriptRowItem& item) {
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    // 1. Invisible button covering the whole row for hover detection
-    std::string rowId = "##row_" + item.id;
-    ImGui::InvisibleButton(rowId.c_str(), ImVec2(w, h));
-    bool rowHovered = ImGui::IsItemHovered();
+    ImVec2 rMin = pos;
+    ImVec2 rMax(pos.x + w, pos.y + h);
+    bool rowHovered = ImGui::IsMouseHoveringRect(rMin, rMax);
 
     // Background & border
     ImU32 bg = rowHovered ? IM_COL32(23, 27, 34, 230) : IM_COL32(14, 17, 22, 210);
     ImU32 border = item.running ? GetAccentLineU32() : (rowHovered ? IM_COL32(255, 255, 255, 24) : kColHairline);
     const float cornerR = 6.0f * S;
 
-    ImVec2 rMin = pos;
-    ImVec2 rMax(pos.x + w, pos.y + h);
     dl->AddRectFilled(rMin, rMax, bg, cornerR);
     dl->AddRect(rMin, rMax, border, cornerR);
 
@@ -977,6 +974,7 @@ std::string UrushiUI::ScriptRow(const ScriptRowItem& item) {
 
     // Advance cursor to next item
     ImGui::SetCursorScreenPos(ImVec2(pos.x, pos.y + h + 3.0f * S));
+    ImGui::Dummy(ImVec2(w, 0.0f));
     return action;
 }
 

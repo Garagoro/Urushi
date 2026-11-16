@@ -328,6 +328,28 @@ local function render_scripts_manager_window()
 
     ui.spacing(3)
 
+    -- Pack download button & progress
+    local missing_count = 0
+    for _, mod in ipairs(OFFICIAL_MODULES) do
+        if not is_script_downloaded(mod.id) then
+            missing_count = missing_count + 1
+        end
+    end
+
+    local pack_downloading = (cloud and cloud.is_pack_downloading and cloud.is_pack_downloading()) or false
+    if pack_downloading then
+        ui.badge(T("Загрузка официального пака с GitHub...", "Downloading official script pack from GitHub..."), "accent")
+        ui.spacing(3)
+    elseif missing_count > 0 then
+        if ui.button(T(string.format("⬇ Скачать официальный пак скриптов (%d)##dl_all_pack", missing_count),
+                       string.format("⬇ Download Official Script Pack (%d)##dl_all_pack", missing_count)), w, 28, "primary") then
+            if cloud and cloud.download_pack then
+                cloud.download_pack()
+            end
+        end
+        ui.spacing(3)
+    end
+
     -- Check all updates button
     if up_snap.checking then
         ui.text(T("Проверка обновлений на GitHub...", "Checking updates on GitHub..."), "accent")
@@ -586,6 +608,17 @@ local function render_system_window()
         if ui.button(T("Свернуть незакреплённые окна##sys_close_all", "Collapse Unpinned Windows##sys_close_all"), ui.avail_width(), 28, "ghost") then
             urushi.close_all()
         end
+    end)
+
+    ui.card(T("Режим разработчика", "Developer Mode"), "Named Pipe & MCP", function()
+        local dev_on = (urushi.is_dev_mode and urushi.is_dev_mode()) or false
+        local d_ch, d_val = ui.toggle(T("Dev mode (MCP)##sys_dev_mcp", "Dev mode (MCP)##sys_dev_mcp"), dev_on)
+        if d_ch and urushi.set_dev_mode then
+            urushi.set_dev_mode(d_val)
+        end
+        ui.spacing(2)
+        ui.text_dim(T("Включает DevPipe (\\\\.\\pipe\\urushi_dev) для подключения ИИ-ассистентов и отладки.",
+                      "Enables DevPipe (\\\\.\\pipe\\urushi_dev) for AI assistant MCP connections & debugging."))
     end)
 
     if updater and updater.get_status then

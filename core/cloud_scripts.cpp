@@ -698,16 +698,120 @@ void CheckScriptUpdatesAsync(const std::string& singleScript) {
                     s.erase(std::remove(s.begin(), s.end(), '\r'), s.end());
                     return s;
                 };
-                if (normalize(localContent) != normalize(remoteStr)) {
-                    g_scriptUpdates[name] = { name, "update_available", "" };
-                } else {
+                std::string normLocal = normalize(localContent);
+                std::string normRemote = normalize(remoteStr);
+                std::string remoteHash = Sha256Hex(reinterpret_cast<const uint8_t*>(normRemote.data()), normRemote.size());
+                std::string localHash = Sha256Hex(reinterpret_cast<const uint8_t*>(normLocal.data()), normLocal.size());
+                std::string lastInstalledHash = Settings::GetString("script_hashes", name, "");
+
+                if (normLocal == normRemote) {
+                    if (lastInstalledHash.empty()) {
+                        Settings::SetString("script_hashes", name, localHash);
+                    }
                     g_scriptUpdates[name] = { name, "up_to_date", "" };
+                } else {
+                    // Hashes differ: check if the user modified the script locally
+                    if (!lastInstalledHash.empty() && localHash != lastInstalledHash) {
+                        // User modified the file locally - do not notify or nag with update_available!
+                        g_scriptUpdates[name] = { name, "user_modified", "" };
+                    } else {
+                        // Official update from GitHub!
+                        g_scriptUpdates[name] = { name, "update_available", "" };
+                    }
                 }
             } else {
                 g_scriptUpdates[name] = { name, "error", HttpErr(status) };
             }
         }
         g_scriptChecking = false;
+    }).detach();
+}
+
+static std::atomic<bool> g_packDownloading{ false };
+
+bool IsPackDownloading() {
+    return g_packDownloading.load(std::memory_order_acquire);
+}
+
+void DownloadPackAsync(std::function<void(bool ok)> onDone) {
+    if (g_packDownloading.exchange(true, std::memory_order_acq_rel)) return;
+
+    std::thread([exeDir = g_exeDir, onDone]() {
+        Logger::Info("DownloadPackAsync: Starting official script & shader pack download...");
+        const char* officialScripts[] = {
+            "carfx_mod", "perf_optimizer", "replay_mod", "steer_assist_mod",
+            "tires_mod", "teleport_mod", "telemetry_hud", "keybinds_mod"
+        };
+        const char* shaders[] = {
+            "carfx.hlsli", "livery_chrome.hlsl", "livery_glass.hlsl", "livery_refract.hlsl",
+            "livery_aurora_fluid.hlsl", "livery_cyber_pulse.hlsl", "livery_glow_overlay.hlsl",
+            "livery_holo.hlsl", "livery_proximity_reactive.hlsl", "livery_tandem_angle.hlsl",
+            "livery_wall_tap.hlsl", "internals_neon.hlsl"
+        };
+
+        std::wstring scDir = exeDir + L"\\scripts";
+        CreateDirectoryW(scDir.c_str(), nullptr);
+        std::wstring shDir = exeDir + L"\\shaders";
+        CreateDirectoryW(shDir.c_str(), nullptr);
+
+        bool allOk = true;
+        for (const char* scriptId : officialScripts) {
+            std::vector<uint8_t> remoteBytes;
+            DWORD status = 0;
+            const std::string repoPath = std::string("scripts/") + scriptId + ".lua";
+            std::string oldRef = Settings::GetString("cloud", "ref", kDefaultRef);
+            Settings::SetString("cloud", "ref", "main");
+            bool ok = Fetch(repoPath, kMaxFileBytes, remoteBytes, status);
+            Settings::SetString("cloud", "ref", oldRef);
+
+            if (ok && status == 200) {
+                std::wstring dest = scDir + L"\\" + Logger::ToWide(scriptId) + L".lua";
+                std::ofstream out(dest, std::ios::binary);
+                if (out.is_open()) {
+                    out.write(reinterpret_cast<const char*>(remoteBytes.data()), remoteBytes.size());
+                    out.close();
+                }
+                std::wstring devDest = exeDir + L"\\Urushi\\scripts\\" + Logger::ToWide(scriptId) + L".lua";
+                if (GetFileAttributesW(devDest.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                    std::ofstream devOut(devDest, std::ios::binary);
+                    if (devOut.is_open()) {
+                        devOut.write(reinterpret_cast<const char*>(remoteBytes.data()), remoteBytes.size());
+                        devOut.close();
+                    }
+                }
+
+                std::string norm = std::string(remoteBytes.begin(), remoteBytes.end());
+                norm.erase(std::remove(norm.begin(), norm.end(), '\r'), norm.end());
+                std::string hash = Sha256Hex(reinterpret_cast<const uint8_t*>(norm.data()), norm.size());
+                Settings::SetString("script_hashes", scriptId, hash);
+
+                {
+                    std::lock_guard<std::mutex> lk(g_mtx);
+                    g_scriptUpdates[scriptId] = { scriptId, "up_to_date", "" };
+                }
+            } else {
+                allOk = false;
+            }
+        }
+
+        // Shaders
+        for (const char* sh : shaders) {
+            std::vector<uint8_t> shBytes;
+            DWORD shStatus = 0;
+            std::string curRef = Settings::GetString("cloud", "ref", kDefaultRef);
+            Settings::SetString("cloud", "ref", "main");
+            if (Fetch(std::string("shaders/") + sh, kMaxFileBytes, shBytes, shStatus) && shStatus == 200) {
+                std::ofstream shOut(shDir + L"\\" + Logger::ToWide(sh), std::ios::binary);
+                if (shOut.is_open()) {
+                    shOut.write(reinterpret_cast<const char*>(shBytes.data()), shBytes.size());
+                }
+            }
+            Settings::SetString("cloud", "ref", curRef);
+        }
+
+        g_packDownloading.store(false, std::memory_order_release);
+        Logger::Info(std::string("DownloadPackAsync: Finished, allOk = ") + (allOk ? "true" : "false"));
+        if (onDone) onDone(allOk);
     }).detach();
 }
 
@@ -742,6 +846,11 @@ void UpdateScriptAsync(const std::string& scriptId) {
                     devOut.close();
                 }
             }
+
+            std::string norm = std::string(remoteBytes.begin(), remoteBytes.end());
+            norm.erase(std::remove(norm.begin(), norm.end(), '\r'), norm.end());
+            std::string hash = Sha256Hex(reinterpret_cast<const uint8_t*>(norm.data()), norm.size());
+            Settings::SetString("script_hashes", scriptId, hash);
 
             if (scriptId == "carfx_mod") {
                 const char* shaders[] = {

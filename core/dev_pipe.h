@@ -11,6 +11,7 @@ class DevPipe {
 public:
     static bool Init(const std::wstring& exeDir);
     static void Shutdown();
+    static bool IsRunning();
 
     // Called from D3D11 render thread inside Hooked_Present
     static void BeforeNewFrame();

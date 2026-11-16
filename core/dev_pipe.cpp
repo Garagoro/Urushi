@@ -1084,6 +1084,10 @@ void DevPipe::ReleaseD3D11() {
     g_stageFmt = g_resFmt = g_simTexFmt = DXGI_FORMAT_UNKNOWN;
 }
 
+bool DevPipe::IsRunning() {
+    return g_running.load(std::memory_order_acquire);
+}
+
 void DevPipe::BeforeNewFrame() {
     if (!ImGui::GetCurrentContext()) return;
     ImGuiIO& io = ImGui::GetIO();

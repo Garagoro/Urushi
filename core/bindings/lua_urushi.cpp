@@ -10,6 +10,7 @@
 #include "../crash_handler.h"
 #include "../lua_engine.h"
 #include "../safe_mode.h"
+#include "../dev_pipe.h"
 #include <shellapi.h>
 
 #include <imgui.h>
@@ -1027,6 +1028,23 @@ int Lua_UrushiOpenCrashDir(lua_State*) {
     return 0;
 }
 
+int Lua_UrushiSetDevMode(lua_State* L) {
+    bool en = lua_toboolean(L, 1) != 0;
+    Settings::SetBool("dev", "pipe", en);
+    Settings::SetBool("dev", "runner", en);
+    if (en) {
+        DevPipe::Init(Settings::GameDir());
+    } else {
+        DevPipe::Shutdown();
+    }
+    return 0;
+}
+
+int Lua_UrushiIsDevMode(lua_State* L) {
+    lua_pushboolean(L, DevPipe::IsRunning() ? 1 : 0);
+    return 1;
+}
+
 int Lua_UrushiOpenUrl(lua_State* L) {
     const char* url = luaL_checkstring(L, 1);
     if (!url || (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0)) {
@@ -1144,6 +1162,8 @@ const luaL_Reg kUrushiFuncs[] = {
     { "open_crash_dir",  Lua_UrushiOpenCrashDir },
     { "open_url",        Lua_UrushiOpenUrl },
     { "is_safe_mode",    Lua_UrushiIsSafeMode },
+    { "set_dev_mode",    Lua_UrushiSetDevMode },
+    { "is_dev_mode",     Lua_UrushiIsDevMode },
     { "get_ui_elements", Lua_UrushiGetUiElements },
     { "set_ui_element",  Lua_UrushiSetUiElement },
     { "script_row",      Lua_UiScriptRow },

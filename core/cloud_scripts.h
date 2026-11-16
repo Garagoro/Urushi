@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <functional>
 
 // Cloud script library.
 //
@@ -69,6 +70,8 @@ bool ResolveEntry(const std::string& id, std::wstring& outFile, std::wstring& ou
 // ---- Script Updates for local scripts ----
 void CheckScriptUpdatesAsync(const std::string& singleScript = "");
 void UpdateScriptAsync(const std::string& scriptId);
+void DownloadPackAsync(std::function<void(bool ok)> onDone = nullptr);
+bool IsPackDownloading();
 ScriptUpdatesSnapshot GetScriptUpdatesSnapshot();
 void SetScriptIgnored(const std::string& scriptId, bool ignored);
 bool IsScriptIgnored(const std::string& scriptId);
