@@ -368,15 +368,51 @@ static uint32_t InternalsPartOfMaterial(const char* name) {
     size_t n = 0;
     for (; name[n] && n + 1 < sizeof(l); ++n) l[n] = static_cast<char>(tolower(static_cast<unsigned char>(name[n])));
     auto has = [&](const char* s) { return strstr(l, s) != nullptr; };
-    if (has("car_body") || has("car_glass") || has("shadowcaster") || has("wheel_motion")) return 0;
-    if (has("rim") || has("yolo") || has("defaultdiffuse")) return CarFX::kPartWheels;
-    if (has("brakerotor") || has("caliper")) return CarFX::kPartBrakes;
-    if (has("suspension")) return CarFX::kPartSuspension;
-    if (has("engine") || has("j2z") || has("rs20") || has("aircleaner") || has("chrome") || has("plastic") ||
-        has("logos") || has("flclst") || has("turbo") || has("exhaust") || has("radiator") || has("intake") || has("bell")) {
+
+    // Explicit exclusions: body, shadows, glass/windows, lights, plates, proxies, collision
+    if (has("car_body") || has("body") || has("shadow") || has("glass") || has("window") ||
+        has("windshield") || has("light") || has("lamp") || has("lens") || has("flare") ||
+        has("glow") || has("plate") || has("number") || has("wheel_motion") || has("proxy") ||
+        has("collider") || has("decal") || has("badge") || has("emblem") || has("grill") ||
+        has("grid") || has("smoke") || has("particle") || has("undercar") || has("asphalt") ||
+        has("road") || has("dummy")) {
+        return 0;
+    }
+
+    // Wheels
+    if (has("rim") || has("yolo") || has("wheel") || has("tire") || has("tyre") || has("defaultdiffuse")) {
+        return CarFX::kPartWheels;
+    }
+
+    // Brakes
+    if (has("brakerotor") || has("caliper") || has("brake") || has("disc")) {
+        return CarFX::kPartBrakes;
+    }
+
+    // Suspension
+    if (has("suspension") || has("spring") || has("damper") || has("shock") || has("arm") || has("hub") ||
+        has("tie_rod") || has("swaybar") || has("subframe")) {
+        return CarFX::kPartSuspension;
+    }
+
+    // Engine & bay
+    if (has("engine") || has("motor") || has("j2z") || has("rs20") || has("aircleaner") || has("flclst") ||
+        has("turbo") || has("exhaust") || has("radiator") || has("intake") || has("bell") || has("manifold") ||
+        has("intercooler") || has("muffler") || has("pipe") || has("pulley") || has("filter")) {
         return CarFX::kPartEngine;
     }
-    return CarFX::kPartInterior;
+
+    // Interior
+    if (has("interior") || has("salon") || has("seat") || has("steer") || has("dash") || has("gauge") ||
+        has("cockpit") || has("cage") || has("rollcage") || has("pedal") || has("shifter") || has("gear") ||
+        has("belt") || has("trim") || has("cabin") || has("door_panel") || has("doorpanel") || has("carpet") ||
+        has("tach") || has("speedo") || has("console") || has("carbon") || has("fabric") || has("leather") ||
+        has("plastic") || has("logos")) {
+        return CarFX::kPartInterior;
+    }
+
+    // If it does not match any recognized group, DO NOT SHADE IT!
+    return 0;
 }
 
 static bool SafeReadMatNameSEH(uintptr_t unityBase, int32_t matId, char* outName, size_t maxLen) {
@@ -979,6 +1015,7 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
         if (internalsActive) {
             std::vector<CarRendererRef> rs;
             CollectCarRenderersOnMainThread(rootGo, rs);
+            std::unordered_set<std::string> loggedMats;
             for (const CarRendererRef& r : rs) {
                 for (uint32_t si = 0; si < r.matCount; ++si) {
                     const int32_t mid = r.matIds[si];
@@ -986,6 +1023,9 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
                     if (!mid || !SafeReadMatNameSEH(unityBase, mid, mn, sizeof(mn))) continue;
                     const uint32_t part = InternalsPartOfMaterial(mn);
                     if (part == 0 || !(partMask & part)) continue;   // body / glass / shadow proxies, or a group switched off
+                    if (loggedMats.insert(mn).second) {
+                        Logger::Info("CarFX internals matched part=" + std::to_string(part) + ": " + mn);
+                    }
                     void* natMat = SafeIdToObjectSEH(unityBase, mid);
                     if (!natMat) continue;
                     void* alb = SafeGetMatTextureSEH(unityBase, natMat, 380);
