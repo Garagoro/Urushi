@@ -105,14 +105,10 @@ local function render_tires_window()
                 if config then config.mark_dirty() end
             end
 
-            local opt_st = (optimizer and optimizer.get_stats) and optimizer.get_stats() or {}
-            local dam_blocks = opt_st.damage_blocks or 0
-            local joint_blocks = opt_st.joint_break_blocks or 0
-
             ui.spacing(2)
             ui.stat_row({
-                { label = T("Кузов", "Body"), value = no_dam and string.format(T("Блок: %d", "Block: %d"), dam_blocks) or T("Уязвим", "Vulnerable"), tone = no_dam and "green" or "yellow" },
-                { label = T("Детали", "Parts"), value = no_dam and string.format(T("Блок: %d", "Block: %d"), joint_blocks) or T("Отрыв", "Detaching"), tone = no_dam and "green" or "yellow" },
+                { label = T("Кузов", "Body"), value = no_dam and T("Защита", "Protected") or T("Уязвим", "Vulnerable"), tone = no_dam and "green" or "yellow" },
+                { label = T("Детали", "Parts"), value = no_dam and T("На месте", "Secured") or T("Отрыв", "Detaching"), tone = no_dam and "green" or "yellow" },
                 { label = T("Геометрия", "Geometry"), value = no_dam and T("Идеал", "Locked") or T("Сток", "Stock"), tone = no_dam and "green" or "muted" },
             })
 

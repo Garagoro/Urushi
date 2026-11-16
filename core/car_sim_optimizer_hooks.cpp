@@ -25,9 +25,6 @@ constexpr BranchRva kFbProviderGetTransform      = { 0x0E57BA0, 0x1319350 };
 constexpr BranchRva kFbTransformGetPosInjected   = { 0x5F72710, 0x6FB9930 };
 constexpr BranchRva kFbIl2CppVirtualInvokeData   = { 0x09238B0, 0x0A736D0 };
 constexpr BranchRva kFbCarBehaviourSetEffects    = { 0x1E02570, 0x23D2460 };
-constexpr BranchRva kFbBaseCollisionEffectApply  = { 0x0EA05F0, 0x1362FD0 };
-constexpr BranchRva kFbCollisionEnter            = { 0x0EA3C20, 0x1366620 };
-constexpr BranchRva kFbCollisionStay             = { 0x0EA4550, 0x13669E0 };
 constexpr BranchRva kFbINetworkCarContainerTI    = { 0x843A128, 0x9797458 };
 constexpr BranchRva kFbDeformSleepTypeInfo       = { 0x83E7018, 0x984C918 };
 
@@ -48,12 +45,7 @@ using t_NetCarGetPosition         = UnityVector3*(__fastcall*)(UnityVector3* out
 using t_NetCarGetInt32            = int32_t(__fastcall*)(void* netCar, void* method);
 using t_NetCarGetBool             = uint8_t(__fastcall*)(void* netCar, void* method);
 using t_SetCarEffectsEnabled      = void(__fastcall*)(void* carBehaviour, uint8_t enabled, void* method);
-using t_BaseCollisionEffectApply  = void(__fastcall*)(void* self, void* a2, void* a3, void* a4);
-using t_DeleteDetachedParts       = void(__fastcall*)(void*, void*);
-using t_OnTuningPartDeformation   = void(__fastcall*)(void*, void*, void*, void*);
-using t_CollisionEventsHandler    = void(__fastcall*)(void* self, int32_t a2, void* a3, void* a4, void* a5);
-using t_DeformSystemOnUpdate      = void(__fastcall*)(void* a1, void* a2, void* a3);
-using t_PhysicsBehaviourDetach    = void(__fastcall*)(void* self, void* method);
+using t_SetDamageSystemsState     = void(__fastcall*)(void* self, uint8_t enable, void* method);
 
 using t_CX_CarSetSimMode          = void(*)(void* car, int enable);
 using t_CX_CarGetSimMode          = int(*)(void* car);
@@ -71,15 +63,13 @@ uintptr_t s_rvaDeformSleepTypeInfoGlobal     = 0;
 
 t_SwitchingUpdate          s_origSwitchingUpdate = nullptr;
 t_IsFarCar                 s_origIsFarCar = nullptr;
-t_BaseCollisionEffectApply s_origBaseCollisionEffectApply = nullptr;
-t_DeleteDetachedParts      s_origDeleteDetachedParts = nullptr;
-t_OnTuningPartDeformation  s_origOnTuningPartDeformation = nullptr;
-t_CollisionEventsHandler   s_origCollisionEnter = nullptr;
-t_CollisionEventsHandler   s_origCollisionStay = nullptr;
-t_DeformSystemOnUpdate     s_origApplyForceOnUpdate = nullptr;
-t_DeformSystemOnUpdate     s_origBreakJointOnUpdate = nullptr;
-t_DeformSystemOnUpdate     s_origBreakJointDirectOnUpdate = nullptr;
-t_PhysicsBehaviourDetach   s_origPhysicsBehaviourDetach = nullptr;
+t_SetDamageSystemsState    s_origCutsceneSetDamageState = nullptr;
+t_SetDamageSystemsState    s_origRaceSetDamageState = nullptr;
+
+bool                       s_inSyntheticDamageToggle = false;
+bool                       s_gameWantsDamage = true;
+int                        s_lastAppliedDamageMaster = -1; // -1 = unknown, 0 = disabled by us, 1 = enabled
+bool                       s_lastInSessionForDamage = false;
 
 t_ProviderGetTransform               pfn_ProviderGetTransform = nullptr;
 t_TransformGetPos                    pfn_TransformGetPos = nullptr;
@@ -253,120 +243,51 @@ bool ShouldBlockDeformationDamage() {
 
 // ==================== Hook Detours ====================
 
-void __fastcall Hooked_BaseCollisionEffectApply(void* self, void* a2, void* a3, void* a4) {
+bool SafeInvokeCutsceneSetDamageStateRaw(t_SetDamageSystemsState fn, uint8_t enable) {
+    if (!fn) return false;
+    __try {
+        fn(nullptr, enable, nullptr);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool SafeApplyDamageMasterState(bool enable) {
+    if (!s_origCutsceneSetDamageState || !UnityBridge::IsOnMainThread()) return false;
+    s_inSyntheticDamageToggle = true;
+    const bool ok = SafeInvokeCutsceneSetDamageStateRaw(s_origCutsceneSetDamageState, enable ? 1 : 0);
+    s_inSyntheticDamageToggle = false;
+    return ok;
+}
+
+void HandleSetDamageSystemsState(t_SetDamageSystemsState orig, void* self, uint8_t enable, void* method) {
     HookManager::ScopedHookGuard guard;
-    if (HookManager::IsUnloading() || !s_origBaseCollisionEffectApply) {
-        if (s_origBaseCollisionEffectApply) s_origBaseCollisionEffectApply(self, a2, a3, a4);
+    if (HookManager::IsUnloading() || !orig) {
+        if (orig) orig(self, enable, method);
         return;
     }
+    if (s_inSyntheticDamageToggle) {
+        orig(self, enable, method);
+        return;
+    }
+    s_gameWantsDamage = (enable != 0);
     if (ShouldBlockDeformationDamage()) {
+        enable = 0;
+        s_lastAppliedDamageMaster = 0;
         s_stats.damageBlocks++;
-        return;
+    } else if (NativeCarX::IsInSessionFast()) {
+        s_lastAppliedDamageMaster = enable ? 1 : 0;
     }
-    s_origBaseCollisionEffectApply(self, a2, a3, a4);
+    orig(self, enable, method);
 }
 
-void __fastcall Hooked_DeleteDetachedParts(void* self, void* method) {
-    HookManager::ScopedHookGuard guard;
-    if (HookManager::IsUnloading() || !s_origDeleteDetachedParts) {
-        if (s_origDeleteDetachedParts) s_origDeleteDetachedParts(self, method);
-        return;
-    }
-    if (ShouldBlockDeformationDamage()) {
-        s_stats.jointBreakBlocks++;
-        return;
-    }
-    s_origDeleteDetachedParts(self, method);
+void __fastcall Hooked_CutsceneSetDamageSystemsState(void* self, uint8_t enable, void* method) {
+    HandleSetDamageSystemsState(s_origCutsceneSetDamageState, self, enable, method);
 }
 
-void __fastcall Hooked_OnTuningPartDeformationStateChanged(void* self, void* a2, void* a3, void* a4) {
-    HookManager::ScopedHookGuard guard;
-    if (HookManager::IsUnloading() || !s_origOnTuningPartDeformation) {
-        if (s_origOnTuningPartDeformation) s_origOnTuningPartDeformation(self, a2, a3, a4);
-        return;
-    }
-    if (ShouldBlockDeformationDamage()) {
-        s_stats.damageBlocks++;
-        return;
-    }
-    s_origOnTuningPartDeformation(self, a2, a3, a4);
-}
-
-void __fastcall Hooked_CollisionEnter(void* self, int32_t a2, void* a3, void* a4, void* a5) {
-    HookManager::ScopedHookGuard guard;
-    if (HookManager::IsUnloading() || !s_origCollisionEnter) {
-        if (s_origCollisionEnter) s_origCollisionEnter(self, a2, a3, a4, a5);
-        return;
-    }
-    if (ShouldBlockDeformationDamage()) {
-        s_stats.damageBlocks++;
-        s_stats.jointBreakBlocks++;
-        return;
-    }
-    s_origCollisionEnter(self, a2, a3, a4, a5);
-}
-
-void __fastcall Hooked_CollisionStay(void* self, int32_t a2, void* a3, void* a4, void* a5) {
-    HookManager::ScopedHookGuard guard;
-    if (HookManager::IsUnloading() || !s_origCollisionStay) {
-        if (s_origCollisionStay) s_origCollisionStay(self, a2, a3, a4, a5);
-        return;
-    }
-    if (ShouldBlockDeformationDamage()) {
-        s_stats.damageBlocks++;
-        s_stats.jointBreakBlocks++;
-        return;
-    }
-    s_origCollisionStay(self, a2, a3, a4, a5);
-}
-
-void __fastcall Hooked_ApplyForceToDeformationSkeleton(void* a1, void* a2, void* a3) {
-    HookManager::ScopedHookGuard guard;
-    if (HookManager::IsUnloading() || !s_origApplyForceOnUpdate) {
-        if (s_origApplyForceOnUpdate) s_origApplyForceOnUpdate(a1, a2, a3);
-        return;
-    }
-    if (ShouldBlockDeformationDamage()) {
-        return;
-    }
-    s_origApplyForceOnUpdate(a1, a2, a3);
-}
-
-void __fastcall Hooked_BreakPhysicsJoint(void* a1, void* a2, void* a3) {
-    HookManager::ScopedHookGuard guard;
-    if (HookManager::IsUnloading() || !s_origBreakJointOnUpdate) {
-        if (s_origBreakJointOnUpdate) s_origBreakJointOnUpdate(a1, a2, a3);
-        return;
-    }
-    if (ShouldBlockDeformationDamage()) {
-        return;
-    }
-    s_origBreakJointOnUpdate(a1, a2, a3);
-}
-
-void __fastcall Hooked_BreakPhysicsJointDirect(void* a1, void* a2, void* a3) {
-    HookManager::ScopedHookGuard guard;
-    if (HookManager::IsUnloading() || !s_origBreakJointDirectOnUpdate) {
-        if (s_origBreakJointDirectOnUpdate) s_origBreakJointDirectOnUpdate(a1, a2, a3);
-        return;
-    }
-    if (ShouldBlockDeformationDamage()) {
-        return;
-    }
-    s_origBreakJointDirectOnUpdate(a1, a2, a3);
-}
-
-void __fastcall Hooked_PhysicsBehaviourDetach(void* self, void* method) {
-    HookManager::ScopedHookGuard guard;
-    if (HookManager::IsUnloading() || !s_origPhysicsBehaviourDetach) {
-        if (s_origPhysicsBehaviourDetach) s_origPhysicsBehaviourDetach(self, method);
-        return;
-    }
-    if (ShouldBlockDeformationDamage()) {
-        s_stats.jointBreakBlocks++;
-        return;
-    }
-    s_origPhysicsBehaviourDetach(self, method);
+void __fastcall Hooked_RaceSetDamageSystemsState(void* self, uint8_t enable, void* method) {
+    HandleSetDamageSystemsState(s_origRaceSetDamageState, self, enable, method);
 }
 
 uint8_t __fastcall Hooked_IsFarCar(void* self, void* netCar, void* method) {
@@ -678,16 +599,59 @@ void ResolveStaticsIfNeeded() {
     }
 }
 
+void SyncDamageMasterSwitch(bool inSession, bool noDamage, bool forceRestore) {
+    if (!s_origCutsceneSetDamageState || !UnityBridge::IsOnMainThread()) {
+        if (!inSession) {
+            s_gameWantsDamage = true;
+            s_lastAppliedDamageMaster = -1;
+            s_lastInSessionForDamage = false;
+        }
+        return;
+    }
+
+    if (!inSession) {
+        if (forceRestore && s_lastAppliedDamageMaster == 0) {
+            SafeApplyDamageMasterState(true);
+        }
+        s_gameWantsDamage = true;
+        s_lastAppliedDamageMaster = -1;
+        s_lastInSessionForDamage = false;
+        return;
+    }
+
+    if (!s_lastInSessionForDamage) {
+        s_lastInSessionForDamage = true;
+        s_lastAppliedDamageMaster = -1;
+    }
+
+    if (noDamage) {
+        if (s_lastAppliedDamageMaster != 0) {
+            if (SafeApplyDamageMasterState(false)) {
+                s_lastAppliedDamageMaster = 0;
+                Logger::Info("DeformMaster: disabled DeformationPhysicsEnabled singleton");
+            }
+        }
+    } else {
+        if (s_lastAppliedDamageMaster == 0) {
+            const bool target = forceRestore ? true : s_gameWantsDamage;
+            if (SafeApplyDamageMasterState(target)) {
+                s_lastAppliedDamageMaster = forceRestore ? -1 : (target ? 1 : 0);
+                Logger::Info(std::string("DeformMaster: restored DeformationPhysicsEnabled singleton (enable=") +
+                             (target ? "1" : "0") + ")");
+            }
+        } else if (forceRestore) {
+            s_lastAppliedDamageMaster = -1;
+        }
+    }
+}
+
 void SyncStaticSubsystems(const CarSimOptimizer::Config& cfg, bool forceRestore) {
     const bool inSession = NativeCarX::IsInSessionFast();
     const bool noDamage = inSession && !forceRestore && (cfg.disableDamage || s_noDamageOverride);
+    SyncDamageMasterSwitch(inSession, noDamage, forceRestore);
     if (s_sfDeformSleep && s_deformBase.captured) {
         uintptr_t p = reinterpret_cast<uintptr_t>(s_sfDeformSleep);
-        if (noDamage) {
-            SafeWrite<uint8_t>(p + 0x00, 1);
-            SafeWrite<int32_t>(p + 0x04, 1);
-            SafeWrite<float>(p + 0x08, 0.0f);
-        } else if (!forceRestore && cfg.enabled && cfg.tuneDeformationSleep) {
+        if (!forceRestore && cfg.enabled && cfg.tuneDeformationSleep) {
             SafeWrite<uint8_t>(p + 0x00, 1);
             SafeWrite<int32_t>(p + 0x04, std::clamp(cfg.deformIdleSteps, 1, 120));
             SafeWrite<float>(p + 0x08, std::clamp(cfg.deformSleepDistMeters, 1.0f, 200.0f));
@@ -699,10 +663,7 @@ void SyncStaticSubsystems(const CarSimOptimizer::Config& cfg, bool forceRestore)
     }
     if (s_sfRootSleep && s_rootBase.captured) {
         uintptr_t p = reinterpret_cast<uintptr_t>(s_sfRootSleep);
-        if (noDamage) {
-            SafeWrite<uint8_t>(p + 0x00, 1);
-            SafeWrite<int32_t>(p + 0x04, 1);
-        } else if (!forceRestore && cfg.enabled && cfg.tunePhysicsRootSleep) {
+        if (!forceRestore && cfg.enabled && cfg.tunePhysicsRootSleep) {
             SafeWrite<uint8_t>(p + 0x00, 1);
             SafeWrite<int32_t>(p + 0x04, std::clamp(cfg.physicsRootIdleSteps, 1, 120));
         } else {
@@ -914,7 +875,6 @@ void UpdateNativeCarPhysicsOnMainThread(const CarSimOptimizer::Config& cfg,
 
 bool InstallHooksAndResolvers(HMODULE hGA) {
     s_gaBase = reinterpret_cast<uintptr_t>(hGA);
-    const GameBranch branch = GameBuild::Get();
     auto toRva = [](uintptr_t va) -> uintptr_t { return va >= s_gaBase ? va - s_gaBase : 0; };
 
     // 1. CarBehaviour::SetCarEffectsEnabled
@@ -971,98 +931,29 @@ bool InstallHooksAndResolvers(HMODULE hGA) {
         reinterpret_cast<void**>(&s_origIsFarCar),
         "DistanceBasedPhysicsSwitchingSubController::IsFarCar");
 
-    // 7. BaseCollisionEffectBehaviour::Apply (IL2CPP metadata first, signature fallback)
-    uintptr_t bceKlass = Il2CppHelpers::LookupTypeClass("BaseCollisionEffectBehaviour", "CarX.DeformationPhysics");
-    void* vaEffectApply = bceKlass ? Il2CppHelpers::LookupClassMethod(bceKlass, "Apply") : nullptr;
-    if (!vaEffectApply) {
-        static const char* kApplyRelease = "80 79 20 00 75 ? 80 79 21 00 C6 41 20 01 74 ? 48 8B 01 48 8B 90 C0 01 00 00 48 FF A0 B8 01 00 00";
-        static const char* kApplyAlpha   = "80 79 20 00 75 1E 80 79 21 00 C6 41 20 01 74 14 48 8B 11 48 8B 82 B8 01 00 00";
-        const bool alphaFirst = (branch == GameBranch::Alpha);
-        uintptr_t va = PatternScanner::Find(hGA, alphaFirst ? kApplyAlpha : kApplyRelease, "BaseCollisionEffect_Apply");
-        if (!va) va = PatternScanner::FindOrFallback(hGA, alphaFirst ? kApplyRelease : kApplyAlpha,
-                                                     GameBuild::Pick(kFbBaseCollisionEffectApply), "BaseCollisionEffect_Apply(alt)");
-        vaEffectApply = reinterpret_cast<void*>(va);
-    }
-    bool okEffect = vaEffectApply && HookManager::CreateHook(
-        vaEffectApply, reinterpret_cast<void*>(Hooked_BaseCollisionEffectApply),
-        reinterpret_cast<void**>(&s_origBaseCollisionEffectApply),
-        "BaseCollisionEffectBehaviour::Apply");
+    // 7. Upstream Deformation Master Switch (DeformationPhysicsEnabled singleton)
+    uintptr_t cutsceneDeformKlass = Il2CppHelpers::LookupTypeClass(
+        "CutscenesDeformationStateController", "UI.UIView.Runtime.Controllers.Cutscenes");
+    void* vaCutsceneSetDamage = cutsceneDeformKlass
+        ? Il2CppHelpers::LookupClassMethod(cutsceneDeformKlass, "SetDamageSystemsState") : nullptr;
+    bool okCutsceneMaster = vaCutsceneSetDamage && HookManager::CreateHook(
+        vaCutsceneSetDamage, reinterpret_cast<void*>(Hooked_CutsceneSetDamageSystemsState),
+        reinterpret_cast<void**>(&s_origCutsceneSetDamageState),
+        "CutscenesDeformationStateController::SetDamageSystemsState");
 
-    // 8. CarPartsPhysicsController::DeleteDetachedParts & OnTuningPartDeformationStateChangedHandler (IL2CPP metadata first, pattern fallback)
-    uintptr_t cppKlass = Il2CppHelpers::LookupTypeClass("CarPartsPhysicsController", "Framework.Views.Cars.PartBehaviours");
-    void* vaDeleteParts = cppKlass ? Il2CppHelpers::LookupClassMethod(cppKlass, "DeleteDetachedParts") : nullptr;
-    if (!vaDeleteParts) {
-        vaDeleteParts = reinterpret_cast<void*>(PatternScanner::Find(
-            hGA, "48 89 5C 24 10 48 89 74 24 20 57 41 56 41 57 48 81 EC B0 00 00 00", "DeleteDetachedParts"));
-    }
-    bool okDeleteParts = vaDeleteParts && HookManager::CreateHook(
-        vaDeleteParts, reinterpret_cast<void*>(Hooked_DeleteDetachedParts),
-        reinterpret_cast<void**>(&s_origDeleteDetachedParts),
-        "CarPartsPhysicsController::DeleteDetachedParts");
-
-    void* vaDeformChanged = cppKlass ? Il2CppHelpers::LookupClassMethod(cppKlass, "OnTuningPartDeformationStateChangedHandler") : nullptr;
-    if (!vaDeformChanged) {
-        vaDeformChanged = reinterpret_cast<void*>(PatternScanner::Find(
-            hGA, "48 89 5C 24 10 48 89 74 24 18 57 41 56 41 57 48 83 EC 60 4C 8B F2", "OnTuningPartDeformationStateChanged"));
-    }
-    bool okDeformChanged = vaDeformChanged && HookManager::CreateHook(
-        vaDeformChanged, reinterpret_cast<void*>(Hooked_OnTuningPartDeformationStateChanged),
-        reinterpret_cast<void**>(&s_origOnTuningPartDeformation),
-        "CarPartsPhysicsController::OnTuningPartDeformationStateChangedHandler");
-
-    // 9. CollisionEventsHandler::CollisionEnter & CollisionStay
-    uintptr_t cehKlass = Il2CppHelpers::LookupTypeClass("CollisionEventsHandler", "CarX.DeformationPhysics");
-    void* vaCollisionEnter = cehKlass ? Il2CppHelpers::LookupClassMethod(cehKlass, "CollisionEnter") : nullptr;
-    if (!vaCollisionEnter) {
-        if (uintptr_t rva = GameBuild::Pick(kFbCollisionEnter)) vaCollisionEnter = reinterpret_cast<void*>(s_gaBase + rva);
-    }
-    bool okCollisionEnter = vaCollisionEnter && HookManager::CreateHook(
-        vaCollisionEnter, reinterpret_cast<void*>(Hooked_CollisionEnter),
-        reinterpret_cast<void**>(&s_origCollisionEnter),
-        "CollisionEventsHandler::CollisionEnter");
-
-    void* vaCollisionStay = cehKlass ? Il2CppHelpers::LookupClassMethod(cehKlass, "CollisionStay") : nullptr;
-    if (!vaCollisionStay) {
-        if (uintptr_t rva = GameBuild::Pick(kFbCollisionStay)) vaCollisionStay = reinterpret_cast<void*>(s_gaBase + rva);
-    }
-    bool okCollisionStay = vaCollisionStay && HookManager::CreateHook(
-        vaCollisionStay, reinterpret_cast<void*>(Hooked_CollisionStay),
-        reinterpret_cast<void**>(&s_origCollisionStay),
-        "CollisionEventsHandler::CollisionStay");
-
-    // 10. DOTS/Burst Deformation Systems
-    uintptr_t applyForceKlass = Il2CppHelpers::LookupTypeClass("ApplyForceToDeformationSkeletonSystem", "CarX.DeformationPhysics.Systems");
-    void* vaApplyForce = applyForceKlass ? Il2CppHelpers::LookupClassMethod(applyForceKlass, "__codegen__OnUpdate") : nullptr;
-    if (!vaApplyForce && applyForceKlass) vaApplyForce = Il2CppHelpers::LookupClassMethod(applyForceKlass, "OnUpdate");
-    bool okApplyForce = vaApplyForce && HookManager::CreateHook(
-        vaApplyForce, reinterpret_cast<void*>(Hooked_ApplyForceToDeformationSkeleton),
-        reinterpret_cast<void**>(&s_origApplyForceOnUpdate),
-        "ApplyForceToDeformationSkeletonSystem::__codegen__OnUpdate");
-
-    uintptr_t breakJointKlass = Il2CppHelpers::LookupTypeClass("BreakPhysicsJointSystem", "CarX.DeformationPhysics.Systems");
-    void* vaBreakJoint = breakJointKlass ? Il2CppHelpers::LookupClassMethod(breakJointKlass, "__codegen__OnUpdate") : nullptr;
-    void* vaBreakJointDirect = breakJointKlass ? Il2CppHelpers::LookupClassMethod(breakJointKlass, "OnUpdate") : nullptr;
-    bool okBreakJoint = vaBreakJoint && HookManager::CreateHook(
-        vaBreakJoint, reinterpret_cast<void*>(Hooked_BreakPhysicsJoint),
-        reinterpret_cast<void**>(&s_origBreakJointOnUpdate),
-        "BreakPhysicsJointSystem::__codegen__OnUpdate");
-    bool okBreakJointDirect = (vaBreakJointDirect && vaBreakJointDirect != vaBreakJoint) && HookManager::CreateHook(
-        vaBreakJointDirect, reinterpret_cast<void*>(Hooked_BreakPhysicsJointDirect),
-        reinterpret_cast<void**>(&s_origBreakJointDirectOnUpdate),
-        "BreakPhysicsJointSystem::OnUpdate");
-
-    uintptr_t physBehKlass = Il2CppHelpers::LookupTypeClass("PhysicsBehaviour", "CarX.DeformationPhysics");
-    void* vaPhysDetach = physBehKlass ? Il2CppHelpers::LookupClassMethod(physBehKlass, "Detach") : nullptr;
-    bool okPhysDetach = vaPhysDetach && HookManager::CreateHook(
-        vaPhysDetach, reinterpret_cast<void*>(Hooked_PhysicsBehaviourDetach),
-        reinterpret_cast<void**>(&s_origPhysicsBehaviourDetach),
-        "PhysicsBehaviour::Detach");
+    uintptr_t raceDeformKlass = Il2CppHelpers::LookupTypeClass(
+        "DeformationSystemsController", "UI.Controllers.Race");
+    void* vaRaceSetDamage = raceDeformKlass
+        ? Il2CppHelpers::LookupClassMethod(raceDeformKlass, "SetDamageSystemsState") : nullptr;
+    bool okRaceMaster = vaRaceSetDamage && HookManager::CreateHook(
+        vaRaceSetDamage, reinterpret_cast<void*>(Hooked_RaceSetDamageSystemsState),
+        reinterpret_cast<void**>(&s_origRaceSetDamageState),
+        "DeformationSystemsController::SetDamageSystemsState");
 
     ResolveNativeExportsIfNeeded();
     ResolveStaticsIfNeeded();
 
-    return (okSwitch || okFar || okEffect || okDeleteParts || okDeformChanged ||
-            okCollisionEnter || okCollisionStay || okApplyForce || okBreakJoint || okBreakJointDirect || okPhysDetach);
+    return (okSwitch || okFar || okCutsceneMaster || okRaceMaster);
 }
 
 } // namespace CarSimOptimizerInternal

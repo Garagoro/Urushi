@@ -187,7 +187,7 @@ local BUILTIN = {
 }
 
 -- Files that are part of the framework and never listed as user scripts
-local RESERVED = { main = true, i18n = true, config = true, keybinds = true, il2cpp = true, system_mod = true, runner = true }
+local RESERVED = { main = true, i18n = true, config = true, keybinds = true, il2cpp = true, system_mod = true }
 for _, b in ipairs(BUILTIN) do RESERVED[b.id] = true end
 
 local function enabled_flag(id, default)

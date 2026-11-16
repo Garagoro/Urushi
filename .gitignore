@@ -1,5 +1,6 @@
 # Build directories & artifacts
 build/
+build*/
 out/
 .vs/
 x64/
