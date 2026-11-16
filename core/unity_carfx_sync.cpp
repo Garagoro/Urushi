@@ -217,22 +217,30 @@ static bool SafeCopyTextureFullSEH(uintptr_t unityBase, void* srcNatTex, void* d
     }
 }
 
+struct MasterPartTexPair {
+    void* natAlb = nullptr;
+    void* natPack = nullptr;
+    uint32_t albTexId = 0;
+    uint32_t packTexId = 0;
+};
+
 static bool SafeExtractMasterMatTexPairSEH(void* rootGo, uint32_t targetTypeId,
                                            void** outNatAlbedo, void** outNatPacked,
                                            uint32_t* outAlbTexId, uint32_t* outPackTexId,
-                                           uintptr_t* outPartsMap) {
+                                           uintptr_t* outPartsMap,
+                                           std::vector<MasterPartTexPair>* outExtraPairs = nullptr) {
     if (!rootGo || !outNatAlbedo || !outNatPacked || !outAlbTexId || !outPackTexId) return false;
     *outNatAlbedo = nullptr;
     *outNatPacked = nullptr;
     *outAlbTexId = 0;
     *outPackTexId = 0;
     if (outPartsMap) *outPartsMap = 0;
+    if (outExtraPairs) outExtraPairs->clear();
 
     uintptr_t carBehaviour = SafeFindCarBehaviourOnRootGoSEH(rootGo);
     if (carBehaviour < 0x10000) return false;
 
     __try {
-
         // Verified chain: CarBehaviour +0x60 -> CarModel +0x38 -> PartsMap +0x18 -> MasterMaterials +0x20 -> m_textures
         uintptr_t carModel = *reinterpret_cast<uintptr_t*>(carBehaviour + 0x60);
         if (!IsReadableMem(carModel, 0x40)) return false;
@@ -251,53 +259,73 @@ static bool SafeExtractMasterMatTexPairSEH(void* rootGo, uint32_t targetTypeId,
         if (outerCount > outerLen) outerCount = outerLen;
         if (outerCount == 0 || !IsReadableMem(outerEntries, 0x20 + static_cast<size_t>(outerCount) * 24)) return false;
 
-        uintptr_t subDict = 0;
-        uint32_t foundTids[16] = {};
-        uint32_t numFoundTids = 0;
+        bool foundPrimary = false;
         for (uint32_t i = 0; i < outerCount; ++i) {
             uintptr_t e = outerEntries + 0x20 + static_cast<size_t>(i) * 24;
             int32_t hc = *reinterpret_cast<int32_t*>(e + 0);
             if (hc < 0) continue;
             uint32_t tid = *reinterpret_cast<uint32_t*>(e + 8);
-            if (numFoundTids < 16) foundTids[numFoundTids++] = tid;
-            if (tid == targetTypeId) {
-                subDict = *reinterpret_cast<uintptr_t*>(e + 16);
+            uintptr_t subDict = *reinterpret_cast<uintptr_t*>(e + 16);
+            if (!IsReadableMem(subDict, 0x28)) continue;
+
+            uintptr_t innerEntries = *reinterpret_cast<uintptr_t*>(subDict + 0x18);
+            uint32_t innerCount = *reinterpret_cast<uint32_t*>(subDict + 0x20);
+            if (innerCount == 0 || innerCount > 64 || !IsReadableMem(innerEntries, 0x20)) continue;
+            uint32_t innerLen = *reinterpret_cast<uint32_t*>(innerEntries + 0x18);
+            if (innerCount > innerLen) innerCount = innerLen;
+            if (innerCount == 0 || !IsReadableMem(innerEntries, 0x20 + static_cast<size_t>(innerCount) * 24)) continue;
+
+            uintptr_t manAlb = 0, manPack = 0;
+            for (uint32_t j = 0; j < innerCount; ++j) {
+                uintptr_t ie = innerEntries + 0x20 + static_cast<size_t>(j) * 24;
+                int32_t ihc = *reinterpret_cast<int32_t*>(ie + 0);
+                if (ihc < 0) continue;
+                int32_t propId = *reinterpret_cast<int32_t*>(ie + 8);
+                uintptr_t texMan = *reinterpret_cast<uintptr_t*>(ie + 16);
+                if (propId == 380) manAlb = texMan;        // 0x17C = u_sTexture
+                else if (propId == 1370) manPack = texMan; // 0x55A = u_sPackedMap
+            }
+
+            void* curNatAlb = nullptr;
+            void* curNatPack = nullptr;
+            uint32_t curAlbId = 0, curPackId = 0;
+            if (IsReadableMem(manAlb, 0x18)) {
+                uintptr_t nat = *reinterpret_cast<uintptr_t*>(manAlb + 0x10);
+                if (IsReadableMem(nat, 0x44)) {
+                    curNatAlb = reinterpret_cast<void*>(nat);
+                    curAlbId = *reinterpret_cast<uint32_t*>(nat + 0x40);
+                }
+            }
+            if (IsReadableMem(manPack, 0x18)) {
+                uintptr_t nat = *reinterpret_cast<uintptr_t*>(manPack + 0x10);
+                if (IsReadableMem(nat, 0x44)) {
+                    curNatPack = reinterpret_cast<void*>(nat);
+                    curPackId = *reinterpret_cast<uint32_t*>(nat + 0x40);
+                }
+            }
+            if (!curNatAlb && !curNatPack) continue;
+
+            if (tid == targetTypeId && !foundPrimary) {
+                *outNatAlbedo = curNatAlb;
+                *outNatPacked = curNatPack;
+                *outAlbTexId = curAlbId;
+                *outPackTexId = curPackId;
+                foundPrimary = true;
+            } else if (outExtraPairs) {
+                outExtraPairs->push_back({ curNatAlb, curNatPack, curAlbId, curPackId });
             }
         }
-        if (!IsReadableMem(subDict, 0x28)) return false;
 
-        uintptr_t innerEntries = *reinterpret_cast<uintptr_t*>(subDict + 0x18);
-        uint32_t innerCount = *reinterpret_cast<uint32_t*>(subDict + 0x20);
-        if (innerCount == 0 || innerCount > 64 || !IsReadableMem(innerEntries, 0x20)) return false;
-        uint32_t innerLen = *reinterpret_cast<uint32_t*>(innerEntries + 0x18);
-        if (innerCount > innerLen) innerCount = innerLen;
-        if (innerCount == 0 || !IsReadableMem(innerEntries, 0x20 + static_cast<size_t>(innerCount) * 24)) return false;
-
-        uintptr_t manAlb = 0, manPack = 0;
-        for (uint32_t j = 0; j < innerCount; ++j) {
-            uintptr_t e = innerEntries + 0x20 + static_cast<size_t>(j) * 24;
-            int32_t hc = *reinterpret_cast<int32_t*>(e + 0);
-            if (hc < 0) continue;
-            int32_t propId = *reinterpret_cast<int32_t*>(e + 8);
-            uintptr_t texMan = *reinterpret_cast<uintptr_t*>(e + 16);
-            if (propId == 380) manAlb = texMan;        // 0x17C = u_sTexture
-            else if (propId == 1370) manPack = texMan; // 0x55A = u_sPackedMap
+        if (!foundPrimary && outExtraPairs && !outExtraPairs->empty()) {
+            MasterPartTexPair p = outExtraPairs->front();
+            outExtraPairs->erase(outExtraPairs->begin());
+            *outNatAlbedo = p.natAlb;
+            *outNatPacked = p.natPack;
+            *outAlbTexId = p.albTexId;
+            *outPackTexId = p.packTexId;
+            foundPrimary = true;
         }
 
-        if (IsReadableMem(manAlb, 0x18)) {
-            uintptr_t nat = *reinterpret_cast<uintptr_t*>(manAlb + 0x10);
-            if (IsReadableMem(nat, 0x44)) {
-                *outNatAlbedo = reinterpret_cast<void*>(nat);
-                *outAlbTexId = *reinterpret_cast<uint32_t*>(nat + 0x40);
-            }
-        }
-        if (IsReadableMem(manPack, 0x18)) {
-            uintptr_t nat = *reinterpret_cast<uintptr_t*>(manPack + 0x10);
-            if (IsReadableMem(nat, 0x44)) {
-                *outNatPacked = reinterpret_cast<void*>(nat);
-                *outPackTexId = *reinterpret_cast<uint32_t*>(nat + 0x40);
-            }
-        }
         return (*outNatAlbedo != nullptr) || (*outNatPacked != nullptr);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         *outNatAlbedo = nullptr;
@@ -959,14 +987,25 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
                     const uint32_t part = InternalsPartOfMaterial(mn);
                     if (part == 0 || !(partMask & part)) continue;   // body / glass / shadow proxies, or a group switched off
                     void* natMat = SafeIdToObjectSEH(unityBase, mid);
+                    if (!natMat) continue;
                     void* alb = SafeGetMatTextureSEH(unityBase, natMat, 380);
                     if (alb && !IsDefaultNativeTex(alb, s_natWhite, s_natBlack, s_natNormal)) {
                         void* d3dPtr = nullptr;   // Unity Texture object -> the D3D11 view/resource behind it
                         SafeCallGetNativeTexPtr(GetNativeTexPtrFn(unityBase), alb, &d3dPtr);
                         if (d3dPtr) intTex.push_back(d3dPtr);
                     }
+                    void* pack = SafeGetMatTextureSEH(unityBase, natMat, 1370);
+                    if (pack && !IsDefaultNativeTex(pack, s_natWhite, s_natBlack, s_natNormal)) {
+                        void* d3dPtr = nullptr;
+                        SafeCallGetNativeTexPtr(GetNativeTexPtrFn(unityBase), pack, &d3dPtr);
+                        if (d3dPtr) intTex.push_back(d3dPtr);
+                    }
                 }
             }
+            std::sort(intTex.begin(), intTex.end());
+            intTex.erase(std::unique(intTex.begin(), intTex.end()), intTex.end());
+            Logger::Info("CarFX internals scan: collected " + std::to_string(intTex.size()) +
+                         " unique textures from " + std::to_string(rs.size()) + " renderers");
         }
         CarFX::SetInternalsTextures(intTex);
     }
@@ -975,7 +1014,10 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
     void* natPack = nullptr;
     uint32_t albId = 0, packId = 0;
     uintptr_t partsMap = 0;
-    const bool hasMasterTex = SafeExtractMasterMatTexPairSEH(rootGo, 0x8C255AA8u /* BodyTypeID */, &natAlb, &natPack, &albId, &packId, &partsMap);
+    std::vector<MasterPartTexPair> extraMasterPairs;
+    const bool hasMasterTex = SafeExtractMasterMatTexPairSEH(rootGo, 0x8C255AA8u /* BodyTypeID */,
+                                                            &natAlb, &natPack, &albId, &packId, &partsMap,
+                                                            &extraMasterPairs);
 
     // Stealth places car_body at 2510 ([4] right after DrawSky) and all non-glass car parts at 2580 ([7] after car_body, before car_glass=2600),
     // so hardware Depth Test naturally hides engine/chassis behind cloaked body while keeping wheels, arms, lights & interior-through-glass visible!
@@ -1283,7 +1325,36 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
         SafeCallGetNativeTexPtr(pfnGetNatPtr, natPack, &in.nativePackedPtr);
     }
 
-    // Also collect any additional car_body material texture pairs (e.g. separate body/kit/livery TIDs)
+    // 1. Add extra master texture pairs (e.g. doors, hood, bumpers from MasterMaterials.m_textures)
+    for (const auto& emp : extraMasterPairs) {
+        void* d3dA = nullptr;
+        void* d3dP = nullptr;
+        const bool eAlbDef = IsDefaultNativeTex(emp.natAlb, s_natWhite, s_natBlack, s_natNormal) || (emp.natAlb == s_playerIsoPackTex);
+        const bool ePackDef = IsDefaultNativeTex(emp.natPack, s_natWhite, s_natBlack, s_natNormal);
+        if (eAlbDef && ePackDef) continue;
+        if (!eAlbDef && emp.natAlb) SafeCallGetNativeTexPtr(pfnGetNatPtr, emp.natAlb, &d3dA);
+        if (!ePackDef && emp.natPack) SafeCallGetNativeTexPtr(pfnGetNatPtr, emp.natPack, &d3dP);
+        if (!d3dA && !d3dP) continue;
+        if (d3dA == in.nativeAlbedoPtr && d3dP == in.nativePackedPtr) continue;
+
+        bool dup = false;
+        for (const auto& ep : in.extraPairs) {
+            if (ep.nativeAlbedoPtr == d3dA && ep.nativePackedPtr == d3dP) {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup) {
+            CarFX::TargetTexturesInput::ExtraTexPair ep{};
+            ep.nativeAlbedoPtr = d3dA;
+            ep.nativePackedPtr = d3dP;
+            ep.albedoIsDefault = (d3dA == nullptr);
+            ep.packedIsDefault = (d3dP == nullptr);
+            in.extraPairs.push_back(ep);
+        }
+    }
+
+    // 2. Also collect any additional car_body material texture pairs (e.g. separate body/kit/livery TIDs)
     {
         std::vector<BodyMatSlotRef> extraSlots;
         CollectBodyMaterialSlots(unityBase, rootGo, true, extraSlots);

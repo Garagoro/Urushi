@@ -283,27 +283,40 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
         (!needPackSlot || s_rtKnownPackSlot >= kScanStartSlot);
 
     if (internalsCanMatch) {
-        ID3D11ShaderResourceView* isrv[kScanSlotCount] = {};
-        c->PSGetShaderResources(kScanStartSlot, kScanSlotCount, isrv);
+        constexpr int kIntScanSlots = 32;
+        ID3D11ShaderResourceView* isrv[kIntScanSlots] = {};
+        c->PSGetShaderResources(0, kIntScanSlots, isrv);
         const bool needRes = !s_rtIntRes.empty();
-        for (int i = 0; i < kScanSlotCount; ++i) {
+        for (int i = 0; i < kIntScanSlots; ++i) {
             ID3D11ShaderResourceView* v = isrv[i];
             if (!v || matchedTarget != kTargetNone) continue;
             for (ID3D11ShaderResourceView* t : s_rtIntSrvs) {
-                if (t == v) { matchedTarget = kTargetInternals; break; }
+                if (t == v) {
+                    matchedTarget = kTargetInternals;
+                    matchedAlbedoSrv = v;
+                    matchedAlbedoSrv->AddRef();
+                    mask |= (1u << i);
+                    break;
+                }
             }
             if (matchedTarget == kTargetNone && needRes) {
                 ID3D11Resource* r = nullptr;
                 v->GetResource(&r);
                 if (r) {
                     for (ID3D11Resource* t : s_rtIntRes) {
-                        if (t == r) { matchedTarget = kTargetInternals; break; }
+                        if (t == r) {
+                            matchedTarget = kTargetInternals;
+                            matchedAlbedoSrv = v;
+                            matchedAlbedoSrv->AddRef();
+                            mask |= (1u << i);
+                            break;
+                        }
                     }
                     r->Release();
                 }
             }
         }
-        for (int i = 0; i < kScanSlotCount; ++i) if (isrv[i]) isrv[i]->Release();
+        for (int i = 0; i < kIntScanSlots; ++i) if (isrv[i]) isrv[i]->Release();
     }
 
     if (matchedTarget != kTargetNone) {
@@ -552,11 +565,13 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
     }
 
     // Latch discovered slot indices only after confirming main color RT!
-    if (discoveredAlbSlot >= kScanStartSlot) {
-        s_rtKnownAlbSlot = discoveredAlbSlot;
-    }
-    if (discoveredPackSlot >= kScanStartSlot) {
-        s_rtKnownPackSlot = discoveredPackSlot;
+    if (matchedTarget != kTargetInternals) {
+        if (discoveredAlbSlot >= kScanStartSlot) {
+            s_rtKnownAlbSlot = discoveredAlbSlot;
+        }
+        if (discoveredPackSlot >= kScanStartSlot) {
+            s_rtKnownPackSlot = discoveredPackSlot;
+        }
     }
 
     *outTarget = matchedTarget;
@@ -606,11 +621,12 @@ bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, Draw
     g_totalDrawsFrame.fetch_add(1, std::memory_order_relaxed);
 
     const bool playerWant = IsTargetActiveInternal(kTargetBody);
+    const bool internalsWant = IsTargetActiveInternal(kTargetInternals);
     const bool anyGhostWant = (g_activeGhostShaderMask.load(std::memory_order_acquire) != 0);
 
-    // Run detection when player or any ghost has an active shader, or every 30 frames for diagnostics
+    // Run detection when player, internals, or any ghost has an active shader, or every 30 frames for diagnostics
     const uint32_t frameId = g_frameCounter.load(std::memory_order_relaxed);
-    const bool runDiagOnly = (!playerWant && !anyGhostWant) && ((frameId % 30) != 0);
+    const bool runDiagOnly = (!playerWant && !internalsWant && !anyGhostWant) && ((frameId % 30) != 0);
     if (runDiagOnly) return false;
 
     int matchedTarget = kTargetNone;
@@ -702,11 +718,19 @@ bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, Draw
 
     static bool s_loggedPlayerDrawOnce = false;
     static bool s_loggedGhostDrawOnce = false;
+    static bool s_loggedInternalsDrawOnce = false;
     if (matchedTarget == kTargetBody && !s_loggedPlayerDrawOnce) {
         s_loggedPlayerDrawOnce = true;
         char buf[256];
         _snprintf_s(buf, sizeof(buf), _TRUNCATE,
                     "CarFX FIRST MATCHED PLAYER CAR DRAW: target=%d slots=0x%X rt=%ux%u fmt=%u origPs=%p",
+                    matchedTarget, slotMask, rtW, rtH, static_cast<unsigned>(rtFmt), origPs);
+        Logger::Info(buf);
+    } else if (matchedTarget == kTargetInternals && !s_loggedInternalsDrawOnce) {
+        s_loggedInternalsDrawOnce = true;
+        char buf[256];
+        _snprintf_s(buf, sizeof(buf), _TRUNCATE,
+                    "CarFX FIRST MATCHED INTERNALS DRAW: target=%d slots=0x%X rt=%ux%u fmt=%u origPs=%p",
                     matchedTarget, slotMask, rtW, rtH, static_cast<unsigned>(rtFmt), origPs);
         Logger::Info(buf);
     } else if (IsGhostTarget(matchedTarget) && !s_loggedGhostDrawOnce) {

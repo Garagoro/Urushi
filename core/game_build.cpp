@@ -15,6 +15,7 @@ struct KnownBuild {
 
 // GameAssembly.dll PE fingerprints. Add a row here when a branch updates and its RVAs are re-verified.
 constexpr KnownBuild kKnownBuilds[] = {
+    { GameBranch::Release, 0x6AF713A1u, 0x097B7000u }, // release update (Nov 2026)
     { GameBranch::Release, 0x6AEDB2D6u, 0x09282000u }, // release (Nov 2026)
     { GameBranch::Alpha,   0x6AEDE413u, 0x0A7AE000u }, // alpha-test, Steam build 26487066
 };
