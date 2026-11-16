@@ -56,6 +56,8 @@ struct LiveCarInfo {
     int ghostOverride = 0;
     float headingDot = 1.0f;
     float distToPlayer = 0.0f;
+    float closingSpeedKmh = 0.0f;
+    float ttcSec = -1.0f;
 };
 
 struct TeleportPose {

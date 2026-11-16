@@ -16,7 +16,10 @@ struct SelectiveGhostConfig {
     bool antiWrongWay = true;
     float minSpeedKmh = 10.0f;
     float dotThreshold = -0.25f;
-    float maxDistanceMeters = 120.0f;
+    float maxDistanceMeters = 150.0f;
+    float maxTtcSec = 2.5f;           // Max Time-To-Collision in seconds (0 = disable TTC check)
+    bool ghostStoppedCars = false;    // Auto-ghost obstacle/AFK cars stopped on track
+    float stoppedSpeedKmh = 3.0f;     // Threshold to consider an obstacle car stopped
     bool showHudAlert = true;
 };
 
@@ -32,6 +35,8 @@ struct CarGhostState {
     float distanceMeters = 0.0f;
     float speedKmh = 0.0f;
     float headingDot = 1.0f;
+    float closingSpeedKmh = 0.0f;     // Relative speed closing toward player (km/h)
+    float ttcSec = -1.0f;             // Estimated seconds to impact (-1 if separating)
     uint32_t colliderBelongsTo = 0;
     uint32_t colliderCollidesWith = 0;
     int32_t colliderGroupIndex = 0;

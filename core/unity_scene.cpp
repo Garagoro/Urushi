@@ -772,6 +772,8 @@ std::vector<LiveCarInfo> UnityBridge::GetLiveCarList() {
             info.isGameGhosted = gst->isGameGhosted;
             info.headingDot = gst->headingDot;
             info.distToPlayer = gst->distanceMeters;
+            info.closingSpeedKmh = gst->closingSpeedKmh;
+            info.ttcSec = gst->ttcSec;
         }
         info.ghostOverride = static_cast<int>(EcsCollision::GetCarOverride(info.unityName, reinterpret_cast<uintptr_t>(info.carPtr)));
         out.push_back(std::move(info));

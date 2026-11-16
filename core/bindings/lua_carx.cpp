@@ -184,6 +184,10 @@ int LuaCarX::GetPlayerList(lua_State* L) {
         lua_setfield(L, -2, "heading_dot");
         lua_pushnumber(L, list[i].distToPlayer);
         lua_setfield(L, -2, "dist_to_player");
+        lua_pushnumber(L, list[i].closingSpeedKmh);
+        lua_setfield(L, -2, "closing_speed_kmh");
+        lua_pushnumber(L, list[i].ttcSec);
+        lua_setfield(L, -2, "ttc_sec");
         lua_rawseti(L, -2, static_cast<int>(i + 1));
     }
     return 1;
@@ -350,6 +354,12 @@ static void PushSelectiveGhostConfig(lua_State* L, const SelectiveGhostConfig& c
     lua_setfield(L, -2, "dot_threshold");
     lua_pushnumber(L, cfg.maxDistanceMeters);
     lua_setfield(L, -2, "max_distance");
+    lua_pushnumber(L, cfg.maxTtcSec);
+    lua_setfield(L, -2, "max_ttc_sec");
+    lua_pushboolean(L, cfg.ghostStoppedCars);
+    lua_setfield(L, -2, "ghost_stopped_cars");
+    lua_pushnumber(L, cfg.stoppedSpeedKmh);
+    lua_setfield(L, -2, "stopped_speed_kmh");
     lua_pushboolean(L, cfg.showHudAlert);
     lua_setfield(L, -2, "show_hud_alert");
 }
@@ -375,6 +385,18 @@ int LuaCarX::SetSelectiveGhostConfig(lua_State* L) {
 
         lua_getfield(L, 1, "max_distance");
         if (lua_isnumber(L, -1)) cfg.maxDistanceMeters = static_cast<float>(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, 1, "max_ttc_sec");
+        if (lua_isnumber(L, -1)) cfg.maxTtcSec = static_cast<float>(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+
+        lua_getfield(L, 1, "ghost_stopped_cars");
+        if (!lua_isnil(L, -1)) cfg.ghostStoppedCars = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+
+        lua_getfield(L, 1, "stopped_speed_kmh");
+        if (lua_isnumber(L, -1)) cfg.stoppedSpeedKmh = static_cast<float>(lua_tonumber(L, -1));
         lua_pop(L, 1);
 
         lua_getfield(L, 1, "show_hud_alert");

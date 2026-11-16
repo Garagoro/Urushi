@@ -37,7 +37,9 @@ local ghost_settings = {
     show_hud_alert = true,
     min_speed_kmh = 10.0,
     dot_threshold = -0.25,
-    max_distance = 120.0,
+    max_distance = 150.0,
+    max_ttc_sec = 2.5,
+    ghost_stopped_cars = false,
 }
 if config and config.bind then
     ghost_settings = config.bind("anticollision", ghost_settings)
@@ -418,8 +420,9 @@ local function draw_ghost_radar()
             ui.badge(reason, tone)
             ui.same_line(0, 8)
             local d_name = (c.player_name and c.player_name ~= "") and c.player_name or (c.name or (c.unity_name or "Player"))
-            ui.text(string.format(T("%s · %.0fм · %.0f км/ч", "%s · %.0fm · %.0f km/h"),
-                d_name, c.dist_to_player or 0.0, c.speed_kmh or 0.0))
+            local ttc_info = (c.ttc_sec and c.ttc_sec > 0.0 and c.ttc_sec <= 6.0) and string.format(" · TTC: %.1fс", c.ttc_sec) or ""
+            ui.text(string.format(T("%s · %.0fм · %.0f км/ч%s", "%s · %.0fm · %.0f km/h%s"),
+                d_name, c.dist_to_player or 0.0, c.speed_kmh or 0.0, ttc_info))
         end
     end
     imgui.end_window()
@@ -694,6 +697,9 @@ local function render_anticollision_window()
         end
 
         if ui.collapsing(T("Параметры детектора##sg_det", "Detector Settings##sg_det"), false) then
+            local s0, v0 = ui.slider_float(T("Время до удара (TTC)##sg_ttc", "Time-To-Collision (TTC)##sg_ttc"), state.ghost_cfg.max_ttc_sec or 2.5, 0.0, 6.0, T("%.1f сек (0=выкл)", "%.1f sec (0=off)"))
+            if s0 then state.ghost_cfg.max_ttc_sec = v0; sync_selective_ghost_cfg() end
+
             local s1, v1 = ui.slider_float(T("Мин. скорость##sg_v", "Min Speed##sg_v"), state.ghost_cfg.min_speed_kmh, 0.0, 60.0, T("%.0f км/ч", "%.0f km/h"))
             if s1 then state.ghost_cfg.min_speed_kmh = v1; sync_selective_ghost_cfg() end
 
@@ -702,6 +708,9 @@ local function render_anticollision_window()
 
             local s3, v3 = ui.slider_float(T("Дистанция (0 = вся карта)##sg_dist", "Max Range (0 = unlimited)##sg_dist"), state.ghost_cfg.max_distance, 0.0, 300.0, T("%.0f м", "%.0f m"))
             if s3 then state.ghost_cfg.max_distance = v3; sync_selective_ghost_cfg() end
+
+            local s4, v4 = ui.toggle(T("Призрак стоячих/AFK на трассе##sg_afk", "Ghost Stopped/AFK Obstacles##sg_afk"), state.ghost_cfg.ghost_stopped_cars == true)
+            if s4 then state.ghost_cfg.ghost_stopped_cars = v4; sync_selective_ghost_cfg() end
         end
     end)
 
@@ -742,12 +751,13 @@ local function render_anticollision_window()
                     end
 
                     local dir_tag = (dot < (state.ghost_cfg.dot_threshold or -0.25)) and T("встреч.", "wrong") or T("попутка", "same")
+                    local ttc_tag = (c.ttc_sec and c.ttc_sec > 0.0 and c.ttc_sec <= 10.0) and string.format(" · TTC: %.1fс", c.ttc_sec) or ""
                     local p_name = (c.player_name and c.player_name ~= "") and c.player_name or c.name
                     local car_label = (p_name and p_name ~= "") and p_name or (c.unity_name or ("Car #" .. idx))
                     ui.badge(status_txt, tone)
                     ui.same_line(0, 8)
-                    ui.text(string.format(T("%s · %.0fм · %.0f км/ч (%s)", "%s · %.0fm · %.0f km/h (%s)"),
-                        car_label, dist, spd, dir_tag))
+                    ui.text(string.format(T("%s · %.0fм · %.0f км/ч (%s)%s", "%s · %.0fm · %.0f km/h (%s)%s"),
+                        car_label, dist, spd, dir_tag, ttc_tag))
 
                     if carx.set_car_ghost_mode then
                         local target_id = c.unity_name or c.ptr

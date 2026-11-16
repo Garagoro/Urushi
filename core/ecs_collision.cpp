@@ -205,7 +205,9 @@ static bool Normalize2D(float x, float z, float& outX, float& outZ) {
     return true;
 }
 
-static bool ComputeCarMotionDir(const RawEcsCar& ecsCar, const LiveCarInfo* matchedLive, float& outDirX, float& outDirZ, float& outSpeedKmh) {
+static bool ComputeCarMotionDir(const RawEcsCar& ecsCar, const LiveCarInfo* matchedLive,
+                                float& outDirX, float& outDirZ, float& outSpeedKmh,
+                                float& outVx, float& outVz) {
     float vx = ecsCar.vel[0], vz = ecsCar.vel[2];
     bool hasVel = ecsCar.hasVel;
 
@@ -217,10 +219,13 @@ static bool ComputeCarMotionDir(const RawEcsCar& ecsCar, const LiveCarInfo* matc
         }
     }
 
+    outVx = hasVel ? vx : 0.0f;
+    outVz = hasVel ? vz : 0.0f;
+
     if (hasVel) {
         float spdMs = sqrtf(vx * vx + vz * vz);
         outSpeedKmh = spdMs * 3.6f;
-        if (spdMs >= 1.2f && Normalize2D(vx, vz, outDirX, outDirZ)) {
+        if (spdMs >= 0.8f && Normalize2D(vx, vz, outDirX, outDirZ)) {
             return true;
         }
     } else if (matchedLive) {
@@ -411,8 +416,8 @@ void EcsCollision::UpdateOnMainThread(float dt, const std::vector<LiveCarInfo>& 
         return;
     }
 
-    float pDirX = 0.0f, pDirZ = 1.0f, pSpeedKmh = 0.0f;
-    bool hasPDir = ComputeCarMotionDir(ecsCars[playerIdx], matchedLive[playerIdx], pDirX, pDirZ, pSpeedKmh);
+    float pDirX = 0.0f, pDirZ = 1.0f, pSpeedKmh = 0.0f, pVx = 0.0f, pVz = 0.0f;
+    bool hasPDir = ComputeCarMotionDir(ecsCars[playerIdx], matchedLive[playerIdx], pDirX, pDirZ, pSpeedKmh, pVx, pVz);
     const uint32_t playerBelongs = playerBase->origParent.belongsTo;
 
     std::vector<CarGhostState> states;
@@ -433,17 +438,35 @@ void EcsCollision::UpdateOnMainThread(float dt, const std::vector<LiveCarInfo>& 
         st.isLocalPlayer = ec.isPlayer;
         st.isGameGhosted = ec.isGameGhosted;
 
-        float oDirX = 0.0f, oDirZ = 1.0f, oSpeedKmh = 0.0f;
-        bool hasODir = ComputeCarMotionDir(ec, lc, oDirX, oDirZ, oSpeedKmh);
+        float oDirX = 0.0f, oDirZ = 1.0f, oSpeedKmh = 0.0f, oVx = 0.0f, oVz = 0.0f;
+        bool hasODir = ComputeCarMotionDir(ec, lc, oDirX, oDirZ, oSpeedKmh, oVx, oVz);
         st.speedKmh = oSpeedKmh;
 
         float d2 = 1e9f;
+        float dist = 0.0f;
+        float uRx = 0.0f, uRz = 1.0f;
+        bool hasDist = false;
         if (ec.hasPos && ecsCars[playerIdx].hasPos) {
             float dx = ec.pos[0] - ecsCars[playerIdx].pos[0];
             float dy = ec.pos[1] - ecsCars[playerIdx].pos[1];
             float dz = ec.pos[2] - ecsCars[playerIdx].pos[2];
             d2 = dx * dx + dy * dy + dz * dz;
-            st.distanceMeters = sqrtf(d2);
+            dist = sqrtf(d2);
+            st.distanceMeters = dist;
+            hasDist = true;
+            if (dist > 1e-3f) {
+                uRx = dx / dist;
+                uRz = dz / dist;
+            }
+        }
+
+        // Relative line-of-sight closing velocity (positive = distance closing in)
+        float vClose = (pVx - oVx) * uRx + (pVz - oVz) * uRz;
+        st.closingSpeedKmh = vClose * 3.6f;
+        if (hasDist && vClose > 0.5f) {
+            st.ttcSec = dist / vClose;
+        } else {
+            st.ttcSec = -1.0f;
         }
 
         if (!ec.isPlayer && hasPDir && hasODir) {
@@ -456,11 +479,49 @@ void EcsCollision::UpdateOnMainThread(float dt, const std::vector<LiveCarInfo>& 
             st.overrideMode = GetCarOverride(st.unityName, reinterpret_cast<uintptr_t>(st.carPtr));
 
             bool rawWrongWay = false;
-            if (s_config.enabled && s_config.antiWrongWay && hasPDir && hasODir) {
-                bool speedOk = (oSpeedKmh >= s_config.minSpeedKmh) || (s_config.minSpeedKmh <= 1.0f);
-                bool distOk = (s_config.maxDistanceMeters <= 0.0f) || (st.distanceMeters <= s_config.maxDistanceMeters);
-                if (speedOk && distOk && st.headingDot < s_config.dotThreshold) {
-                    rawWrongWay = true;
+            if (s_config.enabled && s_config.antiWrongWay && hasDist) {
+                const bool distOk = (s_config.maxDistanceMeters <= 0.0f) || (dist <= s_config.maxDistanceMeters);
+
+                if (distOk) {
+                    // Criterion A: Moving head-on (Both cars in motion, opposite heading, closing)
+                    const bool bothMoving = (pSpeedKmh >= 1.5f) && (oSpeedKmh >= s_config.minSpeedKmh);
+                    if (bothMoving && hasPDir && hasODir) {
+                        const bool headingOpposite = (st.headingDot < s_config.dotThreshold);
+                        if (headingOpposite) {
+                            if (dist < 15.0f) {
+                                rawWrongWay = true; // Immediate danger zone
+                            } else if (vClose > 1.0f) {
+                                if (s_config.maxTtcSec <= 0.0f || (st.ttcSec > 0.0f && st.ttcSec <= s_config.maxTtcSec)) {
+                                    rawWrongWay = true;
+                                }
+                            }
+                        }
+                    }
+
+                    // Criterion B: Opponent charging directly into a stopped / slow Player
+                    // (Player speed < 5 km/h, Opponent speed >= minSpeedKmh, moving toward player)
+                    if (!rawWrongWay && pSpeedKmh < 5.0f && oSpeedKmh >= s_config.minSpeedKmh && hasODir) {
+                        const float chargeDot = -(oDirX * uRx + oDirZ * uRz);
+                        if (chargeDot > 0.45f) { // Moving within ~63 degree cone toward player
+                            if (dist < 15.0f) {
+                                rawWrongWay = true;
+                            } else if (st.ttcSec > 0.0f && (s_config.maxTtcSec <= 0.0f || st.ttcSec <= s_config.maxTtcSec)) {
+                                rawWrongWay = true;
+                            }
+                        }
+                    }
+
+                    // Criterion C: Ghost stopped obstacle / AFK cars on track
+                    if (!rawWrongWay && s_config.ghostStoppedCars && oSpeedKmh < s_config.stoppedSpeedKmh && pSpeedKmh >= 30.0f) {
+                        const float approachDot = (pDirX * uRx + pDirZ * uRz);
+                        if (approachDot > 0.60f) { // Player heading towards stopped car
+                            if (dist < 12.0f) {
+                                rawWrongWay = true;
+                            } else if (st.ttcSec > 0.0f && (s_config.maxTtcSec <= 0.0f || st.ttcSec <= s_config.maxTtcSec)) {
+                                rawWrongWay = true;
+                            }
+                        }
+                    }
                 }
             }
 
