@@ -478,6 +478,7 @@ void CheckWorker(bool userInitiated) {
 
     std::wstring exeDir;
     uint32_t localTs = 0;
+    std::string localVer = Updater::GetVersion();
     {
         std::lock_guard<std::mutex> lk(s_mtx);
         exeDir = s_exeDir;
@@ -545,30 +546,45 @@ void CheckWorker(bool userInitiated) {
     uint64_t totalBytes = 0;
 
     if (!localNewerThanRepo) {
+        // Core updater only flags an update if there is an actual core release version bump
+        // OR a core DLL change. Loose script / shader updates are managed inside the Library ("Библиотека") window.
+        bool hasCoreUpdate = (!remoteVer.empty() && !localVer.empty() && remoteVer != localVer);
+
+        // Check core DLLs
         for (const TreeEntry& e : tree) {
             if (s_stop.load(std::memory_order_acquire)) break;
-
-            if (e.path.compare(0, 8, "scripts/") == 0 || e.path.compare(0, 8, "shaders/") == 0) {
-                if (e.path == "scripts/runner_state.json") continue;
-                // scripts/cloud/ is owned by the cloud script library (verified branch), never by the updater
-                if (e.path.compare(0, 14, "scripts/cloud/") == 0) continue;
-                std::wstring dest = ResolveSafeLocalPath(exeDir, e.path);
-                if (dest.empty()) continue;
-                if (!LocalFileMatchesGitBlob(dest, e)) {
-                    planned.push_back({ e, std::move(dest), false, false });
-                    totalBytes += e.size;
-                }
-            } else if (e.path == "dist/urushi.dll") {
+            if (e.path == "dist/urushi.dll") {
                 std::wstring dest = exeDir + L"\\urushi.dll";
                 if (!LocalFileMatchesGitBlob(dest, e)) {
+                    hasCoreUpdate = true;
                     planned.push_back({ e, std::move(dest), false, true });
                     totalBytes += e.size;
                 }
             } else if (e.path == "dist/version.dll") {
                 std::wstring dest = exeDir + L"\\version.dll";
                 if (!LocalFileMatchesGitBlob(dest, e)) {
+                    hasCoreUpdate = true;
                     planned.push_back({ e, std::move(dest), true, false });
                     totalBytes += e.size;
+                }
+            }
+        }
+
+        // Only include scripts and shaders when a genuine core release update is present
+        if (hasCoreUpdate) {
+            for (const TreeEntry& e : tree) {
+                if (s_stop.load(std::memory_order_acquire)) break;
+
+                if (e.path.compare(0, 8, "scripts/") == 0 || e.path.compare(0, 8, "shaders/") == 0) {
+                    if (e.path == "scripts/runner_state.json") continue;
+                    // scripts/cloud/ is owned by the cloud script library (verified branch), never by the updater
+                    if (e.path.compare(0, 14, "scripts/cloud/") == 0) continue;
+                    std::wstring dest = ResolveSafeLocalPath(exeDir, e.path);
+                    if (dest.empty()) continue;
+                    if (!LocalFileMatchesGitBlob(dest, e)) {
+                        planned.push_back({ e, std::move(dest), false, false });
+                        totalBytes += e.size;
+                    }
                 }
             }
         }
