@@ -294,9 +294,39 @@ end
 apply_saved_prefs()
 
 -- Separate "Library" window: script toggles (installed / built-in / user) + the cloud script library
+local function any_script_update_available()
+    if cloud and cloud.get_script_updates then
+        local up_snap = cloud.get_script_updates()
+        if up_snap and up_snap.items then
+            for _, it in pairs(up_snap.items) do
+                if it.state == "update_available" then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+local last_lib_has_upd = nil
+local function update_library_indicator(force)
+    local has_upd = any_script_update_available()
+    if force or (has_upd ~= last_lib_has_upd) then
+        last_lib_has_upd = has_upd
+        if urushi and urushi.set_window_title then
+            local is_en = (i18n and i18n.is_en and i18n.is_en())
+            local base_t = is_en and "Library" or "Библиотека"
+            urushi.set_window_title("library", base_t .. (has_upd and " •" or ""))
+        end
+    end
+end
+
 local library_tab = 1
 local function render_library_window()
-    local ch, idx = ui.segmented("lib_tab_seg", library_tab, T({ "Скачанные", "Облачные" }, { "Downloaded", "Cloud" }))
+    local has_upd = any_script_update_available()
+    local t_down = has_upd and T("Скачанные (•)", "Downloaded (•)") or T("Скачанные", "Downloaded")
+    local t_cloud = T("Облачные", "Cloud")
+    local ch, idx = ui.segmented("lib_tab_seg", library_tab, { t_down, t_cloud })
     if ch then library_tab = idx end
     if library_tab == 1 then render_scripts_card() else render_library_card() end
 end
@@ -317,6 +347,7 @@ local last_check_time = os.clock()
 
 if events and events.on_update then
     events.on_update(function(dt)
+        update_library_indicator()
         if not updater or not updater.get_status then return end
         local now = os.clock()
         local interval = tonumber(upd_cfg.check_interval) or 180
@@ -345,6 +376,7 @@ local function render_system_window()
             if i18n and i18n.sync_titles then
                 i18n.sync_titles()
             end
+            update_library_indicator(true)
         end
 
         ui.spacing(4)

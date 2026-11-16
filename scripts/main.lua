@@ -245,10 +245,17 @@ local function load_entry(e)
     end
 end
 
+local available_files = {}
+for _, name in ipairs(urushi.list_scripts()) do
+    available_files[name] = true
+end
+
 for _, b in ipairs(BUILTIN) do
-    local e = { id = b.id, ru = b.ru, en = b.en, user = false, enabled = enabled_flag(b.id, true) }
-    table.insert(urushi_scripts.list, e)
-    load_entry(e)
+    if available_files[b.id] then
+        local e = { id = b.id, ru = b.ru, en = b.en, user = false, enabled = enabled_flag(b.id, true) }
+        table.insert(urushi_scripts.list, e)
+        load_entry(e)
+    end
 end
 
 -- User scripts dropped into scripts/: listed, but OFF until the user enables them. Run isolated.

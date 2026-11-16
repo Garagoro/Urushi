@@ -100,7 +100,23 @@ jobs:
           $zipLatest = Join-Path $root "Urushi-latest.zip"
           Compress-Archive -Path "$pkgDir/*" -DestinationPath $zipVer -Force
           Copy-Item $zipVer $zipLatest -Force
-          Write-Host "Packaged $zipVer and $zipLatest successfully"
+
+          # Mod.io minimal package (core DLLs + base runtime & library scripts)
+          $modioPkgDir = Join-Path $root "Urushi-modio-pkg"
+          New-Item -ItemType Directory -Force $modioPkgDir | Out-Null
+          Copy-Item (Join-Path $distDir "version.dll") $modioPkgDir -Force
+          Copy-Item (Join-Path $distDir "urushi.dll") $modioPkgDir -Force
+          Copy-Item (Join-Path $distDir "version.txt") $modioPkgDir -Force
+          Copy-Item (Join-Path $root "README.md") $modioPkgDir -Force
+          Copy-Item (Join-Path $root "LICENSE") $modioPkgDir -Force
+          $modioScripts = Join-Path $modioPkgDir "scripts"
+          New-Item -ItemType Directory -Force $modioScripts | Out-Null
+          @("main.lua", "i18n.lua", "config.lua", "keybinds.lua", "il2cpp.lua", "system_mod.lua") | ForEach-Object {
+              Copy-Item (Join-Path (Join-Path $root "scripts") $_) $modioScripts -Force
+          }
+          $zipModio = Join-Path $root "Urushi-v$ver-modio.zip"
+          Compress-Archive -Path "$modioPkgDir/*" -DestinationPath $zipModio -Force
+          Write-Host "Packaged $zipVer, $zipLatest and $zipModio successfully"
 
       - name: Upload Build Artifacts
         if: always()
@@ -155,6 +171,7 @@ jobs:
           $distDir = Join-Path $root "dist"
           $zipVer = Join-Path $root "Urushi-$tag.zip"
           $zipLatest = Join-Path $root "Urushi-latest.zip"
+          $zipModio = Join-Path $root "Urushi-$tag-modio.zip"
           $dllUrushi = Join-Path $distDir "urushi.dll"
           $dllProxy = Join-Path $distDir "version.dll"
 
@@ -178,11 +195,11 @@ jobs:
 
           if ($exists) {
               Write-Host "Updating release $tag assets..."
-              gh release upload $tag $zipVer $zipLatest $dllUrushi $dllProxy --clobber
+              gh release upload $tag $zipVer $zipLatest $zipModio $dllUrushi $dllProxy --clobber
               gh release edit $tag --title $title --notes $notes
           } else {
               Write-Host "Creating new GitHub Release $tag..."
-              gh release create $tag $zipVer $zipLatest $dllUrushi $dllProxy --title $title --notes $notes --latest
+              gh release create $tag $zipVer $zipLatest $zipModio $dllUrushi $dllProxy --title $title --notes $notes --latest
           }
 
       - name: Send Discord Release Notification

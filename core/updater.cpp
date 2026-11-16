@@ -473,6 +473,39 @@ inline const char* L(const char* ru, const char* en) {
     return UrushiUI::IsEnglish() ? en : ru;
 }
 
+static bool IsVersionNewer(const std::string& currentVer, const std::string& newVer) {
+    auto parse = [](const std::string& s) {
+        std::vector<int> v;
+        int cur = 0;
+        bool any = false;
+        for (char c : s) {
+            if (c >= '0' && c <= '9') {
+                cur = cur * 10 + (c - '0');
+                any = true;
+            } else if (c == '.') {
+                v.push_back(cur);
+                cur = 0;
+                any = false;
+            } else if (any) {
+                break;
+            }
+        }
+        if (any) v.push_back(cur);
+        return v;
+    };
+    std::vector<int> cur = parse(currentVer);
+    std::vector<int> next = parse(newVer);
+    if (next.empty()) return false;
+    const size_t n = (std::max)(cur.size(), next.size());
+    cur.resize(n, 0);
+    next.resize(n, 0);
+    for (size_t i = 0; i < n; ++i) {
+        if (next[i] > cur[i]) return true;
+        if (next[i] < cur[i]) return false;
+    }
+    return false;
+}
+
 void CheckWorker(bool userInitiated) {
     s_workerBusy.store(true, std::memory_order_release);
 
@@ -545,47 +578,23 @@ void CheckWorker(bool userInitiated) {
     std::vector<PlannedFile> planned;
     uint64_t totalBytes = 0;
 
-    if (!localNewerThanRepo) {
-        // Core updater only flags an update if there is an actual core release version bump
-        // OR a core DLL change. Loose script / shader updates are managed inside the Library ("Библиотека") window.
-        bool hasCoreUpdate = (!remoteVer.empty() && !localVer.empty() && remoteVer != localVer);
-
-        // Check core DLLs
+    if (!localNewerThanRepo && !remoteVer.empty() && IsVersionNewer(localVer, remoteVer)) {
+        // Core updater ONLY flags an update if there is an actual core release version bump (remoteVer > localVer).
+        // Loose script / shader updates are managed inside the Library ("Библиотека") window.
         for (const TreeEntry& e : tree) {
             if (s_stop.load(std::memory_order_acquire)) break;
             if (e.path == "dist/urushi.dll") {
                 std::wstring dest = exeDir + L"\\urushi.dll";
-                if (!LocalFileMatchesGitBlob(dest, e)) {
-                    hasCoreUpdate = true;
-                    planned.push_back({ e, std::move(dest), false, true });
-                    totalBytes += e.size;
-                }
+                planned.push_back({ e, std::move(dest), false, true });
+                totalBytes += e.size;
             } else if (e.path == "dist/version.dll") {
                 std::wstring dest = exeDir + L"\\version.dll";
-                if (!LocalFileMatchesGitBlob(dest, e)) {
-                    hasCoreUpdate = true;
-                    planned.push_back({ e, std::move(dest), true, false });
-                    totalBytes += e.size;
-                }
-            }
-        }
-
-        // Only include scripts and shaders when a genuine core release update is present
-        if (hasCoreUpdate) {
-            for (const TreeEntry& e : tree) {
-                if (s_stop.load(std::memory_order_acquire)) break;
-
-                if (e.path.compare(0, 8, "scripts/") == 0 || e.path.compare(0, 8, "shaders/") == 0) {
-                    if (e.path == "scripts/runner_state.json") continue;
-                    // scripts/cloud/ is owned by the cloud script library (verified branch), never by the updater
-                    if (e.path.compare(0, 14, "scripts/cloud/") == 0) continue;
-                    std::wstring dest = ResolveSafeLocalPath(exeDir, e.path);
-                    if (dest.empty()) continue;
-                    if (!LocalFileMatchesGitBlob(dest, e)) {
-                        planned.push_back({ e, std::move(dest), false, false });
-                        totalBytes += e.size;
-                    }
-                }
+                planned.push_back({ e, std::move(dest), true, false });
+                totalBytes += e.size;
+            } else if (e.path == "dist/version.txt") {
+                std::wstring dest = exeDir + L"\\version.txt";
+                planned.push_back({ e, std::move(dest), false, false });
+                totalBytes += e.size;
             }
         }
     }
