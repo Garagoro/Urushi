@@ -1,6 +1,7 @@
 #include "d3d11_hook.h"
 #include "input_manager.h"
 #include "carfx.h"
+#include "postfx.h"
 #include "dev_pipe.h"
 #include "hook_manager.h"
 #include "logger.h"
@@ -286,6 +287,7 @@ void D3D11Hook::Shutdown() {
     DetachWndProc();
     DevPipe::ReleaseD3D11();
     if (s_carfxInit) {
+        PostFX::Shutdown();
         CarFX::Shutdown();
         s_carfxInit = false;
     }
@@ -429,6 +431,7 @@ HRESULT WINAPI D3D11Hook::Hooked_Present(IDXGISwapChain* pSwapChain, UINT SyncIn
             if (full && !s_carfxInit && s_context) {
                 HookContextVTable(s_context);
                 CarFX::Init(s_device, s_context, GetExeShadersDirectory());
+                PostFX::Init(s_device, s_context, GetExeShadersDirectory());
                 s_carfxInit = true;
             }
 
@@ -438,7 +441,13 @@ HRESULT WINAPI D3D11Hook::Hooked_Present(IDXGISwapChain* pSwapChain, UINT SyncIn
                 if (s_context) {
                     HookContextVTable(s_context);
                     CarFX::OnNewFrame(s_context);
+                    PostFX::OnNewFrame(s_context);
                 }
+            }
+
+            // Full-screen post-processing stage before ImGui frame is drawn
+            if (full && !HookManager::IsUnloading()) {
+                PostFX::Render(pSwapChain, s_renderTargetView);
             }
 
             ImGui_ImplDX11_NewFrame();
@@ -502,6 +511,7 @@ HRESULT WINAPI D3D11Hook::Hooked_ResizeBuffers(IDXGISwapChain* pSwapChain, UINT 
     if (HookManager::IsUnloading()) {
         return s_originalResizeBuffers(pSwapChain, BufferCount, Width, Height, NewFormat, SwapChainFlags);
     }
+    PostFX::OnResizeBuffers();
     if (s_renderTargetView) {
         if (s_context) s_context->OMSetRenderTargets(0, nullptr, nullptr);
         s_renderTargetView->Release();

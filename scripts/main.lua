@@ -93,7 +93,7 @@ local PRIVILEGED = {
 local LUA_FUNCS = { "assert", "error", "ipairs", "pairs", "next", "pcall", "xpcall", "select", "tonumber", "tostring",
                     "type", "rawequal", "rawget", "rawset", "rawlen", "setmetatable", "print" }
 local LUA_LIBS = { "string", "table", "math", "utf8", "coroutine", "os", "debug" }
-local API_MODULES = { "carx", "steer_assist", "carfx", "replay", "memory", "unity", "optimizer", "ui", "input", "imgui", "gui",
+local API_MODULES = { "carx", "steer_assist", "carfx", "postfx", "audio", "replay", "memory", "unity", "optimizer", "ui", "input", "imgui", "gui",
                       "events", "log", "i18n", "keybinds", "il2cpp" }
 local SETTINGS_NAMES = { settings = true, SETTINGS = true, config_data = true, CONFIG = true, state = true, STATE = true }
 
@@ -177,6 +177,7 @@ urushi_scripts = { list = {}, dirty = false, cloud_loaded = {} }
 
 local manifest = (urushi.get_manifest and urushi.get_manifest()) or (cloud and cloud.get_manifest and cloud.get_manifest())
 local BUILTIN = {}
+local seen_builtin = {}
 if manifest and manifest.scripts then
     for _, s in ipairs(manifest.scripts) do
         table.insert(BUILTIN, {
@@ -187,6 +188,27 @@ if manifest and manifest.scripts then
             min_core = s.min_core,
             window_ids = s.window_ids or {},
         })
+        seen_builtin[s.id] = true
+    end
+end
+
+-- Fallback/hardcoded built-ins in case manifest is missing or incomplete
+local FALLBACK_BUILTIN = {
+    { id = "telemetry_hud",    ru = "Телеметрия (HUD)",          en = "Telemetry HUD",         default_enabled = true,  window_ids = { "hud", "fps_net" } },
+    { id = "teleport_mod",     ru = "Телепорт по точкам",        en = "Checkpoint Teleport",   default_enabled = true,  window_ids = { "teleport" } },
+    { id = "replay_mod",       ru = "Реплеи и Анти-встречка",    en = "Replays & Anti-Collision", default_enabled = true, window_ids = { "replay", "anticollision" } },
+    { id = "carfx_mod",        ru = "CarFX Шейдеры",             en = "CarFX Shaders",         default_enabled = true,  window_ids = { "carfx" } },
+    { id = "steer_assist_mod", ru = "Помощь руля (155°)",        en = "Steering Assist (155°)", default_enabled = false, window_ids = { "steer_assist" } },
+    { id = "tires_mod",        ru = "Кузов и шины",              en = "Body & Tires",          default_enabled = false, window_ids = { "tires" } },
+    { id = "perf_optimizer",   ru = "Оптимизатор FPS",           en = "FPS Optimizer",         default_enabled = true,  window_ids = { "perf" } },
+    { id = "keybinds_mod",     ru = "Горячие клавиши",           en = "Keybinds & Controls",   default_enabled = true,  window_ids = { "keybinds" } },
+    { id = "initiald_mod",     ru = "Initial D режим",           en = "Initial D Mode",        default_enabled = false, window_ids = { "initiald" } },
+}
+
+for _, fb in ipairs(FALLBACK_BUILTIN) do
+    if not seen_builtin[fb.id] then
+        table.insert(BUILTIN, fb)
+        seen_builtin[fb.id] = true
     end
 end
 

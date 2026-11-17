@@ -5,6 +5,9 @@
 #include "urushi_ui.h"
 #include "bindings/lua_carx.h"
 #include "bindings/lua_carfx.h"
+#include "bindings/lua_postfx.h"
+#include "bindings/lua_audio.h"
+#include "audio_player.h"
 #include "bindings/lua_imgui.h"
 #include "bindings/lua_replay.h"
 #include "bindings/lua_memory.h"
@@ -61,6 +64,8 @@ bool LuaEngine::Init(const std::wstring& scriptsDir) {
     // Register our custom modules
     LuaCarX::Register(s_L);
     LuaCarFX::Register(s_L);
+    LuaPostFX::Register(s_L);
+    LuaAudio::Register(s_L);
     LuaImGui::Register(s_L);
     LuaReplay::Register(s_L);
     LuaMemory::Register(s_L);
@@ -116,6 +121,7 @@ void LuaEngine::Shutdown() {
     // Rollback any live memory code patches to keep game clean
     LuaMemory::RestoreAllPatchesNative();
     PatternScanner::ClearCache();
+    AudioPlayer::OnLuaReload();
 
     if (s_L) {
         luaL_dostring(s_L, "if config and config.save then config.save() end");

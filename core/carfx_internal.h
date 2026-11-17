@@ -170,6 +170,9 @@ extern ID3D11SamplerState* g_samplerPoint;
 extern ID3D11BlendState* g_overlayBlend;
 extern ID3D11DepthStencilState* g_overlayDs;
 extern ID3D11DepthStencilState* g_bodyDepthDs;
+extern ID3D11DepthStencilState* g_overlayDsByFunc[9];
+extern ID3D11DepthStencilState* g_bodyDepthDsByFunc[9];
+extern ID3D11DepthStencilState* g_noDepthDs;
 extern std::atomic<bool> g_stealthDepthWrite;
 
 extern ID3D11Texture2D* g_sceneTex;

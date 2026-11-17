@@ -16,6 +16,8 @@ All shaders are located in the `shaders/` directory as standard `.hlsl` files.
 5. [Textures & Samplers](#5-textures--samplers)
 6. [Built-in Helper Functions](#6-built-in-helper-functions)
 7. [Step-by-Step Example: Reactive Drift Shader](#7-step-by-step-example-reactive-drift-shader)
+8. [Internals target (engine, suspension, interior)](#8-internals-target-engine-suspension-interior)
+9. [Post-Process Shaders (`shaders/post/*.hlsl`)](#9-post-process-shaders-shadersposthlsl)
 
 ---
 
@@ -239,3 +241,60 @@ CarFX has a second slot for the **non-body parts of the player car**. Load any s
 * `g_fxLivery` is not bound for this target (no livery on internals).
 * Parts: pick which groups it applies to in the CarFX window or with `carfx.set_parts{...}` (engine, suspension, brakes, wheels, interior). The body is never split.
 * Sample: `shaders/internals_neon.hlsl`.
+
+---
+
+## 9. Post-Process Shaders (`shaders/post/*.hlsl`)
+
+URUSHI includes a full-screen post-processing pipeline (`core/postfx.*`) that executes on the render thread inside `IDXGISwapChain::Present` immediately before ImGui is rendered. This guarantees that full-screen effects never distort or occlude the URUSHI menu or HUD widgets.
+
+All post-process shaders must be placed in `shaders/post/` with the `.hlsl` extension.
+
+### Execution Model
+1. The game's backbuffer is resolved/copied into a temporary staging texture.
+2. A single full-screen triangle is drawn via a built-in procedural vertex shader (`SV_VertexID`), producing pixel UV coordinates across `[0..1]`.
+3. The custom pixel shader samples the scene color (and optional depth), processes the image, and writes directly into the swapchain render target.
+4. All Direct3D 11 pipeline state (viewports, rasterizer, blend state, depth-stencil state, shader bindings) is saved and restored around the pass.
+
+### Constant Buffers (`b0` and `b13`)
+Post-process pixel shaders receive a constant buffer bound to registers `b0` and `b13`:
+```hlsl
+cbuffer PostFXConstantBuffer : register(b0) {
+    float4 g_fxTime;         // (time_sec, delta_time, 0, 0)
+    float4 g_fxScreen;       // (width, height, 1.0/width, 1.0/height)
+    float4 g_fxParam0;       // p0 (.xyzw)
+    float4 g_fxParam1;       // p1
+    float4 g_fxParam2;       // p2
+    float4 g_fxParam3;       // p3
+    float4 g_fxParam4;       // p4
+    float4 g_fxParam5;       // p5
+    float4 g_fxParam6;       // p6
+    float4 g_fxParam7;       // p7
+    float4 g_fxDriftState;   // (abs_angle_deg, signed_angle_deg, norm_factor_0_to_1, speed_kmh)
+};
+```
+
+### Textures & Samplers
+- **Scene Texture:** Register `t0` and `t32` (`Texture2D g_sceneTex`). Contains the captured game backbuffer color.
+- **Depth Texture:** Register `t1` and `t37` (`Texture2D g_depthTex`). Contains the captured scene depth buffer (when CarFX depth capture is active).
+- **Linear Sampler:** Register `s0` and `s14` (`SamplerState g_linear`).
+- **Point Sampler:** Register `s1` and `s15` (`SamplerState g_point`).
+
+### Input Structure & Header Annotations
+Post-process shaders use the following pixel shader input:
+```hlsl
+struct PSIn {
+    float4 pos : SV_Position;
+    float2 uv  : TEXCOORD0;
+};
+```
+
+Header annotations (`@param` and `@color`) are parsed identically to CarFX shaders, allowing scripts to inspect parameter ranges and build dynamic UI controls:
+```hlsl
+// @param intensity p0.x 0.0..1.0 = 0.0 : Effect intensity
+// @param lineCount p0.y 10.0..100.0 = 40.0 : Density of lines
+// @color tintColor p1.xyz = 1.0 1.0 1.0 : Line tint color
+```
+
+Sample post-process shader: `shaders/post/speedlines.hlsl` (Initial D anime radial speed lines).
+

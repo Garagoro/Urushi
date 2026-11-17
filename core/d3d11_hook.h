@@ -26,6 +26,7 @@ public:
 
     static ID3D11Device* GetDevice();
     static ID3D11DeviceContext* GetContext();
+    static ID3D11RenderTargetView* GetRenderTargetView() { return s_renderTargetView; }
     static HWND GetGameWindow();
 
     // ImGui is not thread-safe and only exists after the first Present. Lua callbacks run on the Unity main thread,

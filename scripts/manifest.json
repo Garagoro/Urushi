@@ -18,6 +18,21 @@
       "default_enabled": true
     },
     {
+      "id": "initiald_mod",
+      "path": "scripts/initiald_mod.lua",
+      "sha256": "3bc608abc87abf39789dd27a57f14b413f96e2567a16a601978f26f682cc3b49",
+      "size": 12513,
+      "name": "Initial D Mode",
+      "name_ru": "Initial D режим",
+      "description": "Anime speedlines postfx, cel shading and eurobeat drift audio",
+      "description_ru": "Аниме speedlines postfx, cel-шейдинг кузова и евробит",
+      "window_ids": [
+        "initiald"
+      ],
+      "min_core": "1.2.1",
+      "default_enabled": false
+    },
+    {
       "id": "keybinds_mod",
       "path": "scripts/keybinds_mod.lua",
       "sha256": "9dd2e2283f6258855c6155eeddb3bcb7a39db3c20e7071fd735256cb0ff6aade",
@@ -142,6 +157,11 @@
       "size": 2954
     },
     {
+      "path": "shaders/livery_cel.hlsl",
+      "sha256": "0dde25c641118a2a624cb6077c8e9ec545b96d4267129eed31bceabb25bbfda3",
+      "size": 3173
+    },
+    {
       "path": "shaders/livery_chrome.hlsl",
       "sha256": "fd1875562b3818307e6138f72c15e93b0e6b5787f48d831812360b1f6bbdbbef",
       "size": 1703
@@ -185,6 +205,11 @@
       "path": "shaders/livery_wall_tap.hlsl",
       "sha256": "95b3bb8055dbe18ff9ff0826fa91a99e671a188a54186161d40bed33f26a1e70",
       "size": 8386
+    },
+    {
+      "path": "shaders/post/speedlines.hlsl",
+      "sha256": "9261c943ea4d8649ad719027362872338f64b16ce31d99925dca1089cfe1f21a",
+      "size": 3086
     }
   ]
 }

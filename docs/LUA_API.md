@@ -24,6 +24,8 @@ All scripts live inside the `scripts/` directory. The main entry point is [`scri
 13. [Memory Pattern Scanner (`pattern`)](#13-memory-pattern-scanner-pattern)
 14. [In-Memory HLSL Shader Compilation (`carfx.compile`)](#14-in-memory-hlsl-shader-compilation-carfxcompile)
 15. [Memory Patching & Unity IL2CPP Reflection](#15-memory-patching--unity-il2cpp-reflection)
+16. [`postfx` Module — Full-Screen Post-Processing](#16-postfx-module--full-screen-post-processing)
+17. [`audio` Module — Audio Playback](#17-audio-module--audio-playback)
 
 ---
 
@@ -484,4 +486,116 @@ memory.write_bytes(addr, { 0x90, 0x90, 0x90 })
 - `il2cpp.disasm_method(comp, "methodName", count)` -> disassembled instructions via Zydis
 - `il2cpp.make_method_signature(comp, "methodName")` -> auto-generated unique IDA signature
 - `il2cpp.export_ai_dump(gameObject, filename)` -> complete class & field dump formatted for AI models
+
+---
+
+## 16. `postfx` Module — Full-Screen Post-Processing
+
+The `postfx` global module controls the full-screen DirectX 11 post-processing pipeline. It executes on the render thread inside `Present` before ImGui renders, copying the backbuffer, drawing a full-screen triangle using a custom pixel shader, and writing the result back.
+
+All post-process shaders reside in `shaders/post/*.hlsl`.
+
+### `postfx.get_shader_list()`
+Returns an array of strings containing the filenames of available post-process shaders in `shaders/post/`.
+```lua
+local shaders = postfx.get_shader_list()
+-- { "speedlines.hlsl", ... }
+```
+
+### `postfx.load(filename)`
+Compiles and loads a post-process pixel shader from `shaders/post/<filename>`. Hot-reload is automatically tracked on file changes.
+- **Arguments:**
+  - `filename`: Name of the HLSL file (e.g. `"speedlines.hlsl"`).
+- **Returns:** `boolean` success.
+
+### `postfx.unload()`
+Unloads the active post-process shader and frees associated GPU shader resources.
+
+### `postfx.set_enabled(enabled)` / `postfx.is_enabled()`
+Enables or disables post-processing pass execution. When disabled, the postfx pass is a zero-cost no-op.
+```lua
+postfx.set_enabled(true)
+if postfx.is_enabled() then ... end
+```
+
+### `postfx.set_param(index, x, y, z, w)`
+Sets one of the 8 custom parameter vectors (`p0` through `p7`) uploaded to the postfx constant buffer at `b0` and `b13`.
+- **Arguments:**
+  - `index`: Parameter slot `0` through `7`.
+  - `x, y, z, w`: Floating point values.
+```lua
+postfx.set_param(0, intensity, 0.5, 0.5, 0.0)
+```
+
+### `postfx.get_params()`
+Returns a list of parsed `@param` and `@color` annotations from the currently loaded shader, allowing Lua scripts to generate dynamic parameter UI sliders.
+- **Returns:** Table of descriptors:
+  ```lua
+  {
+      {
+          name = "speedlinesIntensity",
+          slot = 0,
+          swizzle = "x",
+          min = 0.0,
+          max = 1.0,
+          default = 0.0,
+          desc = "Radial lines strength",
+          is_color = false
+      },
+      ...
+  }
+  ```
+
+---
+
+## 17. `audio` Module — Audio Playback
+
+The `audio` module provides low-latency, click-free audio playback powered by **XAudio2** and **Media Foundation** (pure Windows APIs). Audio decoding is performed on a background thread so the render thread is never blocked.
+
+Audio files must be placed in `urushi_data/audio/`. Supported formats include `.wav`, `.mp3`, `.ogg`, `.flac`, `.aac`, `.m4a`, and `.wma`.
+
+### `audio.list()`
+Returns an array of available audio filenames located inside `urushi_data/audio/`.
+```lua
+local files = audio.list()
+-- { "night_of_fire.mp3", "running_in_the_90s.mp3", ... }
+```
+
+### `audio.play(filename, [options])`
+Plays an audio file asynchronously.
+- **Arguments:**
+  - `filename`: Audio filename relative to `urushi_data/audio/`.
+  - `options` (optional table):
+    - `loop`: `boolean` (default `false`) — loop playback indefinitely.
+    - `volume`: `number` (default `1.0`, range `0.0..1.0`).
+- **Returns:** Voice handle (`number`), or `nil` if playback failed (e.g. file not found or max voices exceeded).
+```lua
+local voice_id = audio.play("eurobeat.mp3", { loop = true, volume = 0.8 })
+```
+
+### `audio.stop(voice_id)`
+Stops the playback of a specific active voice.
+```lua
+audio.stop(voice_id)
+```
+
+### `audio.stop_all()`
+Immediately stops all currently playing voices. Called automatically on Lua reloads and DLL unload.
+```lua
+audio.stop_all()
+```
+
+### `audio.set_volume(voice_id, volume)`
+Smoothly adjusts the volume of an active voice without audio clicks or popping artifacts.
+- **Arguments:**
+  - `voice_id`: Active voice ID returned from `audio.play`.
+  - `volume`: `number` in range `0.0..1.0`.
+```lua
+audio.set_volume(voice_id, 0.5)
+```
+
+### `audio.is_playing(voice_id)`
+Checks if the specified voice is actively playing.
+- **Returns:** `boolean`.
+
 

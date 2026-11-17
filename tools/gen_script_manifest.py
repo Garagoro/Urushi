@@ -92,6 +92,15 @@ SCRIPTS_METADATA = {
         "min_core": "1.2.1",
         "default_enabled": False,
     },
+    "initiald_mod": {
+        "name": "Initial D Mode",
+        "name_ru": "Initial D режим",
+        "description": "Anime speedlines postfx, cel shading and eurobeat drift audio",
+        "description_ru": "Аниме speedlines postfx, cel-шейдинг кузова и евробит",
+        "window_ids": ["initiald"],
+        "min_core": "1.2.1",
+        "default_enabled": False,
+    },
 }
 
 
@@ -150,16 +159,18 @@ def build_manifest(root_dir: str):
     shaders_list = []
     shaders_dir = os.path.join(root_dir, "shaders")
     if os.path.isdir(shaders_dir):
-        for name in sorted(os.listdir(shaders_dir)):
-            if name.endswith(".hlsl") or name.endswith(".hlsli"):
-                abs_path = os.path.join(shaders_dir, name)
-                if os.path.isfile(abs_path):
+        for root, _, files in os.walk(shaders_dir):
+            for name in sorted(files):
+                if name.endswith(".hlsl") or name.endswith(".hlsli"):
+                    abs_path = os.path.join(root, name)
+                    rel_path = os.path.relpath(abs_path, root_dir).replace("\\", "/")
                     sha256, size = hash_lf(abs_path)
                     shaders_list.append({
-                        "path": f"shaders/{name}",
+                        "path": rel_path,
                         "sha256": sha256,
                         "size": size,
                     })
+    shaders_list.sort(key=lambda s: s["path"])
 
     manifest = {
         "schema_version": SCHEMA_VERSION,

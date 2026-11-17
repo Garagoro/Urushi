@@ -16,6 +16,7 @@
 #include "crash_handler.h"
 #include "safe_mode.h"
 #include "cloud_scripts.h"
+#include "audio_player.h"
 
 #pragma comment(lib, "shlwapi.lib")
 
@@ -72,6 +73,7 @@ extern "C" __declspec(dllexport) void ScriptHook_Unload() {
         DevPipe::Shutdown();
         Updater::Shutdown();
         CloudScripts::Shutdown();
+        AudioPlayer::Shutdown();
         LuaEngine::Shutdown();
         CarSimOptimizer::Shutdown();
     }
@@ -104,6 +106,7 @@ static void StartFeatures() {
             Logger::Warn("CarSimOptimizer failed initial hook, will retry...");
         }
 
+        AudioPlayer::Init();
         CloudScripts::Init(g_exeDir);   // before Lua: main.lua loads installed cloud scripts
         ReplayEngine::Init(replaysDir);
         LuaEngine::Init(scriptsDir);

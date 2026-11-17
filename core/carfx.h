@@ -217,4 +217,10 @@ DiagnosticStatus GetStatus(int target = kTargetBody);
 std::vector<std::string> ListAvailableShaders();
 std::wstring GetShadersDirectory();
 
+// Post-process shader compilation, path confinement and depth sharing
+bool CompilePixelShader(const char* srcData, size_t srcLen, const std::string& narrowPath, const std::wstring& includeDir, ID3D11PixelShader** outPs, ShaderDecl* outDecl, std::string* outErr, ID3DBlob** outBytecode = nullptr);
+ID3D11ShaderResourceView* GetCurrentFrameDepthSRV();
+std::wstring ResolvePostShaderPath(const std::string& pathUtf8);
+std::vector<std::string> ListPostShaders();
+
 } // namespace CarFX

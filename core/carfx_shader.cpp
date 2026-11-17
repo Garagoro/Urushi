@@ -87,13 +87,13 @@ private:
 
 } // namespace
 
-namespace Internal {
-
-bool CompileEffectMemory(int targetIdx, const char* srcData, size_t srcLen, const std::string& narrowPath, const std::wstring& includeDir, const FILETIME& ft, std::string* outErr) {
-    if (!ValidTarget(targetIdx) || !g_device || !g_pfnD3DCompile) {
+bool CompilePixelShader(const char* srcData, size_t srcLen, const std::string& narrowPath, const std::wstring& includeDir, ID3D11PixelShader** outPs, ShaderDecl* outDecl, std::string* outErr, ID3DBlob** outBytecode) {
+    if (!outPs || !g_device || !g_pfnD3DCompile) {
         if (outErr) *outErr = "CarFX or d3dcompiler_47.dll not initialized";
         return false;
     }
+    *outPs = nullptr;
+    if (outBytecode) *outBytecode = nullptr;
 
     if (!srcData || srcLen == 0) {
         if (outErr) *outErr = "Shader source is empty";
@@ -102,6 +102,7 @@ bool CompileEffectMemory(int targetIdx, const char* srcData, size_t srcLen, cons
 
     ShaderDecl decl{};
     ParseShaderDecl(srcData, srcLen, &decl);
+    if (outDecl) *outDecl = decl;
 
     ShaderIncludeHandler incl(includeDir, g_shadersDir);
     ID3DBlob* code = nullptr;
@@ -127,13 +128,8 @@ bool CompileEffectMemory(int targetIdx, const char* srcData, size_t srcLen, cons
         }
         if (errBlob) errBlob->Release();
         if (code) code->Release();
-
-        TargetSlotState& ts = g_targets[targetIdx];
-        std::lock_guard<std::mutex> lk(ts.publishMtx);
-        ts.failures++;
-        ts.lastError = msg;
         if (outErr) *outErr = msg;
-        Logger::Error("CarFX compile error (" + narrowPath + "): " + msg);
+        Logger::Error("Shader compile error (" + narrowPath + "): " + msg);
         return false;
     }
     if (errBlob) errBlob->Release();
@@ -146,8 +142,36 @@ bool CompileEffectMemory(int targetIdx, const char* srcData, size_t srcLen, cons
         return false;
     }
 
+    *outPs = newPs;
+    if (outBytecode) {
+        *outBytecode = code;
+    } else {
+        code->Release();
+    }
+    return true;
+}
+
+namespace Internal {
+
+bool CompileEffectMemory(int targetIdx, const char* srcData, size_t srcLen, const std::string& narrowPath, const std::wstring& includeDir, const FILETIME& ft, std::string* outErr) {
+    if (!ValidTarget(targetIdx)) {
+        if (outErr) *outErr = "Invalid target index";
+        return false;
+    }
+
+    ID3D11PixelShader* newPs = nullptr;
+    ShaderDecl decl{};
+    ID3DBlob* code = nullptr;
+    if (!CompilePixelShader(srcData, srcLen, narrowPath, includeDir, &newPs, &decl, outErr, &code)) {
+        TargetSlotState& ts = g_targets[targetIdx];
+        std::lock_guard<std::mutex> lk(ts.publishMtx);
+        ts.failures++;
+        if (outErr) ts.lastError = *outErr;
+        return false;
+    }
+
     bool readsScene = false, readsDepth = false, readsLivery = false;
-    if (g_pfnD3DReflect) {
+    if (g_pfnD3DReflect && code) {
         ID3D11ShaderReflection* refl = nullptr;
         if (SUCCEEDED(g_pfnD3DReflect(code->GetBufferPointer(), code->GetBufferSize(),
                                       kIidShaderReflection, reinterpret_cast<void**>(&refl))) && refl) {
@@ -165,7 +189,7 @@ bool CompileEffectMemory(int targetIdx, const char* srcData, size_t srcLen, cons
             refl->Release();
         }
     }
-    code->Release();
+    if (code) code->Release();
 
     TargetSlotState& ts = g_targets[targetIdx];
     std::lock_guard<std::mutex> lk(ts.publishMtx);

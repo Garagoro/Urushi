@@ -29,6 +29,9 @@ ID3D11SamplerState* g_samplerPoint = nullptr;
 ID3D11BlendState* g_overlayBlend = nullptr;
 ID3D11DepthStencilState* g_overlayDs = nullptr;
 ID3D11DepthStencilState* g_bodyDepthDs = nullptr;
+ID3D11DepthStencilState* g_overlayDsByFunc[9] = {};
+ID3D11DepthStencilState* g_bodyDepthDsByFunc[9] = {};
+ID3D11DepthStencilState* g_noDepthDs = nullptr;
 std::atomic<bool> g_stealthDepthWrite{ false };
 
 // Scene & Depth copy cache (render thread)
@@ -226,6 +229,55 @@ bool ReadFileUtf8(const std::wstring& path, std::vector<char>& outData, FILETIME
 
 } // namespace Internal
 
+std::wstring ResolvePostShaderPath(const std::string& pathUtf8) {
+    using namespace Internal;
+    if (g_shadersDir.empty() || pathUtf8.empty()) return {};
+    std::wstring postDir = g_shadersDir + L"\\post";
+    std::wstring w = Utf8ToWide(pathUtf8);
+    if (w.find(L':') != std::wstring::npos) return {};
+    if (w.find(L"..") != std::wstring::npos) return {};
+
+    for (wchar_t& ch : w) if (ch == L'/') ch = L'\\';
+
+    if (w.rfind(L"shaders\\post\\", 0) == 0) w = w.substr(13);
+    else if (w.rfind(L"post\\", 0) == 0) w = w.substr(5);
+
+    if (w.size() < 5 || _wcsicmp(w.c_str() + w.size() - 5, L".hlsl") != 0) {
+        w += L".hlsl";
+    }
+
+    std::wstring combined = postDir + L"\\" + w;
+    wchar_t full[MAX_PATH * 2] = {};
+    wchar_t base[MAX_PATH * 2] = {};
+    const DWORD n1 = GetFullPathNameW(combined.c_str(), MAX_PATH * 2, full, nullptr);
+    const DWORD n2 = GetFullPathNameW(postDir.c_str(), MAX_PATH * 2, base, nullptr);
+    if (n1 == 0 || n1 >= MAX_PATH * 2 || n2 == 0 || n2 >= MAX_PATH * 2) return {};
+    std::wstring f(full), b(base);
+    if (!b.empty() && b.back() != L'\\') b += L'\\';
+    if (f.size() <= b.size() || _wcsnicmp(f.c_str(), b.c_str(), b.size()) != 0) return {};
+    return f;
+}
+
+std::vector<std::string> ListPostShaders() {
+    using namespace Internal;
+    std::vector<std::string> out;
+    if (g_shadersDir.empty()) return out;
+    std::wstring postDir = g_shadersDir + L"\\post";
+    std::wstring pat = postDir + L"\\*.hlsl";
+    WIN32_FIND_DATAW fd{};
+    HANDLE hf = FindFirstFileW(pat.c_str(), &fd);
+    if (hf != INVALID_HANDLE_VALUE) {
+        do {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                out.push_back(WideToUtf8(fd.cFileName));
+            }
+        } while (FindNextFileW(hf, &fd));
+        FindClose(hf);
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 // ================= Public Core & Target Texture API =================
 
 bool Init(ID3D11Device* device, ID3D11DeviceContext* immediateContext, const std::wstring& shadersDir) {
@@ -240,6 +292,7 @@ bool Init(ID3D11Device* device, ID3D11DeviceContext* immediateContext, const std
     QueryPerformanceFrequency(&g_qpcFreq);
 
     CreateDirectoryW(g_shadersDir.c_str(), nullptr);
+    CreateDirectoryW((g_shadersDir + L"\\post").c_str(), nullptr);
 
     if (!g_d3dCompilerMod) {
         g_d3dCompilerMod = LoadLibraryW(L"d3dcompiler_47.dll");
@@ -297,20 +350,28 @@ bool Init(ID3D11Device* device, ID3D11DeviceContext* immediateContext, const std
         Logger::Warn("CarFX: CreateBlendState failed.");
     }
 
-    // Overlay depth state: test LESS_EQUAL without writing depth
-    D3D11_DEPTH_STENCIL_DESC dsd = {};
-    dsd.DepthEnable = TRUE;
-    dsd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
-    dsd.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
-    dsd.StencilEnable = FALSE;
-    {
+    // Overlay and depth-write states for every comparison function (1..8)
+    // Matches Unity DX11 reversed-Z (GREATER_EQUAL) or standard Z (LESS_EQUAL) dynamically
+    D3D11_DEPTH_STENCIL_DESC noDsDesc = {};
+    noDsDesc.DepthEnable = FALSE;
+    noDsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+    g_device->CreateDepthStencilState(&noDsDesc, &g_noDepthDs);
+
+    for (int f = 1; f <= 8; ++f) {
+        D3D11_DEPTH_STENCIL_DESC dsd = {};
+        dsd.DepthEnable = TRUE;
+        dsd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+        dsd.DepthFunc = static_cast<D3D11_COMPARISON_FUNC>(f);
+        dsd.StencilEnable = FALSE;
+        g_device->CreateDepthStencilState(&dsd, &g_overlayDsByFunc[f]);
+
         D3D11_DEPTH_STENCIL_DESC wd = dsd;
         wd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
-        g_device->CreateDepthStencilState(&wd, &g_bodyDepthDs);
+        g_device->CreateDepthStencilState(&wd, &g_bodyDepthDsByFunc[f]);
     }
-    if (FAILED(g_device->CreateDepthStencilState(&dsd, &g_overlayDs))) {
-        Logger::Warn("CarFX: CreateDepthStencilState failed.");
-    }
+    // Default fallback to Unity DX11 Reversed-Z (GREATER_EQUAL)
+    g_overlayDs = g_overlayDsByFunc[D3D11_COMPARISON_GREATER_EQUAL];
+    g_bodyDepthDs = g_bodyDepthDsByFunc[D3D11_COMPARISON_GREATER_EQUAL];
 
     g_initialized.store(true, std::memory_order_release);
     Logger::Info("CarFX initialized. Shaders dir: " + WideToUtf8(g_shadersDir));
@@ -341,8 +402,13 @@ void Shutdown() {
     ReleaseSceneCopy();
     ReleaseDepthCopy();
 
-    if (g_overlayDs) { g_overlayDs->Release(); g_overlayDs = nullptr; }
-    if (g_bodyDepthDs) { g_bodyDepthDs->Release(); g_bodyDepthDs = nullptr; }
+    for (int f = 1; f <= 8; ++f) {
+        if (g_overlayDsByFunc[f]) { g_overlayDsByFunc[f]->Release(); g_overlayDsByFunc[f] = nullptr; }
+        if (g_bodyDepthDsByFunc[f]) { g_bodyDepthDsByFunc[f]->Release(); g_bodyDepthDsByFunc[f] = nullptr; }
+    }
+    if (g_noDepthDs) { g_noDepthDs->Release(); g_noDepthDs = nullptr; }
+    g_overlayDs = nullptr;
+    g_bodyDepthDs = nullptr;
     if (g_overlayBlend) { g_overlayBlend->Release(); g_overlayBlend = nullptr; }
     if (g_samplerPoint) { g_samplerPoint->Release(); g_samplerPoint = nullptr; }
     if (g_samplerLinear) { g_samplerLinear->Release(); g_samplerLinear = nullptr; }

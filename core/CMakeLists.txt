@@ -33,6 +33,8 @@ add_library(urushi SHARED
     d3d11_hook.h d3d11_hook.cpp
     carfx_shader_decl.h carfx_shader_decl.cpp
     carfx.h carfx_internal.h carfx.cpp carfx_shader.cpp carfx_draw.cpp
+    postfx.h postfx.cpp
+    audio_player.h audio_player.cpp
     replay_engine.h replay_engine.cpp
     file_watcher.h file_watcher.cpp
     lua_engine.h lua_engine.cpp
@@ -42,6 +44,8 @@ add_library(urushi SHARED
     updater.h updater.cpp
     bindings/lua_carx.h bindings/lua_carx.cpp
     bindings/lua_carfx.h bindings/lua_carfx.cpp
+    bindings/lua_postfx.h bindings/lua_postfx.cpp
+    bindings/lua_audio.h bindings/lua_audio.cpp
     bindings/lua_imgui.h bindings/lua_imgui.cpp
     bindings/lua_replay.h bindings/lua_replay.cpp
     bindings/lua_memory.h bindings/lua_memory.cpp
@@ -76,6 +80,10 @@ target_link_libraries(urushi PRIVATE
     ole32
     winhttp
     bcrypt
+    xaudio2
+    mfplat
+    mfreadwrite
+    mfuuid
 )
 
 set_target_properties(urushi PROPERTIES

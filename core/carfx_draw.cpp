@@ -25,6 +25,14 @@ void ReleaseDepthCopy() {
 
 } // namespace Internal
 
+ID3D11ShaderResourceView* GetCurrentFrameDepthSRV() {
+    using namespace CarFX::Internal;
+    if (g_depthSrv && g_depthCopiedFrame == g_frameCounter.load(std::memory_order_relaxed)) {
+        return g_depthSrv;
+    }
+    return nullptr;
+}
+
 namespace {
 
 DXGI_FORMAT UntypelessColorFormat(DXGI_FORMAT fmt) {
@@ -866,7 +874,7 @@ bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, Draw
     context->PSGetShaderResources(kSceneSlot, kViewCount, saved.srvs);
     context->PSGetSamplers(14, 2, saved.samplers);
     const bool depthWrite = (mode != kDeclModeOverlay) && g_stealthDepthWrite.load(std::memory_order_relaxed) &&
-                            g_bodyDepthDs && matchedTarget == kTargetBody && ShouldHideCarInternals(matchedTarget);
+                            matchedTarget == kTargetBody && ShouldHideCarInternals(matchedTarget);
     if (mode == kDeclModeOverlay || depthWrite) {
         saved.restoreOm = true;
         context->OMGetBlendState(&saved.blend, saved.blendFactor, &saved.sampleMask);
@@ -884,16 +892,35 @@ bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, Draw
     };
     ID3D11SamplerState* samplers[2] = { g_samplerLinear, g_samplerPoint };
 
+    // Determine dynamic depth test function from the game's active state
+    // Unity DX11 uses Reversed-Z (GREATER_EQUAL). If game state has DepthEnable=FALSE, honor it.
+    ID3D11DepthStencilState* activeOverlayDs = g_overlayDs;
+    ID3D11DepthStencilState* activeBodyDs = g_bodyDepthDs;
+    if (saved.ds) {
+        D3D11_DEPTH_STENCIL_DESC curDsDesc{};
+        saved.ds->GetDesc(&curDsDesc);
+        if (!curDsDesc.DepthEnable) {
+            activeOverlayDs = g_noDepthDs;
+            activeBodyDs = g_noDepthDs;
+        } else {
+            const int func = static_cast<int>(curDsDesc.DepthFunc);
+            if (func >= 1 && func <= 8) {
+                if (g_overlayDsByFunc[func]) activeOverlayDs = g_overlayDsByFunc[func];
+                if (g_bodyDepthDsByFunc[func]) activeBodyDs = g_bodyDepthDsByFunc[func];
+            }
+        }
+    }
+
     context->PSSetShader(customPs, nullptr, 0);
     context->PSSetConstantBuffers(kCbSlot, 1, &g_cb);
     context->PSSetShaderResources(kSceneSlot, kViewCount, views);
     context->PSSetSamplers(14, 2, samplers);
     if (depthWrite) {
-        context->OMSetDepthStencilState(g_bodyDepthDs, saved.stencilRef);
+        if (activeBodyDs) context->OMSetDepthStencilState(activeBodyDs, saved.stencilRef);
     }
     if (mode == kDeclModeOverlay) {
         if (g_overlayBlend) context->OMSetBlendState(g_overlayBlend, nullptr, 0xFFFFFFFFu);
-        if (g_overlayDs) context->OMSetDepthStencilState(g_overlayDs, saved.stencilRef);
+        if (activeOverlayDs) context->OMSetDepthStencilState(activeOverlayDs, saved.stencilRef);
     }
 
     issueFn(issueCtx);
