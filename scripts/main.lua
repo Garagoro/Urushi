@@ -205,7 +205,6 @@ local FALLBACK_BUILTIN = {
     { id = "keybinds_mod",     ru = "Горячие клавиши",           en = "Keybinds & Controls",   default_enabled = true,  window_ids = { "keybinds" } },
     { id = "initiald_mod",     ru = "Initial D режим",           en = "Initial D Mode",        default_enabled = false, window_ids = { "initiald" } },
 }
-}
 
 for _, fb in ipairs(FALLBACK_BUILTIN) do
     if not seen_builtin[fb.id] then
