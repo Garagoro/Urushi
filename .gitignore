@@ -25,6 +25,7 @@ scratch/
 *.log
 *.cxr2
 scripts/*.json
+!scripts/manifest.json
 dist/*.pdb
 dist/*.map
 

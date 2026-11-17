@@ -20,4 +20,8 @@ CrashPolicy GetCrashPolicy();
 void SetCrashPolicy(CrashPolicy p);
 const char* CrashPolicyName(CrashPolicy p);
 
+// First-run experience: true only on a fresh install before the user completes welcome flow.
+bool IsFirstRun();
+void MarkFirstRunDone();
+
 } // namespace Settings

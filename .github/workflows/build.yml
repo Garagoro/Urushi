@@ -73,6 +73,10 @@ jobs:
 
           Write-Host "Staged dist/: link_time=$linkTime, version=$ver"
 
+      - name: Verify Script Manifest
+        shell: cmd
+        run: python tools/gen_script_manifest.py --check
+
       - name: Package Release ZIP
         shell: pwsh
         run: |
@@ -111,7 +115,7 @@ jobs:
           Copy-Item (Join-Path $root "LICENSE") $modioPkgDir -Force
           $modioScripts = Join-Path $modioPkgDir "scripts"
           New-Item -ItemType Directory -Force $modioScripts | Out-Null
-          @("main.lua", "i18n.lua", "config.lua", "keybinds.lua", "il2cpp.lua", "system_mod.lua") | ForEach-Object {
+          @("main.lua", "i18n.lua", "config.lua", "keybinds.lua", "il2cpp.lua", "system_mod.lua", "welcome.lua", "manifest.json") | ForEach-Object {
               Copy-Item (Join-Path (Join-Path $root "scripts") $_) $modioScripts -Force
           }
           $zipModio = Join-Path $root "Urushi-v$ver-modio.zip"

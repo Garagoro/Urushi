@@ -48,3 +48,33 @@ the SHA-256 checks only guarantee that files match the catalog; trust comes from
 ## Code
 `core/cloud_scripts.{h,cpp}` (catalog parser, installer, path/ID validation), `core/bindings/lua_cloud.cpp` (Lua module `cloud`),
 `scripts/main.lua` (loading + isolation), `scripts/system_mod.lua` (Library window: Downloaded tab = toggles, Cloud tab = catalog).
+
+---
+
+## Official Pack & Script Manifest Flow
+
+Minimal distributions (such as mod.io packages) ship only the core engine DLLs and core scripts (`main.lua`, `i18n.lua`, `config.lua`, `keybinds.lua`, `il2cpp.lua`, `system_mod.lua`, `welcome.lua`). The 8 official scripts and shaders are downloaded in-game through the welcome window or the Scripts window.
+
+### Manifest (`scripts/manifest.json`)
+The manifest is the single source of truth for official scripts and shaders:
+* `schema_version`: Manifest schema format version (currently `1`).
+* `core_version`: Minimum core version the manifest was generated for.
+* `scripts`: Array of official scripts with `id`, `path`, `sha256` (LF-normalized), `size`, `name`, `name_ru`, `description`, `description_ru`, `window_ids`, `min_core`, and `default_enabled`.
+* `shaders`: Array of official shader files with `path`, `sha256`, and `size`.
+
+### Download & Update Execution
+1. **Network request only on click**: Nothing is downloaded automatically in the background. The user must click the download or update button.
+2. **Explicit ref**: The download function passes an explicit ref parameter (`main`), never writing `[cloud] ref` as a global side effect.
+3. **Atomic staging**: Files are downloaded into temporary staging directories (`.stage_pack` or `.stage_upd`). Each file's LF-normalized SHA-256 hash is verified against `manifest.json`.
+4. **Atomic replacement**: `FileWatcher` is paused (`FileWatcher::SetPaused(true)`), files are moved into place using `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`, and exactly ONE reload is triggered via `LuaEngine::RequestReload()`. A failed download leaves existing files untouched.
+5. **No devDest overwrites**: Downloads write only to the active game installation; maintainer development checkouts are never overwritten.
+6. **Compatibility gate**: If an entry has a `min_core` newer than the running `URUSHI_VERSION`, the update is blocked, and the UI displays `"requires URUSHI v<version>"` instead of offering the download.
+
+### Maintainer steps: Updating the Manifest
+Whenever an official script or shader is added or updated in the repository:
+```bash
+python tools/gen_script_manifest.py         # regenerates scripts/manifest.json
+python tools/gen_script_manifest.py --check # verifies scripts/manifest.json (used in CI)
+git add scripts/manifest.json
+```
+The CI workflow `.github/workflows/build.yml` runs `gen_script_manifest.py --check` on every push/PR to ensure `scripts/manifest.json` is never stale.

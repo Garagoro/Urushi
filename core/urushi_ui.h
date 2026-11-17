@@ -174,6 +174,7 @@ public:
     static void ProgressBar(float fraction, float width = -1.0f, float height = 10.0f, const char* overlay = nullptr);
 
     static void Badge(const std::string& text, Tone tone = Tone::Accent);
+    static void RenderToast(const char* id, const char* badge, const char* message);
 
     struct ScriptRowItem {
         std::string id;
@@ -185,6 +186,8 @@ public:
         bool downloaded = false;
         bool downloading = false;
         bool hasUpdate = false;
+        bool disabled = false;
+        std::string tag;
     };
     static std::string ScriptRow(const ScriptRowItem& item);
 

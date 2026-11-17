@@ -23,6 +23,7 @@ local WINDOW_TITLES = {
     system        = { "Система",        "System" },
     library       = { "Скрипты",        "Scripts" },
     keybinds      = { "Горячие клавиши", "Keybinds" },
+    welcome       = { "Добро пожаловать", "Welcome" },
 }
 
 function i18n.sync_titles()

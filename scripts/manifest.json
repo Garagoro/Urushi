@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "core_version": "1.2.1",
+  "scripts": [
+    {
+      "id": "carfx_mod",
+      "path": "scripts/carfx_mod.lua",
+      "sha256": "81816192dd7844d4c5f0d989b6c72cebd5ab153e8ce4da4e13cd63d296f1d272",
+      "size": 22046,
+      "name": "CarFX Shaders",
+      "name_ru": "CarFX Шейдеры",
+      "description": "Custom body shaders, glass reflections, neon glow & tinting",
+      "description_ru": "Кастомные шейдеры кузова, стекол, неоновые эффекты, тонировка",
+      "window_ids": [
+        "carfx"
+      ],
+      "min_core": "1.2.1",
+      "default_enabled": true
+    },
+    {
+      "id": "keybinds_mod",
+      "path": "scripts/keybinds_mod.lua",
+      "sha256": "9dd2e2283f6258855c6155eeddb3bcb7a39db3c20e7071fd735256cb0ff6aade",
+      "size": 2383,
+      "name": "Keybinds & Controls",
+      "name_ru": "Горячие клавиши",
+      "description": "Rebind actions to keyboard keys and gamepad buttons (XInput)",
+      "description_ru": "Назначение кнопок клавиатуры и кнопок геймпада (XInput)",
+      "window_ids": [
+        "keybinds"
+      ],
+      "min_core": "1.2.1",
+      "default_enabled": true
+    },
+    {
+      "id": "perf_optimizer",
+      "path": "scripts/perf_optimizer.lua",
+      "sha256": "86819c131659341b8a17b61c98e882dcdbfe60ef5b646eda12ea40a51fd727d7",
+      "size": 8359,
+      "name": "FPS Optimizer",
+      "name_ru": "Оптимизатор FPS",
+      "description": "Physics solver optimization, component auto-sleep, FPS boost",
+      "description_ru": "Оптимизация физики симулятора, автослип узлов, буст FPS",
+      "window_ids": [
+        "perf"
+      ],
+      "min_core": "1.2.1",
+      "default_enabled": true
+    },
+    {
+      "id": "replay_mod",
+      "path": "scripts/replay_mod.lua",
+      "sha256": "e5ee4e4245ed5dd7dff940b308ce275425845a9dbad5f2c74597c600f6fc4f95",
+      "size": 33635,
+      "name": "Replays & Anti-Collision",
+      "name_ru": "Реплеи и Анти-встречка",
+      "description": "3D trajectory replay, ghost car and TTC anti-collision defense",
+      "description_ru": "3D реплеи, призрак траектории и защита от столкновений",
+      "window_ids": [
+        "replay",
+        "anticollision"
+      ],
+      "min_core": "1.2.1",
+      "default_enabled": true
+    },
+    {
+      "id": "steer_assist_mod",
+      "path": "scripts/steer_assist_mod.lua",
+      "sha256": "2aeaae898edfc444651edffb6c3d7b982f52fcd83baa824f08ebe531a6598874",
+      "size": 18953,
+      "name": "Steering Assist (155°)",
+      "name_ru": "Помощь руля (155°)",
+      "description": "Smart wheel angle assist for deep drift angles up to 155°",
+      "description_ru": "Умная коррекция выворота колес под угол заноса до 155°",
+      "window_ids": [
+        "steer_assist"
+      ],
+      "min_core": "1.2.1",
+      "default_enabled": false
+    },
+    {
+      "id": "telemetry_hud",
+      "path": "scripts/telemetry_hud.lua",
+      "sha256": "72e997b464e67cbf772ace398098c0e276b5ce0904c447ea2371262e94fa3593",
+      "size": 1929,
+      "name": "Telemetry HUD",
+      "name_ru": "Телеметрия HUD",
+      "description": "Compact on-screen HUD: speed, drift angle, RPM, FPS & ping",
+      "description_ru": "Наэкранный оверлей: скорость, угол заноса, RPM, FPS и сеть",
+      "window_ids": [
+        "hud",
+        "fps_net"
+      ],
+      "min_core": "1.2.1",
+      "default_enabled": true
+    },
+    {
+      "id": "teleport_mod",
+      "path": "scripts/teleport_mod.lua",
+      "sha256": "3e00ae924244208e3c5d935a68b70f9c9c7f29813a20a8cea857a8f3b6d5a3e9",
+      "size": 25186,
+      "name": "Checkpoint Teleport",
+      "name_ru": "Телепорт по точкам",
+      "description": "Quick save & instant teleport to checkpoints on any track",
+      "description_ru": "Быстрое сохранение и мгновенный телепорт по точкам трека",
+      "window_ids": [
+        "teleport"
+      ],
+      "min_core": "1.2.1",
+      "default_enabled": true
+    },
+    {
+      "id": "tires_mod",
+      "path": "scripts/tires_mod.lua",
+      "sha256": "087e04eeaa6fe01831499621b86d66120e82a561721d7238611fe2141e42b042",
+      "size": 15925,
+      "name": "Body & Tires",
+      "name_ru": "Кузов и шины",
+      "description": "Dense tire smoke, infinite tire wear, pressure and visual damage",
+      "description_ru": "Густой дым, блокировка износа шин, давление и деформация",
+      "window_ids": [
+        "tires"
+      ],
+      "min_core": "1.2.1",
+      "default_enabled": false
+    }
+  ],
+  "shaders": [
+    {
+      "path": "shaders/carfx.hlsli",
+      "sha256": "ee0eec4d51b560e20903eb1413f1ed676a0ba64f971e442595af93f581ef3f2c",
+      "size": 12871
+    },
+    {
+      "path": "shaders/internals_neon.hlsl",
+      "sha256": "6f1e6912ea0ee66aa77b5e7bed4cc78aec9ce94747208d53a04be5348faf6133",
+      "size": 595
+    },
+    {
+      "path": "shaders/livery_aurora_fluid.hlsl",
+      "sha256": "6243261405d6fb15a0b600e7a62379ded483163e104e9e659f646f6f8684ad54",
+      "size": 2954
+    },
+    {
+      "path": "shaders/livery_chrome.hlsl",
+      "sha256": "fd1875562b3818307e6138f72c15e93b0e6b5787f48d831812360b1f6bbdbbef",
+      "size": 1703
+    },
+    {
+      "path": "shaders/livery_cyber_pulse.hlsl",
+      "sha256": "dd1aac4358b55f362005359a6437cfd64a79d4ab29a363852b0cbcb6a05dc1f7",
+      "size": 5311
+    },
+    {
+      "path": "shaders/livery_glass.hlsl",
+      "sha256": "ffdeb2a6707c3a0b04947b801665b56857a2acf983b7f306b8d311a60659d83a",
+      "size": 4184
+    },
+    {
+      "path": "shaders/livery_glow_overlay.hlsl",
+      "sha256": "c676323b8804554e79f33c159a2550602cd125e5c8a3c43a284a8ab8b068c124",
+      "size": 1643
+    },
+    {
+      "path": "shaders/livery_holo.hlsl",
+      "sha256": "ea453d5b674a84e5979c894f305c7b553d237f37aa21a87bc03bafbdfdd521b3",
+      "size": 1408
+    },
+    {
+      "path": "shaders/livery_proximity_reactive.hlsl",
+      "sha256": "df5122b233748640e89f9366e67a3b93fbf6c6e3146010dcc03c443831933ecc",
+      "size": 8699
+    },
+    {
+      "path": "shaders/livery_refract.hlsl",
+      "sha256": "a89b7de426bf84fdcec204d0eca01840372c0158aec83086048d3f3e8e4ef822",
+      "size": 1122
+    },
+    {
+      "path": "shaders/livery_tandem_angle.hlsl",
+      "sha256": "ba585040b00fa6a16db9ccb64a3dee3a0b45e7fa279f395ab42a7d7e7325fa10",
+      "size": 7062
+    },
+    {
+      "path": "shaders/livery_wall_tap.hlsl",
+      "sha256": "95b3bb8055dbe18ff9ff0826fa91a99e671a188a54186161d40bed33f26a1e70",
+      "size": 8386
+    }
+  ]
+}

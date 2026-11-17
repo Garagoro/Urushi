@@ -175,24 +175,31 @@ end
 -- Enabled flags are stored in urushi_settings.ini ([scripts] section).
 urushi_scripts = { list = {}, dirty = false, cloud_loaded = {} }
 
-local BUILTIN = {
-    { id = "telemetry_hud",    ru = "Телеметрия (HUD)",          en = "Telemetry HUD" },
-    { id = "teleport_mod",     ru = "Телепорт по точкам",        en = "Checkpoint Teleport" },
-    { id = "replay_mod",       ru = "Реплеи",                    en = "Replays" },
-    { id = "carfx_mod",        ru = "CarFX шейдеры",             en = "CarFX Shaders" },
-    { id = "steer_assist_mod", ru = "Помощь руля (155°)",        en = "Steering Assist (155°)" },
-    { id = "tires_mod",        ru = "Кузов и шины",              en = "Body & Tires" },
-    { id = "perf_optimizer",   ru = "Оптимизатор FPS",           en = "FPS Optimizer" },
-    { id = "keybinds_mod",     ru = "Горячие клавиши",           en = "Keybinds & Controls" },
-}
+local manifest = (urushi.get_manifest and urushi.get_manifest()) or (cloud and cloud.get_manifest and cloud.get_manifest())
+local BUILTIN = {}
+if manifest and manifest.scripts then
+    for _, s in ipairs(manifest.scripts) do
+        table.insert(BUILTIN, {
+            id = s.id,
+            ru = s.name_ru or s.name,
+            en = s.name,
+            default_enabled = (s.default_enabled == true),
+            min_core = s.min_core,
+            window_ids = s.window_ids or {},
+        })
+    end
+end
 
 -- Files that are part of the framework and never listed as user scripts
-local RESERVED = { main = true, i18n = true, config = true, keybinds = true, il2cpp = true, system_mod = true }
+local RESERVED = { main = true, i18n = true, config = true, keybinds = true, il2cpp = true, system_mod = true, welcome = true }
 for _, b in ipairs(BUILTIN) do RESERVED[b.id] = true end
 
-local function enabled_flag(id, default)
-    local v = urushi.get_setting("scripts", id, default and "1" or "0")
-    return v ~= "0"
+local function enabled_flag(id, default_val)
+    local v = urushi.get_setting("scripts", id, "")
+    if v ~= "" then
+        return v == "1"
+    end
+    return default_val == true
 end
 
 local function load_entry(e)
@@ -252,7 +259,7 @@ end
 
 for _, b in ipairs(BUILTIN) do
     if available_files[b.id] then
-        local e = { id = b.id, ru = b.ru, en = b.en, user = false, enabled = enabled_flag(b.id, true) }
+        local e = { id = b.id, ru = b.ru, en = b.en, user = false, enabled = enabled_flag(b.id, b.default_enabled) }
         table.insert(urushi_scripts.list, e)
         load_entry(e)
     end
@@ -281,8 +288,8 @@ if cloud and cloud.installed then
     end
 end
 
--- System window (hosts the Scripts / Stability cards). The dev runner is a code-execution channel: opt-in only.
-local core = { "system_mod" }
+-- System window (hosts the Scripts / Stability cards) and Welcome window (first run).
+local core = { "system_mod", "welcome" }
 if urushi.get_setting("dev", "runner", "0") == "1" then table.insert(core, "runner") end
 for _, id in ipairs(core) do
     local ok, err = urushi.load_script(id)

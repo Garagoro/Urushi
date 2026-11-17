@@ -2,7 +2,7 @@
 
 URUSHI embeds a **Lua 5.4** runtime inside **CarX Drift Racing Online 2**. It exposes game telemetry, physics controls, custom UI widgets, gamepad/keyboard polling, and CarFX shader parameters directly to Lua scripts.
 
-All scripts live inside the `scripts/` directory. The main entry point is [`scripts/main.lua`](../scripts/main.lua), which loads individual modules via `dofile()`.
+All scripts live inside the `scripts/` directory. The main entry point is [`scripts/main.lua`](../scripts/main.lua), which discovers installed modules and loads them in their respective security tier.
 
 > **Hot-Reload:** You can reload all Lua scripts live in-game by pressing **`Ctrl + F11`** or clicking **Reload Lua** in the URUSHI **System** window.
 
@@ -16,9 +16,14 @@ All scripts live inside the `scripts/` directory. The main entry point is [`scri
 5. [`input` Module — Keys & Gamepad](#5-input-module--keys--gamepad)
 6. [`carfx` Module — Shader Control](#6-carfx-module--shader-control)
 7. [`optimizer` Module — Multiplayer Performance](#7-optimizer-module--multiplayer-performance)
-8. [`steer_assist` Module — Steering Fixes](#8-steer_assist-module--steering-fixes)
+8. [`steer_assist` Module — Steering Fixes](#8-steer_assist-module--steering-fixes-pure-lua-scriptssteer_assist_modlua)
 9. [`replay` Module — 3D Replay & Ghost](#9-replay-module--3d-replay--ghost)
-10. [Example: Creating a Custom Mod](#10-example-creating-a-custom-mod)
+10. [`il2cpp` & `unity` — Dynamic Reflection & AI Inspection](#10-il2cpp--unity--dynamic-reflection--ai-inspection)
+11. [Example: Creating a Custom Mod](#11-example-creating-a-custom-mod)
+12. [Embedded Reverse-Engineering & Disassembly (`disasm`)](#12-embedded-reverse-engineering--disassembly-disasm)
+13. [Memory Pattern Scanner (`pattern`)](#13-memory-pattern-scanner-pattern)
+14. [In-Memory HLSL Shader Compilation (`carfx.compile`)](#14-in-memory-hlsl-shader-compilation-carfxcompile)
+15. [Memory Patching & Unity IL2CPP Reflection](#15-memory-patching--unity-il2cpp-reflection)
 
 ---
 
@@ -26,8 +31,7 @@ All scripts live inside the `scripts/` directory. The main entry point is [`scri
 
 To add your own script:
 1. Create a new `.lua` file inside `scripts/`, e.g. `scripts/my_mod.lua`.
-2. Add `dofile("scripts/my_mod.lua")` to `scripts/main.lua`.
-3. Press `Ctrl + F11` in-game to load your changes instantly without restarting the game.
+2. Open the **Scripts** (`library`) window in-game and click **Load** to enable it (or press `Ctrl + F11` to reload). User scripts run automatically in the isolated sandbox tier without modifying `main.lua`.
 
 Logging helpers:
 ```lua
@@ -162,6 +166,11 @@ Currently persisted by the core UI: language, accent (+custom colour), UI scale.
 
 | Function | Description |
 | :--- | :--- |
+| `urushi.version` | String representing current URUSHI version (e.g. `"1.2.1"`). |
+| `urushi.get_manifest()` | Returns parsed `scripts/manifest.json` table `{ schema_version, core_version, scripts = {...}, shaders = {...} }`. |
+| `urushi.get_system_language()` | Detects Windows UI language (`"ru"` for RU/UA/BY/KZ, `"en"` otherwise). |
+| `urushi.is_first_run()` | Returns `true` on initial launch before the welcome flow has been completed. |
+| `urushi.mark_first_run_done()` | Sets `[core] first_run_done=1` in `urushi_settings.ini`. |
 | `urushi.get_setting(section, key, default)` | Read a string from `urushi_settings.ini`. |
 | `urushi.set_setting(section, key, value)` | Write a string (booleans are stored as `"1"`/`"0"`). |
 | `urushi.list_scripts()` | Names (without `.lua`) of all files in `scripts/`. |
@@ -172,6 +181,16 @@ Currently persisted by the core UI: language, accent (+custom colour), UI scale.
 | `urushi.is_safe_mode()` | `true` while features are off (scripts normally never see this: Lua does not run in Safe mode). |
 
 Every callback is executed under a wall-clock budget (250 ms; script load 8 s). Endless loops raise `script timeout`; a callback that errors 25 times in a row is unregistered. See [ARCHITECTURE.md](ARCHITECTURE.md).
+
+### Cloud & Updates (`cloud.*`)
+
+Available to trusted core scripts (`system_mod.lua`, `welcome.lua`):
+* `cloud.get_pack_download_status()`: Returns download progress table:
+  `{ downloading = bool, completed = bool, success = bool, error = string, total_files = int, downloaded_files = int, total_bytes = number, downloaded_bytes = number, current_file = string }`.
+* `cloud.get_manifest()`: Returns parsed local `scripts/manifest.json`.
+* `cloud.download_pack()`: Initiates asynchronous official script & shader pack installation from GitHub.
+* `cloud.check_script_updates()`: Checks for official script updates against GitHub.
+* `cloud.update_script(id)`: Updates a single official script.
 
 ## 4. `ui` Module — Component Library
 
@@ -345,11 +364,11 @@ urushi.register_window({
 })
 ```
 
-Drop the file into `scripts/` (e.g. `scripts/drift_sound_mod.lua`). It shows up in *the *Library* window*, disabled by default; enable it and press "Reload scripts" (or `Ctrl + F11`). Built-in modules are listed in `BUILTIN` inside `scripts/main.lua`.
+Drop the file into `scripts/` (e.g. `scripts/drift_sound_mod.lua`). It shows up in *the *Library* window*, disabled by default; enable it and press "Reload scripts" (or `Ctrl + F11`). Official modules are defined in `scripts/manifest.json` and generated via `tools/gen_script_manifest.py`.
 
 ---
 
-## 8. Embedded Reverse-Engineering & Disassembly (`disasm`)
+## 12. Embedded Reverse-Engineering & Disassembly (`disasm`)
 
 URUSHI embeds the high-performance **Zydis x86_64 Disassembler**, allowing modders and AI agents to disassemble native functions, generate IDA signatures, resolve RIP targets, and patch instructions without external tools.
 
@@ -397,7 +416,7 @@ Decodes 1 instruction and calculates its absolute RIP-relative target.
 
 ---
 
-## 9. Memory Pattern Scanner (`pattern`)
+## 13. Memory Pattern Scanner (`pattern`)
 
 Scans all executable PE sections (`.text`, `il2cpp`, etc.) across game modules.
 
@@ -422,7 +441,7 @@ Scans all executable PE sections (`.text`, `il2cpp`, etc.) across game modules.
 
 ---
 
-## 10. In-Memory HLSL Shader Compilation (`carfx.compile`)
+## 14. In-Memory HLSL Shader Compilation (`carfx.compile`)
 
 Compile custom DirectX 11 Pixel Shaders directly from Lua strings at runtime without writing files to disk.
 
@@ -446,7 +465,7 @@ Compile custom DirectX 11 Pixel Shaders directly from Lua strings at runtime wit
 
 ---
 
-## 11. Memory Patching & Unity IL2CPP Reflection
+## 15. Memory Patching & Unity IL2CPP Reflection
 
 ### `memory.write_bytes(address, hex_string_or_table)`
 Writes raw bytes to memory with automatic `VirtualProtect` (PAGE_EXECUTE_READWRITE) and instruction cache flush.

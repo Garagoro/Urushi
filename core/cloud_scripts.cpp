@@ -2,6 +2,8 @@
 #include "logger.h"
 #include "settings.h"
 #include "updater.h"   // URUSHI_VERSION
+#include "file_watcher.h"
+#include "lua_engine.h"
 
 #include <winhttp.h>
 #include <bcrypt.h>
@@ -160,6 +162,17 @@ std::string StrField(const JVal& o, const char* k) {
     return (v && v->t == JVal::Str) ? v->s : std::string();
 }
 
+bool NumField(const JVal& o, const char* k, double& out) {
+    const JVal* v = o.get(k);
+    if (v && v->t == JVal::Num) { out = v->n; return true; }
+    return false;
+}
+
+bool BoolField(const JVal& o, const char* k, bool def) {
+    const JVal* v = o.get(k);
+    return (v && v->t == JVal::Bool) ? v->b : def;
+}
+
 // ------------------------------------------------------------------ helpers
 std::wstring Widen(const std::string& s) {
     if (s.empty()) return L"";
@@ -223,10 +236,13 @@ struct WinHandle {
     ~WinHandle() { if (h) WinHttpCloseHandle(h); }
 };
 
-bool RealFetch(const std::string& repoRelPath, uint64_t maxBytes, std::vector<uint8_t>& out, DWORD& status) {
+bool RealFetch(const std::string& repoRelPath, uint64_t maxBytes, std::vector<uint8_t>& out, DWORD& status, const std::string& refOverride = "") {
     out.clear();
     status = 0;
-    std::string ref = Settings::GetString("cloud", "ref", kDefaultRef);
+    std::string ref = refOverride;
+    if (ref.empty()) {
+        ref = Settings::GetString("cloud", "ref", kDefaultRef);
+    }
     if (ref.empty() || ref.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") != std::string::npos) {
         ref = kDefaultRef;
     }
@@ -265,8 +281,8 @@ bool RealFetch(const std::string& repoRelPath, uint64_t maxBytes, std::vector<ui
     return true;
 }
 
-bool Fetch(const std::string& rel, uint64_t maxBytes, std::vector<uint8_t>& out, DWORD& status) {
-    return (g_fetchOverride ? g_fetchOverride : RealFetch)(rel, maxBytes, out, status);
+bool Fetch(const std::string& rel, uint64_t maxBytes, std::vector<uint8_t>& out, DWORD& status, const std::string& ref = "") {
+    return (g_fetchOverride ? g_fetchOverride(rel, maxBytes, out, status, ref) : RealFetch(rel, maxBytes, out, status, ref));
 }
 
 std::string HttpErr(DWORD status) {
@@ -619,9 +635,135 @@ Snapshot GetSnapshot() {
     return s;
 }
 
-// ------------------------------------------------------------------ Script Updates for local scripts
+// ------------------------------------------------------------------ Script Manifest & Atomic Updates
 static std::map<std::string, ScriptUpdateItem> g_scriptUpdates;
 static std::atomic<bool> g_scriptChecking{ false };
+static PackDownloadStatus g_packStatus;
+
+static std::string NormalizeLf(const std::vector<uint8_t>& bytes) {
+    std::string s;
+    s.reserve(bytes.size());
+    for (size_t i = 0; i < bytes.size(); ++i) {
+        if (bytes[i] == '\r') {
+            if (i + 1 < bytes.size() && bytes[i + 1] == '\n') continue;
+            s.push_back('\n');
+        } else {
+            s.push_back(static_cast<char>(bytes[i]));
+        }
+    }
+    return s;
+}
+
+static std::string NormalizeLf(const std::string& str) {
+    std::string s;
+    s.reserve(str.size());
+    for (size_t i = 0; i < str.size(); ++i) {
+        if (str[i] == '\r') {
+            if (i + 1 < str.size() && str[i + 1] == '\n') continue;
+            s.push_back('\n');
+        } else {
+            s.push_back(str[i]);
+        }
+    }
+    return s;
+}
+
+bool ParseScriptManifest(const std::string& json, ScriptManifest& out, std::string& err) {
+    out.scripts.clear();
+    out.shaders.clear();
+    JParser p(json);
+    JVal root;
+    if (!p.val(root, 0) || root.t != JVal::Obj) { err = "manifest.json is not valid JSON"; return false; }
+
+    double ver = 1;
+    NumField(root, "schema_version", ver);
+    out.schemaVersion = static_cast<int>(ver);
+    out.coreVersion = StrField(root, "core_version");
+
+    const JVal* scripts = root.get("scripts");
+    if (scripts && scripts->t == JVal::Arr) {
+        for (const JVal& s : scripts->a) {
+            if (s.t != JVal::Obj) continue;
+            ManifestScript ms;
+            ms.id = StrField(s, "id");
+            ms.path = StrField(s, "path");
+            ms.sha256 = StrField(s, "sha256");
+            for (char& c : ms.sha256) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+            double sz = 0;
+            NumField(s, "size", sz);
+            ms.size = static_cast<uint64_t>(sz);
+            ms.name = StrField(s, "name");
+            ms.nameRu = StrField(s, "name_ru");
+            ms.description = StrField(s, "description");
+            ms.descriptionRu = StrField(s, "description_ru");
+            ms.minCore = StrField(s, "min_core");
+            ms.defaultEnabled = BoolField(s, "default_enabled", true);
+
+            const JVal* wins = s.get("window_ids");
+            if (wins && wins->t == JVal::Arr) {
+                for (const JVal& w : wins->a) {
+                    if (w.t == JVal::Str) ms.windowIds.push_back(w.s);
+                }
+            }
+            if (!ms.id.empty() && !ms.path.empty() && ms.sha256.size() == 64) {
+                out.scripts.push_back(std::move(ms));
+            }
+        }
+    }
+
+    const JVal* shaders = root.get("shaders");
+    if (shaders && shaders->t == JVal::Arr) {
+        for (const JVal& sh : shaders->a) {
+            if (sh.t != JVal::Obj) continue;
+            ManifestShader msh;
+            msh.path = StrField(sh, "path");
+            msh.sha256 = StrField(sh, "sha256");
+            for (char& c : msh.sha256) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+            double sz = 0;
+            NumField(sh, "size", sz);
+            msh.size = static_cast<uint64_t>(sz);
+            if (!msh.path.empty() && msh.sha256.size() == 64) {
+                out.shaders.push_back(std::move(msh));
+            }
+        }
+    }
+    return true;
+}
+
+bool LoadLocalManifest(ScriptManifest& out) {
+    std::wstring path = g_exeDir + L"\\scripts\\manifest.json";
+    std::ifstream in(path, std::ios::binary);
+    if (!in.is_open()) return false;
+    std::string json((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::string err;
+    return ParseScriptManifest(json, out, err);
+}
+
+static bool FetchRemoteManifest(ScriptManifest& out, std::string& outJson, std::string& outRef) {
+    std::vector<uint8_t> data;
+    DWORD status = 0;
+    std::string tagRef = std::string("v") + Updater::GetVersion();
+
+    // 1. Try tag v<version>
+    bool ok = Fetch("scripts/manifest.json", kMaxCatalogBytes, data, status, tagRef);
+    if (ok && status == 200) {
+        outRef = tagRef;
+    } else {
+        // 2. Fallback to main
+        data.clear();
+        status = 0;
+        ok = Fetch("scripts/manifest.json", kMaxCatalogBytes, data, status, "main");
+        if (ok && status == 200) {
+            outRef = "main";
+        } else {
+            return false;
+        }
+    }
+
+    outJson.assign(reinterpret_cast<const char*>(data.data()), data.size());
+    std::string err;
+    return ParseScriptManifest(outJson, out, err);
+}
 
 bool IsScriptIgnored(const std::string& scriptId) {
     return Settings::GetString("scripts_ignore_update", scriptId, "0") == "1";
@@ -640,178 +782,324 @@ void SetScriptIgnored(const std::string& scriptId, bool ignored) {
 void CheckScriptUpdatesAsync(const std::string& singleScript) {
     if (g_scriptChecking.exchange(true)) return;
     std::thread([exeDir = g_exeDir, singleScript]() {
-        std::wstring scriptsDir = exeDir + L"\\scripts";
-        std::vector<std::string> names;
-        if (!singleScript.empty()) {
-            names.push_back(singleScript);
-        } else {
-            WIN32_FIND_DATAW fd;
-            HANDLE h = FindFirstFileW((scriptsDir + L"\\*.lua").c_str(), &fd);
-            if (h != INVALID_HANDLE_VALUE) {
-                do {
-                    if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-                        std::string fn = Logger::ToNarrow(fd.cFileName);
-                        if (fn.size() > 4 && fn.substr(fn.size() - 4) == ".lua") {
-                            names.push_back(fn.substr(0, fn.size() - 4));
-                        }
-                    }
-                } while (FindNextFileW(h, &fd));
-                FindClose(h);
+        ScriptManifest manifest;
+        std::string manifestJson;
+        std::string manifestRef;
+        bool hasRemote = FetchRemoteManifest(manifest, manifestJson, manifestRef);
+        if (!hasRemote) {
+            if (!LoadLocalManifest(manifest)) {
+                std::lock_guard<std::mutex> lk(g_mtx);
+                if (!singleScript.empty()) {
+                    g_scriptUpdates[singleScript] = { singleScript, "error", "No connection to GitHub" };
+                }
+                g_scriptChecking = false;
+                return;
             }
+        } else if (!manifestJson.empty()) {
+            std::wstring mfDst = exeDir + L"\\scripts\\manifest.json";
+            std::ofstream mfOut(mfDst, std::ios::binary | std::ios::trunc);
+            if (mfOut.is_open()) {
+                mfOut.write(manifestJson.data(), manifestJson.size());
+            }
+        }
+
+        std::wstring scriptsDir = exeDir + L"\\scripts";
+        std::vector<ManifestScript> targetScripts;
+        if (!singleScript.empty()) {
+            for (const auto& s : manifest.scripts) {
+                if (s.id == singleScript) { targetScripts.push_back(s); break; }
+            }
+        } else {
+            targetScripts = manifest.scripts;
         }
 
         {
             std::lock_guard<std::mutex> lk(g_mtx);
-            for (const auto& name : names) {
-                if (IsScriptIgnored(name)) {
-                    g_scriptUpdates[name] = { name, "ignored", "" };
+            for (const auto& s : targetScripts) {
+                if (IsScriptIgnored(s.id)) {
+                    g_scriptUpdates[s.id] = { s.id, "ignored", "" };
                 } else {
-                    g_scriptUpdates[name] = { name, "checking", "" };
+                    g_scriptUpdates[s.id] = { s.id, "checking", "" };
                 }
             }
         }
 
-        for (const auto& name : names) {
+        for (const auto& s : targetScripts) {
             if (g_stop.load(std::memory_order_acquire)) break;
-            if (IsScriptIgnored(name)) continue;
+            if (IsScriptIgnored(s.id)) continue;
 
-            std::string localContent;
-            std::ifstream in(scriptsDir + L"\\" + Logger::ToWide(name) + L".lua", std::ios::binary);
-            if (in.is_open()) {
-                localContent.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            if (!VersionAtLeast(Updater::GetVersion(), s.minCore)) {
+                std::lock_guard<std::mutex> lk(g_mtx);
+                g_scriptUpdates[s.id] = { s.id, "incompatible", "requires URUSHI v" + s.minCore };
+                continue;
             }
 
-            std::vector<uint8_t> remoteBytes;
-            DWORD status = 0;
-            const std::string repoPath = "scripts/" + name + ".lua";
-            std::string oldRef = Settings::GetString("cloud", "ref", kDefaultRef);
-            Settings::SetString("cloud", "ref", "main");
-            bool ok = Fetch(repoPath, kMaxFileBytes, remoteBytes, status);
-            Settings::SetString("cloud", "ref", oldRef);
+            std::wstring localPath = scriptsDir + L"\\" + Logger::ToWide(s.id) + L".lua";
+            std::ifstream in(localPath, std::ios::binary);
+            if (!in.is_open()) {
+                std::lock_guard<std::mutex> lk(g_mtx);
+                g_scriptUpdates[s.id] = { s.id, "not_downloaded", "" };
+                continue;
+            }
+
+            std::string localContent((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            std::string localNorm = NormalizeLf(localContent);
+            std::string localHash = Sha256Hex(reinterpret_cast<const uint8_t*>(localNorm.data()), localNorm.size());
+            std::string lastInstalledHash = Settings::GetString("script_hashes", s.id, "");
 
             std::lock_guard<std::mutex> lk(g_mtx);
-            if (status == 404) {
-                g_scriptUpdates[name] = { name, "custom", "" };
-            } else if (ok && status == 200) {
-                std::string remoteStr(remoteBytes.begin(), remoteBytes.end());
-                auto normalize = [](std::string s) {
-                    s.erase(std::remove(s.begin(), s.end(), '\r'), s.end());
-                    return s;
-                };
-                std::string normLocal = normalize(localContent);
-                std::string normRemote = normalize(remoteStr);
-                std::string remoteHash = Sha256Hex(reinterpret_cast<const uint8_t*>(normRemote.data()), normRemote.size());
-                std::string localHash = Sha256Hex(reinterpret_cast<const uint8_t*>(normLocal.data()), normLocal.size());
-                std::string lastInstalledHash = Settings::GetString("script_hashes", name, "");
-
-                if (normLocal == normRemote) {
-                    if (lastInstalledHash.empty()) {
-                        Settings::SetString("script_hashes", name, localHash);
-                    }
-                    g_scriptUpdates[name] = { name, "up_to_date", "" };
-                } else {
-                    // Hashes differ: check if the user modified the script locally
-                    if (!lastInstalledHash.empty() && localHash != lastInstalledHash) {
-                        // User modified the file locally - do not notify or nag with update_available!
-                        g_scriptUpdates[name] = { name, "user_modified", "" };
-                    } else {
-                        // Official update from GitHub!
-                        g_scriptUpdates[name] = { name, "update_available", "" };
-                    }
+            if (localHash == s.sha256) {
+                if (lastInstalledHash.empty()) {
+                    Settings::SetString("script_hashes", s.id, localHash);
                 }
+                g_scriptUpdates[s.id] = { s.id, "up_to_date", "" };
             } else {
-                g_scriptUpdates[name] = { name, "error", HttpErr(status) };
+                if (!lastInstalledHash.empty() && localHash != lastInstalledHash) {
+                    g_scriptUpdates[s.id] = { s.id, "user_modified", "" };
+                } else {
+                    g_scriptUpdates[s.id] = { s.id, "update_available", "" };
+                }
             }
         }
         g_scriptChecking = false;
     }).detach();
 }
 
-static std::atomic<bool> g_packDownloading{ false };
-
 bool IsPackDownloading() {
-    return g_packDownloading.load(std::memory_order_acquire);
+    std::lock_guard<std::mutex> lk(g_mtx);
+    return g_packStatus.downloading;
+}
+
+PackDownloadStatus GetPackDownloadStatus() {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    return g_packStatus;
 }
 
 void DownloadPackAsync(std::function<void(bool ok)> onDone) {
-    if (g_packDownloading.exchange(true, std::memory_order_acq_rel)) return;
+    {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        if (g_packStatus.downloading) return;
+        g_packStatus = PackDownloadStatus{};
+        g_packStatus.downloading = true;
+    }
 
     std::thread([exeDir = g_exeDir, onDone]() {
         Logger::Info("DownloadPackAsync: Starting official script & shader pack download...");
-        const char* officialScripts[] = {
-            "carfx_mod", "perf_optimizer", "replay_mod", "steer_assist_mod",
-            "tires_mod", "teleport_mod", "telemetry_hud", "keybinds_mod"
-        };
-        const char* shaders[] = {
-            "carfx.hlsli", "livery_chrome.hlsl", "livery_glass.hlsl", "livery_refract.hlsl",
-            "livery_aurora_fluid.hlsl", "livery_cyber_pulse.hlsl", "livery_glow_overlay.hlsl",
-            "livery_holo.hlsl", "livery_proximity_reactive.hlsl", "livery_tandem_angle.hlsl",
-            "livery_wall_tap.hlsl", "internals_neon.hlsl"
-        };
 
-        std::wstring scDir = exeDir + L"\\scripts";
-        CreateDirectoryW(scDir.c_str(), nullptr);
-        std::wstring shDir = exeDir + L"\\shaders";
-        CreateDirectoryW(shDir.c_str(), nullptr);
+        ScriptManifest manifest;
+        std::string manifestJson;
+        std::string manifestRef;
+        if (!FetchRemoteManifest(manifest, manifestJson, manifestRef)) {
+            if (!LoadLocalManifest(manifest)) {
+                std::lock_guard<std::mutex> lk(g_mtx);
+                g_packStatus.downloading = false;
+                g_packStatus.completed = true;
+                g_packStatus.success = false;
+                g_packStatus.error = "Failed to fetch manifest from GitHub";
+                Logger::Error("DownloadPackAsync: " + g_packStatus.error);
+                if (onDone) onDone(false);
+                return;
+            }
+            manifestRef = "main";
+        }
+
+        std::vector<ManifestScript> eligibleScripts;
+        for (const auto& s : manifest.scripts) {
+            if (VersionAtLeast(Updater::GetVersion(), s.minCore)) {
+                eligibleScripts.push_back(s);
+            } else {
+                Logger::Warn("DownloadPackAsync: Skipping script " + s.id + " (requires URUSHI v" + s.minCore + ")");
+            }
+        }
+
+        const uint32_t totalFiles = static_cast<uint32_t>(eligibleScripts.size() + manifest.shaders.size());
+        uint64_t totalBytes = 0;
+        for (const auto& s : eligibleScripts) totalBytes += s.size;
+        for (const auto& sh : manifest.shaders) totalBytes += sh.size;
+
+        {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            g_packStatus.totalFiles = totalFiles;
+            g_packStatus.totalBytes = totalBytes;
+        }
+
+        std::wstring scStage = exeDir + L"\\scripts\\.stage_pack";
+        std::wstring shStage = exeDir + L"\\shaders\\.stage_pack";
+        auto cleanupStage = [&]() {
+            DeleteTree(scStage);
+            DeleteTree(shStage);
+        };
+        cleanupStage();
+        EnsureDirs(scStage);
+        EnsureDirs(shStage);
 
         bool allOk = true;
-        for (const char* scriptId : officialScripts) {
+        std::string failErr;
+
+        // 1. Download & verify scripts into staging
+        for (const auto& script : eligibleScripts) {
+            if (g_stop.load(std::memory_order_acquire)) {
+                cleanupStage();
+                allOk = false;
+                failErr = "Cancelled";
+                break;
+            }
+            {
+                std::lock_guard<std::mutex> lk(g_mtx);
+                g_packStatus.currentFile = script.id + ".lua";
+            }
+
             std::vector<uint8_t> remoteBytes;
             DWORD status = 0;
-            const std::string repoPath = std::string("scripts/") + scriptId + ".lua";
-            std::string oldRef = Settings::GetString("cloud", "ref", kDefaultRef);
-            Settings::SetString("cloud", "ref", "main");
-            bool ok = Fetch(repoPath, kMaxFileBytes, remoteBytes, status);
-            Settings::SetString("cloud", "ref", oldRef);
+            if (!Fetch(script.path, kMaxFileBytes, remoteBytes, status, manifestRef) || status != 200) {
+                cleanupStage();
+                allOk = false;
+                failErr = "Download failed for " + script.path + ": " + HttpErr(status);
+                break;
+            }
 
-            if (ok && status == 200) {
-                std::wstring dest = scDir + L"\\" + Logger::ToWide(scriptId) + L".lua";
-                std::ofstream out(dest, std::ios::binary);
-                if (out.is_open()) {
-                    out.write(reinterpret_cast<const char*>(remoteBytes.data()), remoteBytes.size());
-                    out.close();
-                }
-                std::wstring devDest = exeDir + L"\\Urushi\\scripts\\" + Logger::ToWide(scriptId) + L".lua";
-                if (GetFileAttributesW(devDest.c_str()) != INVALID_FILE_ATTRIBUTES) {
-                    std::ofstream devOut(devDest, std::ios::binary);
-                    if (devOut.is_open()) {
-                        devOut.write(reinterpret_cast<const char*>(remoteBytes.data()), remoteBytes.size());
-                        devOut.close();
-                    }
-                }
+            std::string norm = NormalizeLf(remoteBytes);
+            std::string hash = Sha256Hex(reinterpret_cast<const uint8_t*>(norm.data()), norm.size());
+            if (hash != script.sha256) {
+                cleanupStage();
+                allOk = false;
+                failErr = "Checksum mismatch for " + script.path + " (corrupted download)";
+                break;
+            }
 
-                std::string norm = std::string(remoteBytes.begin(), remoteBytes.end());
-                norm.erase(std::remove(norm.begin(), norm.end(), '\r'), norm.end());
-                std::string hash = Sha256Hex(reinterpret_cast<const uint8_t*>(norm.data()), norm.size());
-                Settings::SetString("script_hashes", scriptId, hash);
+            std::wstring dest = scStage + L"\\" + Logger::ToWide(script.id) + L".lua";
+            std::ofstream out(dest, std::ios::binary);
+            if (!out.is_open()) {
+                cleanupStage();
+                allOk = false;
+                failErr = "Cannot write staging file: " + script.id + ".lua";
+                break;
+            }
+            out.write(reinterpret_cast<const char*>(remoteBytes.data()), remoteBytes.size());
+            out.close();
+
+            {
+                std::lock_guard<std::mutex> lk(g_mtx);
+                g_packStatus.downloadedFiles++;
+                g_packStatus.downloadedBytes += script.size;
+            }
+        }
+
+        // 2. Download & verify shaders into staging
+        if (allOk) {
+            for (const auto& sh : manifest.shaders) {
+                if (g_stop.load(std::memory_order_acquire)) {
+                    cleanupStage();
+                    allOk = false;
+                    failErr = "Cancelled";
+                    break;
+                }
+                std::string fname = sh.path;
+                size_t slash = fname.rfind('/');
+                if (slash != std::string::npos) fname = fname.substr(slash + 1);
 
                 {
                     std::lock_guard<std::mutex> lk(g_mtx);
-                    g_scriptUpdates[scriptId] = { scriptId, "up_to_date", "" };
+                    g_packStatus.currentFile = fname;
                 }
-            } else {
-                allOk = false;
+
+                std::vector<uint8_t> shBytes;
+                DWORD shStatus = 0;
+                if (!Fetch(sh.path, kMaxFileBytes, shBytes, shStatus, manifestRef) || shStatus != 200) {
+                    cleanupStage();
+                    allOk = false;
+                    failErr = "Download failed for " + sh.path + ": " + HttpErr(shStatus);
+                    break;
+                }
+
+                std::string norm = NormalizeLf(shBytes);
+                std::string hash = Sha256Hex(reinterpret_cast<const uint8_t*>(norm.data()), norm.size());
+                if (hash != sh.sha256) {
+                    cleanupStage();
+                    allOk = false;
+                    failErr = "Checksum mismatch for " + sh.path + " (corrupted download)";
+                    break;
+                }
+
+                std::wstring dest = shStage + L"\\" + Logger::ToWide(fname);
+                std::ofstream shOut(dest, std::ios::binary);
+                if (!shOut.is_open()) {
+                    cleanupStage();
+                    allOk = false;
+                    failErr = "Cannot write staging shader: " + fname;
+                    break;
+                }
+                shOut.write(reinterpret_cast<const char*>(shBytes.data()), shBytes.size());
+                shOut.close();
+
+                {
+                    std::lock_guard<std::mutex> lk(g_mtx);
+                    g_packStatus.downloadedFiles++;
+                    g_packStatus.downloadedBytes += sh.size;
+                }
             }
         }
 
-        // Shaders
-        for (const char* sh : shaders) {
-            std::vector<uint8_t> shBytes;
-            DWORD shStatus = 0;
-            std::string curRef = Settings::GetString("cloud", "ref", kDefaultRef);
-            Settings::SetString("cloud", "ref", "main");
-            if (Fetch(std::string("shaders/") + sh, kMaxFileBytes, shBytes, shStatus) && shStatus == 200) {
-                std::ofstream shOut(shDir + L"\\" + Logger::ToWide(sh), std::ios::binary);
-                if (shOut.is_open()) {
-                    shOut.write(reinterpret_cast<const char*>(shBytes.data()), shBytes.size());
-                }
-            }
-            Settings::SetString("cloud", "ref", curRef);
+        if (!allOk) {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            g_packStatus.downloading = false;
+            g_packStatus.completed = true;
+            g_packStatus.success = false;
+            g_packStatus.error = failErr;
+            Logger::Error("DownloadPackAsync failed: " + failErr);
+            if (onDone) onDone(false);
+            return;
         }
 
-        g_packDownloading.store(false, std::memory_order_release);
-        Logger::Info(std::string("DownloadPackAsync: Finished, allOk = ") + (allOk ? "true" : "false"));
-        if (onDone) onDone(allOk);
+        // 3. All files verified: pause FileWatcher, atomically move files into place!
+        FileWatcher::SetPaused(true);
+
+        std::wstring scDir = exeDir + L"\\scripts";
+        std::wstring shDir = exeDir + L"\\shaders";
+        EnsureDirs(scDir);
+        EnsureDirs(shDir);
+
+        for (const auto& script : eligibleScripts) {
+            std::wstring src = scStage + L"\\" + Logger::ToWide(script.id) + L".lua";
+            std::wstring dst = scDir + L"\\" + Logger::ToWide(script.id) + L".lua";
+            MoveFileExW(src.c_str(), dst.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+            Settings::SetString("script_hashes", script.id, script.sha256);
+
+            std::lock_guard<std::mutex> lk(g_mtx);
+            g_scriptUpdates[script.id] = { script.id, "up_to_date", "" };
+        }
+
+        for (const auto& sh : manifest.shaders) {
+            std::string fname = sh.path;
+            size_t slash = fname.rfind('/');
+            if (slash != std::string::npos) fname = fname.substr(slash + 1);
+            std::wstring src = shStage + L"\\" + Logger::ToWide(fname);
+            std::wstring dst = shDir + L"\\" + Logger::ToWide(fname);
+            MoveFileExW(src.c_str(), dst.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+        }
+
+        if (!manifestJson.empty()) {
+            std::wstring mfDst = scDir + L"\\manifest.json";
+            std::ofstream mfOut(mfDst, std::ios::binary | std::ios::trunc);
+            if (mfOut.is_open()) {
+                mfOut.write(manifestJson.data(), manifestJson.size());
+            }
+        }
+
+        cleanupStage();
+        FileWatcher::SetPaused(false);
+
+        {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            g_packStatus.downloading = false;
+            g_packStatus.completed = true;
+            g_packStatus.success = true;
+            g_packStatus.error.clear();
+        }
+
+        Logger::Info("DownloadPackAsync: Successfully installed official pack. Triggering Lua reload...");
+        LuaEngine::RequestReload();
+        if (onDone) onDone(true);
     }).detach();
 }
 
@@ -821,71 +1109,145 @@ void UpdateScriptAsync(const std::string& scriptId) {
         g_scriptUpdates[scriptId] = { scriptId, "updating", "" };
     }
     std::thread([exeDir = g_exeDir, scriptId]() {
-        std::wstring scDir = exeDir + L"\\scripts";
-        CreateDirectoryW(scDir.c_str(), nullptr);
+        ScriptManifest manifest;
+        std::string manifestJson;
+        std::string manifestRef;
+        if (!FetchRemoteManifest(manifest, manifestJson, manifestRef)) {
+            if (!LoadLocalManifest(manifest)) {
+                std::lock_guard<std::mutex> lk(g_mtx);
+                g_scriptUpdates[scriptId] = { scriptId, "error", "Failed to fetch manifest from GitHub" };
+                return;
+            }
+            manifestRef = "main";
+        }
+
+        const ManifestScript* targetScript = nullptr;
+        for (const auto& s : manifest.scripts) {
+            if (s.id == scriptId) { targetScript = &s; break; }
+        }
+
+        if (!targetScript) {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            g_scriptUpdates[scriptId] = { scriptId, "error", "Script not found in manifest" };
+            return;
+        }
+
+        if (!VersionAtLeast(Updater::GetVersion(), targetScript->minCore)) {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            g_scriptUpdates[scriptId] = { scriptId, "incompatible", "requires URUSHI v" + targetScript->minCore };
+            return;
+        }
+
+        std::wstring scStage = exeDir + L"\\scripts\\.stage_upd";
+        std::wstring shStage = exeDir + L"\\shaders\\.stage_upd";
+        auto cleanupStage = [&]() {
+            DeleteTree(scStage);
+            DeleteTree(shStage);
+        };
+        cleanupStage();
+        EnsureDirs(scStage);
+
         std::vector<uint8_t> remoteBytes;
         DWORD status = 0;
-        const std::string repoPath = "scripts/" + scriptId + ".lua";
-        std::string oldRef = Settings::GetString("cloud", "ref", kDefaultRef);
-        Settings::SetString("cloud", "ref", "main");
-        bool ok = Fetch(repoPath, kMaxFileBytes, remoteBytes, status);
-        Settings::SetString("cloud", "ref", oldRef);
-
-        if (ok && status == 200) {
-            std::wstring dest = exeDir + L"\\scripts\\" + Logger::ToWide(scriptId) + L".lua";
-            std::ofstream out(dest, std::ios::binary);
-            if (out.is_open()) {
-                out.write(reinterpret_cast<const char*>(remoteBytes.data()), remoteBytes.size());
-                out.close();
-            }
-            std::wstring devDest = exeDir + L"\\Urushi\\scripts\\" + Logger::ToWide(scriptId) + L".lua";
-            if (GetFileAttributesW(devDest.c_str()) != INVALID_FILE_ATTRIBUTES) {
-                std::ofstream devOut(devDest, std::ios::binary);
-                if (devOut.is_open()) {
-                    devOut.write(reinterpret_cast<const char*>(remoteBytes.data()), remoteBytes.size());
-                    devOut.close();
-                }
-            }
-
-            std::string norm = std::string(remoteBytes.begin(), remoteBytes.end());
-            norm.erase(std::remove(norm.begin(), norm.end(), '\r'), norm.end());
-            std::string hash = Sha256Hex(reinterpret_cast<const uint8_t*>(norm.data()), norm.size());
-            Settings::SetString("script_hashes", scriptId, hash);
-
-            if (scriptId == "carfx_mod") {
-                const char* shaders[] = {
-                    "carfx.hlsli", "livery_chrome.hlsl", "livery_glass.hlsl", "livery_refract.hlsl",
-                    "livery_aurora_fluid.hlsl", "livery_cyber_pulse.hlsl", "livery_glow_overlay.hlsl",
-                    "livery_holo.hlsl", "livery_proximity_reactive.hlsl", "livery_tandem_angle.hlsl",
-                    "livery_wall_tap.hlsl", "internals_neon.hlsl"
-                };
-                std::wstring shDir = exeDir + L"\\shaders";
-                CreateDirectoryW(shDir.c_str(), nullptr);
-                for (const char* sh : shaders) {
-                    std::vector<uint8_t> shBytes;
-                    DWORD shStatus = 0;
-                    std::string curRef = Settings::GetString("cloud", "ref", kDefaultRef);
-                    Settings::SetString("cloud", "ref", "main");
-                    if (Fetch(std::string("shaders/") + sh, kMaxFileBytes, shBytes, shStatus) && shStatus == 200) {
-                        std::ofstream shOut(shDir + L"\\" + Logger::ToWide(sh), std::ios::binary);
-                        if (shOut.is_open()) {
-                            shOut.write(reinterpret_cast<const char*>(shBytes.data()), shBytes.size());
-                        }
-                    }
-                    Settings::SetString("cloud", "ref", curRef);
-                }
-            }
-
-            {
-                std::lock_guard<std::mutex> lk(g_mtx);
-                g_scriptUpdates[scriptId] = { scriptId, "updated", "" };
-            }
-            Logger::Info("Script '" + scriptId + "' successfully updated from GitHub.");
-        } else {
+        if (!Fetch(targetScript->path, kMaxFileBytes, remoteBytes, status, manifestRef) || status != 200) {
+            cleanupStage();
             std::lock_guard<std::mutex> lk(g_mtx);
             g_scriptUpdates[scriptId] = { scriptId, "error", HttpErr(status) };
-            Logger::Error("Failed to update script '" + scriptId + "': " + HttpErr(status));
+            return;
         }
+
+        std::string norm = NormalizeLf(remoteBytes);
+        std::string hash = Sha256Hex(reinterpret_cast<const uint8_t*>(norm.data()), norm.size());
+        if (hash != targetScript->sha256) {
+            cleanupStage();
+            std::lock_guard<std::mutex> lk(g_mtx);
+            g_scriptUpdates[scriptId] = { scriptId, "error", "Checksum mismatch" };
+            return;
+        }
+
+        std::wstring stagedFile = scStage + L"\\" + Logger::ToWide(scriptId) + L".lua";
+        std::ofstream out(stagedFile, std::ios::binary);
+        if (!out.is_open()) {
+            cleanupStage();
+            std::lock_guard<std::mutex> lk(g_mtx);
+            g_scriptUpdates[scriptId] = { scriptId, "error", "Cannot write staging file" };
+            return;
+        }
+        out.write(reinterpret_cast<const char*>(remoteBytes.data()), remoteBytes.size());
+        out.close();
+
+        bool hasShaders = (scriptId == "carfx_mod");
+        if (hasShaders) {
+            EnsureDirs(shStage);
+            for (const auto& sh : manifest.shaders) {
+                std::vector<uint8_t> shBytes;
+                DWORD shStatus = 0;
+                if (!Fetch(sh.path, kMaxFileBytes, shBytes, shStatus, manifestRef) || shStatus != 200) {
+                    cleanupStage();
+                    std::lock_guard<std::mutex> lk(g_mtx);
+                    g_scriptUpdates[scriptId] = { scriptId, "error", "Shader download failed: " + HttpErr(shStatus) };
+                    return;
+                }
+                std::string shNorm = NormalizeLf(shBytes);
+                std::string shHash = Sha256Hex(reinterpret_cast<const uint8_t*>(shNorm.data()), shNorm.size());
+                if (shHash != sh.sha256) {
+                    cleanupStage();
+                    std::lock_guard<std::mutex> lk(g_mtx);
+                    g_scriptUpdates[scriptId] = { scriptId, "error", "Shader checksum mismatch for " + sh.path };
+                    return;
+                }
+                std::string fname = sh.path;
+                size_t slash = fname.rfind('/');
+                if (slash != std::string::npos) fname = fname.substr(slash + 1);
+                std::wstring shDest = shStage + L"\\" + Logger::ToWide(fname);
+                std::ofstream shOut(shDest, std::ios::binary);
+                if (!shOut.is_open()) {
+                    cleanupStage();
+                    std::lock_guard<std::mutex> lk(g_mtx);
+                    g_scriptUpdates[scriptId] = { scriptId, "error", "Cannot write staging shader" };
+                    return;
+                }
+                shOut.write(reinterpret_cast<const char*>(shBytes.data()), shBytes.size());
+                shOut.close();
+            }
+        }
+
+        FileWatcher::SetPaused(true);
+
+        std::wstring finalFile = exeDir + L"\\scripts\\" + Logger::ToWide(scriptId) + L".lua";
+        MoveFileExW(stagedFile.c_str(), finalFile.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+        Settings::SetString("script_hashes", scriptId, hash);
+
+        if (hasShaders) {
+            std::wstring shDir = exeDir + L"\\shaders";
+            EnsureDirs(shDir);
+            for (const auto& sh : manifest.shaders) {
+                std::string fname = sh.path;
+                size_t slash = fname.rfind('/');
+                if (slash != std::string::npos) fname = fname.substr(slash + 1);
+                std::wstring src = shStage + L"\\" + Logger::ToWide(fname);
+                std::wstring dst = shDir + L"\\" + Logger::ToWide(fname);
+                MoveFileExW(src.c_str(), dst.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+            }
+        }
+
+        if (!manifestJson.empty()) {
+            std::wstring mfDst = exeDir + L"\\scripts\\manifest.json";
+            std::ofstream mfOut(mfDst, std::ios::binary | std::ios::trunc);
+            if (mfOut.is_open()) {
+                mfOut.write(manifestJson.data(), manifestJson.size());
+            }
+        }
+
+        cleanupStage();
+        FileWatcher::SetPaused(false);
+
+        {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            g_scriptUpdates[scriptId] = { scriptId, "updated", "" };
+        }
+        Logger::Info("Script '" + scriptId + "' successfully updated from GitHub. Triggering reload...");
+        LuaEngine::RequestReload();
     }).detach();
 }
 

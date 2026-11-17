@@ -44,9 +44,48 @@ struct Installed {
     std::string id, name, nameRu, version, entry;
 };
 
+struct ManifestScript {
+    std::string id;
+    std::string path;
+    std::string sha256;
+    uint64_t size = 0;
+    std::string name;
+    std::string nameRu;
+    std::string description;
+    std::string descriptionRu;
+    std::string minCore;
+    bool defaultEnabled = true;
+    std::vector<std::string> windowIds;
+};
+
+struct ManifestShader {
+    std::string path;
+    std::string sha256;
+    uint64_t size = 0;
+};
+
+struct ScriptManifest {
+    int schemaVersion = 1;
+    std::string coreVersion;
+    std::vector<ManifestScript> scripts;
+    std::vector<ManifestShader> shaders;
+};
+
+struct PackDownloadStatus {
+    bool downloading = false;
+    bool completed = false;
+    bool success = false;
+    std::string error;
+    uint32_t totalFiles = 0;
+    uint32_t downloadedFiles = 0;
+    uint64_t totalBytes = 0;
+    uint64_t downloadedBytes = 0;
+    std::string currentFile;
+};
+
 struct ScriptUpdateItem {
     std::string id;
-    std::string state; // "idle" | "checking" | "up_to_date" | "update_available" | "custom" | "ignored" | "updating" | "updated" | "error"
+    std::string state; // "idle" | "checking" | "up_to_date" | "update_available" | "custom" | "ignored" | "updating" | "updated" | "error" | "incompatible"
     std::string error;
 };
 
@@ -68,10 +107,13 @@ std::vector<Installed> ListInstalled();
 bool ResolveEntry(const std::string& id, std::wstring& outFile, std::wstring& outDir);
 
 // ---- Script Updates for local scripts ----
+bool LoadLocalManifest(ScriptManifest& out);
+bool ParseScriptManifest(const std::string& json, ScriptManifest& out, std::string& err);
 void CheckScriptUpdatesAsync(const std::string& singleScript = "");
 void UpdateScriptAsync(const std::string& scriptId);
 void DownloadPackAsync(std::function<void(bool ok)> onDone = nullptr);
 bool IsPackDownloading();
+PackDownloadStatus GetPackDownloadStatus();
 ScriptUpdatesSnapshot GetScriptUpdatesSnapshot();
 void SetScriptIgnored(const std::string& scriptId, bool ignored);
 bool IsScriptIgnored(const std::string& scriptId);
@@ -82,7 +124,7 @@ std::string Sha256Hex(const uint8_t* data, size_t size);
 bool ValidId(const std::string& id);
 bool ValidRelPath(const std::string& path);
 bool VersionAtLeast(const std::string& have, const std::string& need);
-using FetchFn = bool (*)(const std::string& repoRelPath, uint64_t maxBytes, std::vector<uint8_t>& out, DWORD& status);
+using FetchFn = bool (*)(const std::string& repoRelPath, uint64_t maxBytes, std::vector<uint8_t>& out, DWORD& status, const std::string& ref);
 void SetFetchForTests(FetchFn fn);
 bool InstallBlocking(const Item& item, std::string& err);   // synchronous install (used by InstallAsync)
 

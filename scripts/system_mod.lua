@@ -98,90 +98,37 @@ local function first_line(s)
 end
 
 -- ==================== Neverlose-Style Unified Scripts Manager ====================
-local OFFICIAL_MODULES = {
-    {
-        id = "carfx_mod",
-        win_id = "carfx",
-        name = "CarFX Shaders",
-        name_ru = "CarFX Шейдеры",
-        author = "URUSHI Team",
-        version = "1.2.1",
-        desc = "Custom body shaders, glass reflections, neon glow & tinting",
-        desc_ru = "Кастомные шейдеры кузова, стекол, неоновые эффекты, тонировка",
-    },
-    {
-        id = "perf_optimizer",
-        win_id = "perf",
-        name = "FPS Optimizer",
-        name_ru = "Оптимизатор FPS",
-        author = "URUSHI Team",
-        version = "1.2.1",
-        desc = "Physics solver optimization, component auto-sleep, FPS boost",
-        desc_ru = "Оптимизация физики симулятора, автослип узлов, буст FPS",
-    },
-    {
-        id = "replay_mod",
-        win_id = "replay",
-        alt_win_ids = { "anticollision" },
-        name = "Replays & Anti-Collision",
-        name_ru = "Реплеи и Анти-встречка",
-        author = "URUSHI Team",
-        version = "1.2.1",
-        desc = "3D trajectory replay, ghost car and TTC anti-collision defense",
-        desc_ru = "3D реплеи, призрак траектории и защита от столкновений",
-    },
-    {
-        id = "steer_assist_mod",
-        win_id = "steer_assist",
-        name = "Steering Assist (155°)",
-        name_ru = "Помощь руля (155°)",
-        author = "URUSHI Team",
-        version = "1.2.1",
-        desc = "Smart wheel angle assist for deep drift angles up to 155°",
-        desc_ru = "Умная коррекция выворота колес под угол заноса до 155°",
-    },
-    {
-        id = "tires_mod",
-        win_id = "tires",
-        name = "Body & Tires",
-        name_ru = "Кузов и шины",
-        author = "URUSHI Team",
-        version = "1.2.1",
-        desc = "Dense tire smoke, infinite tire wear, pressure and visual damage",
-        desc_ru = "Густой дым, блокировка износа шин, давление и деформация",
-    },
-    {
-        id = "teleport_mod",
-        win_id = "teleport",
-        name = "Checkpoint Teleport",
-        name_ru = "Телепорт по точкам",
-        author = "URUSHI Team",
-        version = "1.2.1",
-        desc = "Quick save & instant teleport to checkpoints on any track",
-        desc_ru = "Быстрое сохранение и мгновенный телепорт по точкам трека",
-    },
-    {
-        id = "telemetry_hud",
-        win_id = "hud",
-        alt_win_ids = { "fps_net" },
-        name = "Telemetry HUD",
-        name_ru = "Телеметрия HUD",
-        author = "URUSHI Team",
-        version = "1.2.1",
-        desc = "Compact on-screen HUD: speed, drift angle, RPM, FPS & ping",
-        desc_ru = "Наэкранный оверлей: скорость, угол заноса, RPM, FPS и сеть",
-    },
-    {
-        id = "keybinds_mod",
-        win_id = "keybinds",
-        name = "Keybinds & Controls",
-        name_ru = "Горячие клавиши",
-        author = "URUSHI Team",
-        version = "1.2.1",
-        desc = "Rebind actions to keyboard keys and gamepad buttons (XInput)",
-        desc_ru = "Назначение кнопок клавиатуры и кнопок геймпада (XInput)",
-    },
-}
+local function get_official_modules()
+    local manifest = (urushi.get_manifest and urushi.get_manifest()) or (cloud and cloud.get_manifest and cloud.get_manifest())
+    local mods = {}
+    if manifest and manifest.scripts then
+        local ver = manifest.core_version or "1.2.1"
+        for _, s in ipairs(manifest.scripts) do
+            local win_id = (s.window_ids and s.window_ids[1]) or s.id
+            local alt_win_ids = nil
+            if s.window_ids and #s.window_ids > 1 then
+                alt_win_ids = {}
+                for i = 2, #s.window_ids do
+                    table.insert(alt_win_ids, s.window_ids[i])
+                end
+            end
+            table.insert(mods, {
+                id = s.id,
+                win_id = win_id,
+                alt_win_ids = alt_win_ids,
+                name = s.name,
+                name_ru = s.name_ru or s.name,
+                author = "URUSHI Team",
+                version = ver,
+                desc = s.description or "",
+                desc_ru = s.description_ru or s.description or "",
+                min_core = s.min_core or "1.0.0",
+                default_enabled = (s.default_enabled == true),
+            })
+        end
+    end
+    return mods
+end
 
 local downloading_scripts = {}
 local script_search_query = ""
@@ -211,68 +158,44 @@ local function is_script_downloaded(id)
 end
 
 local function start_script(id)
-    local downloaded = is_script_downloaded(id)
-    if not downloaded then
-        downloading_scripts[id] = true
-        if cloud and cloud.update_script then
-            cloud.update_script(id)
+    local is_cloud = (type(id) == "string" and id:sub(1, 6) == "cloud:")
+    local bare_id = is_cloud and id:sub(7) or id
+
+    if is_cloud then
+        local installed = false
+        if cloud and cloud.status then
+            local cst = cloud.status()
+            if cst and cst.items then
+                for _, cit in ipairs(cst.items) do
+                    if cit.id == bare_id then
+                        installed = cit.installed
+                        break
+                    end
+                end
+            end
         end
-        return
+        if not installed then
+            if cloud and cloud.install then cloud.install(bare_id) end
+            return
+        end
+    else
+        local downloaded = is_script_downloaded(id)
+        if not downloaded then
+            downloading_scripts[id] = true
+            if cloud and cloud.update_script then
+                cloud.update_script(id)
+            end
+            return
+        end
     end
 
     if urushi.set_setting then urushi.set_setting("scripts", id, "1") end
-    local ok, err = urushi.load_script(id)
-    if ok then
-        if urushi_scripts and urushi_scripts.list then
-            local found = false
-            for _, e in ipairs(urushi_scripts.list) do
-                if e.id == id then
-                    e.enabled = true
-                    e.status = "ok"
-                    found = true
-                    break
-                end
-            end
-            if not found then
-                table.insert(urushi_scripts.list, { id = id, enabled = true, status = "ok" })
-            end
-        end
-        log.info("Started script: " .. id)
-    else
-        log.error("Failed to start script '" .. id .. "': " .. tostring(err))
-    end
+    if urushi.reload_scripts then urushi.reload_scripts() end
 end
 
 local function stop_script(id)
     if urushi.set_setting then urushi.set_setting("scripts", id, "0") end
-    if urushi_scripts and urushi_scripts.list then
-        for _, e in ipairs(urushi_scripts.list) do
-            if e.id == id or e.id == ("cloud:" .. id) then
-                e.enabled = false
-                e.status = "disabled"
-                break
-            end
-        end
-    end
-    for _, m in ipairs(OFFICIAL_MODULES) do
-        if m.id == id then
-            if urushi.unregister_window then
-                urushi.unregister_window(m.win_id)
-                if m.alt_win_ids then
-                    for _, alt in ipairs(m.alt_win_ids) do
-                        urushi.unregister_window(alt)
-                    end
-                end
-            end
-            break
-        end
-    end
-    if urushi.unregister_window then
-        urushi.unregister_window(id)
-    end
-    if urushi.reload_scripts then
-        urushi.reload_scripts()
-    end
+    if urushi.reload_scripts then urushi.reload_scripts() end
 end
 
 local function delete_script(id)
@@ -313,24 +236,27 @@ local function render_scripts_manager_window()
     local w = ui.avail_width()
     local up_snap = (cloud and cloud.get_script_updates) and cloud.get_script_updates() or { checking = false, items = {} }
 
-    -- Search bar
-    local s_ch, s_text = ui.search_input("##scripts_search", script_search_query, T("Поиск скриптов...", "Search scripts..."))
-    if s_ch then
-        script_search_query = s_text
-    end
-    ui.spacing(3)
-
-    -- Pack download button & progress
+    -- Pack download button & progress (first thing visible when official scripts are missing)
+    local official_modules = get_official_modules()
     local missing_count = 0
-    for _, mod in ipairs(OFFICIAL_MODULES) do
+    for _, mod in ipairs(official_modules) do
         if not is_script_downloaded(mod.id) then
             missing_count = missing_count + 1
         end
     end
 
-    local pack_downloading = (cloud and cloud.is_pack_downloading and cloud.is_pack_downloading()) or false
+    local pst = (cloud and cloud.get_pack_download_status and cloud.get_pack_download_status())
+    local pack_downloading = (pst and pst.downloading) or (cloud and cloud.is_pack_downloading and cloud.is_pack_downloading()) or false
     if pack_downloading then
-        ui.badge(T("Загрузка официального пака с GitHub...", "Downloading official script pack from GitHub..."), "accent")
+        local cur_f = (pst and pst.current_file ~= "") and pst.current_file or "..."
+        local cur_n = pst and pst.downloaded_files or 0
+        local tot_n = pst and pst.total_files or 0
+        local p_text = string.format("Загрузка официального пака: %d/%d (%s)...", cur_n, tot_n, cur_f)
+        local p_text_en = string.format("Downloading official pack: %d/%d (%s)...", cur_n, tot_n, cur_f)
+        ui.badge(T(p_text, p_text_en), "accent")
+        local frac = 0.0
+        if tot_n > 0 then frac = cur_n / tot_n end
+        ui.progress_bar(frac, w, 6)
         ui.spacing(3)
     elseif missing_count > 0 then
         if ui.button(T(string.format("⬇ Скачать официальный пак скриптов (%d)##dl_all_pack", missing_count),
@@ -341,6 +267,13 @@ local function render_scripts_manager_window()
         end
         ui.spacing(3)
     end
+
+    -- Search bar
+    local s_ch, s_text = ui.search_input("##scripts_search", script_search_query, T("Поиск скриптов...", "Search scripts..."))
+    if s_ch then
+        script_search_query = s_text
+    end
+    ui.spacing(3)
 
     -- Check all updates button
     if up_snap.checking then
@@ -371,7 +304,7 @@ local function render_scripts_manager_window()
     local total_shown = 0
 
     -- Official Modules List (Neverlose-Style Compact Rows)
-    for _, mod in ipairs(OFFICIAL_MODULES) do
+    for _, mod in ipairs(official_modules) do
         if query_matches(mod.name, mod.name_ru, mod.id, mod.desc, mod.desc_ru, mod.author) then
             total_shown = total_shown + 1
             local running = is_script_running(mod.id)
@@ -380,7 +313,13 @@ local function render_scripts_manager_window()
             local it = up_snap.items and up_snap.items[mod.id]
             local has_upd = it and (it.state == "update_available")
             local is_upd_ing = it and (it.state == "updating")
+            local is_incompat = it and (it.state == "incompatible")
             if is_upd_ing then downloading = true end
+
+            local tag = ""
+            if is_incompat then
+                tag = T("требуется URUSHI v" .. (mod.min_core or ""), "requires URUSHI v" .. (mod.min_core or ""))
+            end
 
             local act = ui.script_row({
                 id = mod.id,
@@ -391,14 +330,16 @@ local function render_scripts_manager_window()
                 running = running,
                 downloaded = downloaded,
                 downloading = downloading,
-                has_update = has_upd,
+                has_update = has_upd and not is_incompat,
+                disabled = is_incompat,
+                tag = tag,
             })
 
-            if act == "load" then
+            if act == "load" and not is_incompat then
                 start_script(mod.id)
             elseif act == "stop" then
                 stop_script(mod.id)
-            elseif act == "update" then
+            elseif act == "update" and not is_incompat then
                 downloading_scripts[mod.id] = true
                 if cloud and cloud.update_script then
                     cloud.update_script(mod.id)
@@ -412,8 +353,8 @@ local function render_scripts_manager_window()
     -- User scripts
     local user_scripts = {}
     if urushi.list_scripts then
-        local known = { main = true, i18n = true, config = true, keybinds = true, il2cpp = true, system_mod = true }
-        for _, m in ipairs(OFFICIAL_MODULES) do known[m.id] = true end
+        local known = { main = true, i18n = true, config = true, keybinds = true, il2cpp = true, system_mod = true, welcome = true }
+        for _, m in ipairs(official_modules) do known[m.id] = true end
         for _, name in ipairs(urushi.list_scripts()) do
             if not known[name] then
                 table.insert(user_scripts, name)
@@ -540,10 +481,11 @@ if events and events.on_update then
             local up_snap = (cloud and cloud.get_script_updates) and cloud.get_script_updates() or { items = {} }
             for id, _ in pairs(downloading_scripts) do
                 local it = up_snap.items and up_snap.items[id]
-                if it and it.state == "updated" then
+                if it and (it.state == "updated" or it.state == "up_to_date") then
                     downloading_scripts[id] = nil
-                    start_script(id)
-                elseif it and it.state == "error" then
+                    if urushi.set_setting then urushi.set_setting("scripts", id, "1") end
+                    if urushi.reload_scripts then urushi.reload_scripts() end
+                elseif it and (it.state == "error" or it.state == "incompatible") then
                     downloading_scripts[id] = nil
                 end
             end

@@ -38,7 +38,15 @@ AccentDef g_customAccentDef = {
     IM_COL32(76, 199, 245, 40),
     IM_COL32(76, 199, 245, 102)
 };
-UrushiUI::Language g_language = UrushiUI::Language::English;
+static UrushiUI::Language DetectInitialLanguage() {
+    LANGID langId = GetUserDefaultUILanguage();
+    WORD primary = PRIMARYLANGID(langId);
+    if (primary == LANG_RUSSIAN || primary == LANG_UKRAINIAN || primary == LANG_BELARUSIAN || primary == 0x3f) {
+        return UrushiUI::Language::Russian;
+    }
+    return UrushiUI::Language::English;
+}
+UrushiUI::Language g_language = DetectInitialLanguage();
 bool g_singleTabMode = false;
 
 // UI Element Introspection & Config Auto-Discovery

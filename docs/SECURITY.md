@@ -24,15 +24,15 @@ cannot download anything, cannot create runnable files, and cannot reach other p
 | Hijack other scripts | Isolated scripts run in their own environment with private copies of the API tables; the string metatable is hidden; `load` is bound to the private environment |
 
 ### Trust tiers (`scripts/main.lua`)
-* **Trusted** — core + built-in modules from this repository: shared globals, but still the hardened VM.
+* **Trusted** — core + official modules defined in `scripts/manifest.json`: shared globals, but still the hardened VM. When downloaded in-game, official modules are verified against their SHA-256 hashes in `scripts/manifest.json`.
 * **Isolated** — everything else (user scripts in `scripts/`, cloud scripts): private environment, no `updater`/`cloud`/settings
   functions, `io.open` redirected to `urushi_data/<script>/`. New user scripts are **off** until enabled in the *Library* window.
+* **Unified start/stop execution**: Starting or stopping any script from the UI (`system_mod.lua`) only modifies the `[scripts]` configuration flag and requests `urushi.reload_scripts()`. The loading logic is centralized in `main.lua`'s `load_entry`, ensuring sandbox isolation and security tiers are always strictly enforced without bypass.
 
 ### Other switches
 * `runner.lua` (loads code from a file) and the **dev pipe** (`\\.\pipe\urushi_dev`, remote Lua eval) are **off by default**.
   Developers enable them in `urushi_settings.ini`: `[dev] runner=1`, `[dev] pipe=1`.
-* Cloud library: nothing is downloaded automatically; every file is verified against the SHA-256 in the catalog from the
-  protected `verified` branch before it is installed. See [CLOUD_SCRIPTS.md](CLOUD_SCRIPTS.md).
+* Cloud library & Official pack: nothing is downloaded automatically; every file is verified against the SHA-256 hash in `catalog.json` (community scripts) or `scripts/manifest.json` (official pack) before it is atomically installed. See [CLOUD_SCRIPTS.md](CLOUD_SCRIPTS.md).
 
 ## Known residual risks (honest list)
 * `memory.read_*` can read process memory (read-only, SEH-guarded). Without network/file exfiltration this stays inside the process.

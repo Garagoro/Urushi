@@ -64,4 +64,38 @@ void SetCrashPolicy(CrashPolicy p) {
     SetString("stability", "crash_policy", CrashPolicyName(p));
 }
 
+bool IsFirstRun() {
+    std::string val = GetString("core", "first_run_done", "");
+    if (val == "1") return false;
+    if (val == "0") return true;
+
+    // Not explicitly set yet. Check if this is an existing install:
+    // 1. urushi_data/config.json exists
+    std::wstring dir = GameDir();
+    if (!dir.empty()) {
+        std::wstring cfg = dir + L"\\urushi_data\\config.json";
+        if (GetFileAttributesW(cfg.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            SetString("core", "first_run_done", "1");
+            return false;
+        }
+    }
+
+    // 2. Any [scripts] entry already exists in urushi_settings.ini
+    std::lock_guard<std::mutex> lk(s_mtx);
+    if (!s_path.empty()) {
+        wchar_t secBuf[512] = {};
+        DWORD len = GetPrivateProfileSectionW(L"scripts", secBuf, 512, s_path.c_str());
+        if (len > 0 && secBuf[0] != L'\0') {
+            WritePrivateProfileStringW(L"core", L"first_run_done", L"1", s_path.c_str());
+            return false;
+        }
+    }
+
+    return true;
+}
+
+void MarkFirstRunDone() {
+    SetString("core", "first_run_done", "1");
+}
+
 } // namespace Settings

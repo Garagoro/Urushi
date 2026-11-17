@@ -12,6 +12,8 @@ public:
 
     static void Start(const std::wstring& directory, Callback onFileChanged);
     static void Stop();
+    static void SetPaused(bool paused);
+    static bool IsPaused();
 
 private:
     static void WatcherThread();
@@ -20,5 +22,6 @@ private:
     static Callback s_callback;
     static std::thread s_thread;
     static std::atomic<bool> s_running;
+    static std::atomic<bool> s_paused;
     static std::unordered_map<std::wstring, FILETIME> s_fileTimes;
 };

@@ -190,6 +190,96 @@ int Lua_CloudIsPackDownloading(lua_State* L) {
     return 1;
 }
 
+int Lua_CloudGetPackDownloadStatus(lua_State* L) {
+    const CloudScripts::PackDownloadStatus st = CloudScripts::GetPackDownloadStatus();
+    lua_newtable(L);
+    lua_pushboolean(L, st.downloading ? 1 : 0);
+    lua_setfield(L, -2, "downloading");
+    lua_pushboolean(L, st.completed ? 1 : 0);
+    lua_setfield(L, -2, "completed");
+    lua_pushboolean(L, st.success ? 1 : 0);
+    lua_setfield(L, -2, "success");
+    lua_pushstring(L, st.error.c_str());
+    lua_setfield(L, -2, "error");
+    lua_pushinteger(L, st.totalFiles);
+    lua_setfield(L, -2, "total_files");
+    lua_pushinteger(L, st.downloadedFiles);
+    lua_setfield(L, -2, "downloaded_files");
+    lua_pushnumber(L, static_cast<lua_Number>(st.totalBytes));
+    lua_setfield(L, -2, "total_bytes");
+    lua_pushnumber(L, static_cast<lua_Number>(st.downloadedBytes));
+    lua_setfield(L, -2, "downloaded_bytes");
+    lua_pushstring(L, st.currentFile.c_str());
+    lua_setfield(L, -2, "current_file");
+    return 1;
+}
+
+int Lua_CloudGetManifest(lua_State* L) {
+    CloudScripts::ScriptManifest mf;
+    if (!CloudScripts::LoadLocalManifest(mf)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_newtable(L);
+    lua_pushinteger(L, mf.schemaVersion);
+    lua_setfield(L, -2, "schema_version");
+    lua_pushstring(L, mf.coreVersion.c_str());
+    lua_setfield(L, -2, "core_version");
+
+    lua_newtable(L);
+    int sIdx = 1;
+    for (const auto& s : mf.scripts) {
+        lua_newtable(L);
+        lua_pushstring(L, s.id.c_str());
+        lua_setfield(L, -2, "id");
+        lua_pushstring(L, s.path.c_str());
+        lua_setfield(L, -2, "path");
+        lua_pushstring(L, s.sha256.c_str());
+        lua_setfield(L, -2, "sha256");
+        lua_pushnumber(L, static_cast<lua_Number>(s.size));
+        lua_setfield(L, -2, "size");
+        lua_pushstring(L, s.name.c_str());
+        lua_setfield(L, -2, "name");
+        lua_pushstring(L, s.nameRu.c_str());
+        lua_setfield(L, -2, "name_ru");
+        lua_pushstring(L, s.description.c_str());
+        lua_setfield(L, -2, "description");
+        lua_pushstring(L, s.descriptionRu.c_str());
+        lua_setfield(L, -2, "description_ru");
+        lua_pushstring(L, s.minCore.c_str());
+        lua_setfield(L, -2, "min_core");
+        lua_pushboolean(L, s.defaultEnabled ? 1 : 0);
+        lua_setfield(L, -2, "default_enabled");
+
+        lua_newtable(L);
+        int wIdx = 1;
+        for (const auto& wid : s.windowIds) {
+            lua_pushstring(L, wid.c_str());
+            lua_rawseti(L, -2, wIdx++);
+        }
+        lua_setfield(L, -2, "window_ids");
+
+        lua_rawseti(L, -2, sIdx++);
+    }
+    lua_setfield(L, -2, "scripts");
+
+    lua_newtable(L);
+    int shIdx = 1;
+    for (const auto& sh : mf.shaders) {
+        lua_newtable(L);
+        lua_pushstring(L, sh.path.c_str());
+        lua_setfield(L, -2, "path");
+        lua_pushstring(L, sh.sha256.c_str());
+        lua_setfield(L, -2, "sha256");
+        lua_pushnumber(L, static_cast<lua_Number>(sh.size));
+        lua_setfield(L, -2, "size");
+        lua_rawseti(L, -2, shIdx++);
+    }
+    lua_setfield(L, -2, "shaders");
+
+    return 1;
+}
+
 const luaL_Reg kCloudFuncs[] = {
     { "refresh",              Lua_CloudRefresh },
     { "status",               Lua_CloudStatus },
@@ -203,6 +293,8 @@ const luaL_Reg kCloudFuncs[] = {
     { "update_script",        Lua_CloudUpdateScript },
     { "download_pack",        Lua_CloudDownloadPack },
     { "is_pack_downloading",  Lua_CloudIsPackDownloading },
+    { "get_pack_download_status", Lua_CloudGetPackDownloadStatus },
+    { "get_manifest",         Lua_CloudGetManifest },
     { "toggle_script_ignore", Lua_CloudToggleScriptIgnore },
     { "is_script_ignored",    Lua_CloudIsScriptIgnored },
     { nullptr, nullptr }

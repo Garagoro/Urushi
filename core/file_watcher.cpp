@@ -6,6 +6,7 @@ std::wstring FileWatcher::s_directory;
 FileWatcher::Callback FileWatcher::s_callback;
 std::thread FileWatcher::s_thread;
 std::atomic<bool> FileWatcher::s_running(false);
+std::atomic<bool> FileWatcher::s_paused(false);
 std::unordered_map<std::wstring, FILETIME> FileWatcher::s_fileTimes;
 
 void FileWatcher::Start(const std::wstring& directory, Callback onFileChanged) {
@@ -31,8 +32,35 @@ void FileWatcher::Stop() {
     Logger::Info("FileWatcher stopped.");
 }
 
+void FileWatcher::SetPaused(bool paused) {
+    s_paused.store(paused, std::memory_order_release);
+    if (!paused) {
+        // Resync file times when unpausing so freshly moved files don't trigger callbacks
+        std::wstring pattern = s_directory + L"\\*.lua";
+        WIN32_FIND_DATAW fd;
+        HANDLE hFind = FindFirstFileW(pattern.c_str(), &fd);
+        if (hFind != INVALID_HANDLE_VALUE) {
+            do {
+                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                    s_fileTimes[fd.cFileName] = fd.ftLastWriteTime;
+                }
+            } while (FindNextFileW(hFind, &fd));
+            FindClose(hFind);
+        }
+    }
+}
+
+bool FileWatcher::IsPaused() {
+    return s_paused.load(std::memory_order_acquire);
+}
+
 void FileWatcher::WatcherThread() {
     while (s_running) {
+        if (s_paused.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            continue;
+        }
+
         std::wstring pattern = s_directory + L"\\*.lua";
         WIN32_FIND_DATAW fd;
         HANDLE hFind = FindFirstFileW(pattern.c_str(), &fd);

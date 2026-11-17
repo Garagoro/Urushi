@@ -818,6 +818,33 @@ void UrushiUI::Badge(const std::string& text, Tone tone) {
     ImGui::Dummy(ImVec2(bw, bh));
 }
 
+void UrushiUI::RenderToast(const char* id, const char* badge, const char* message) {
+    const float S = g_uiScale;
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    if (!vp) return;
+    const float pad = 18.0f * S;
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - pad, vp->WorkPos.y + pad),
+                            ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.045f, 0.045f, 0.060f, 0.86f));
+    ImGui::PushStyleColor(ImGuiCol_Border, UrushiUI::GetAccentVec4(0.45f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f * S);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f * S, 8.0f * S));
+    if (ImGui::Begin(id, nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                     ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+        if (badge && badge[0]) {
+            Badge(badge, Tone::Accent);
+            ImGui::SameLine(0.0f, 8.0f * S);
+        }
+        ImGui::TextColored(ImVec4(0.92f, 0.92f, 0.95f, 1.0f), "%s", message);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor(2);
+}
+
 std::string UrushiUI::ScriptRow(const ScriptRowItem& item) {
     const float S = g_uiScale;
     const float w = CurrentContentWidth();
@@ -889,6 +916,20 @@ std::string UrushiUI::ScriptRow(const ScriptRowItem& item) {
 
         dl->AddRectFilled(ImVec2(startX, centerY - sqSz), ImVec2(startX + iconW, centerY + sqSz), stopFg, 1.0f * S);
         dl->AddText(ImVec2(startX + iconW + gap, centerY - tSz.y * 0.5f), stopFg, sTxt);
+    } else if (item.disabled) {
+        ImGui::InvisibleButton(("##mb_dis_" + item.id).c_str(), ImVec2(mainBtnW, btnH));
+        mbHovered = ImGui::IsItemHovered();
+        dl->AddRectFilled(mbMin, mbMax, IM_COL32(255, 255, 255, 10), 5.0f * S);
+        dl->AddRect(mbMin, mbMax, IM_COL32(255, 255, 255, 25), 5.0f * S);
+        const bool isRu = (g_language == Language::Russian);
+        const char* dTxt = isRu ? "Недоступно" : "Unavailable";
+        if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
+        ImVec2 tSz = ImGui::CalcTextSize(dTxt);
+        dl->AddText(ImVec2(mbMin.x + (mainBtnW - tSz.x) * 0.5f, mbMin.y + (btnH - tSz.y) * 0.5f), kColTextMuted, dTxt);
+        if (AppFonts::Small) ImGui::PopFont();
+        if (mbHovered && !item.tag.empty()) {
+            ImGui::SetTooltip("%s", item.tag.c_str());
+        }
     } else {
         if (ImGui::InvisibleButton(("##mb_load_" + item.id).c_str(), ImVec2(mainBtnW, btnH))) {
             action = "load";
@@ -1003,7 +1044,10 @@ std::string UrushiUI::ScriptRow(const ScriptRowItem& item) {
         curX += ImGui::CalcTextSize(verStr.c_str()).x;
     }
 
-    if (item.hasUpdate) {
+    if (!item.tag.empty()) {
+        std::string tagStr = "  •  " + item.tag;
+        dl->AddText(ImVec2(curX, subPos.y), IM_COL32(240, 80, 80, 255), tagStr.c_str());
+    } else if (item.hasUpdate) {
         const char* updTxt = isRu ? "  •  Обновление" : "  •  Update";
         dl->AddText(ImVec2(curX, subPos.y), IM_COL32(245, 180, 50, 255), updTxt);
     } else if (!item.downloaded) {

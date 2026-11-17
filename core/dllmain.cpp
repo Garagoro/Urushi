@@ -173,6 +173,9 @@ static DWORD WINAPI InitThread(LPVOID) {
             Logger::Warn("URUSHI is running WITHOUT features (Safe mode / waiting for the user's choice).");
         }
 
+        const bool openMenu = Settings::IsFirstRun() || (SafeMode::GetMode() == SafeMode::Mode::Safe);
+        D3D11Hook::SetMenuOpen(openMenu);
+
         g_initialized = true;
         Logger::Info("URUSHI fully initialized and ready. Press F4 to toggle menu.");
     }

@@ -888,22 +888,9 @@ void RenderUI(bool menuOpen) {
                             ImGuiCond_Always, ImVec2(1.0f, 0.0f));
 
     if (!menuOpen) {
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.045f, 0.045f, 0.060f, 0.86f));
-        ImGui::PushStyleColor(ImGuiCol_Border, UrushiUI::GetAccentVec4(0.45f));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f * S);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f * S, 8.0f * S));
-        if (ImGui::Begin("##urushi_update_toast", nullptr,
-                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
-                         ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
-            UrushiUI::Badge(L("ОБНОВЛЕНИЕ", "UPDATE"), UrushiUI::Tone::Accent);
-            ImGui::SameLine(0.0f, 8.0f * S);
-            ImGui::TextColored(ImVec4(0.92f, 0.92f, 0.95f, 1.0f),
-                               L("%u ф. — нажмите F4", "%u file(s) — press F4"), st.filesTotal);
-        }
-        ImGui::End();
-        ImGui::PopStyleVar(3);
-        ImGui::PopStyleColor(2);
+        char buf[128];
+        snprintf(buf, sizeof(buf), L("%u ф. — нажмите F4", "%u file(s) — press F4"), st.filesTotal);
+        UrushiUI::RenderToast("##urushi_update_toast", L("ОБНОВЛЕНИЕ", "UPDATE"), buf);
         return;
     }
 

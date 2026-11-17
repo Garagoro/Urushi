@@ -10,6 +10,7 @@
 #include "updater.h"
 #include "safe_mode.h"
 #include "crash_handler.h"
+#include "settings.h"
 
 #include <shlwapi.h>
 #include <imgui.h>
@@ -114,7 +115,7 @@ ID3D11DeviceContext* D3D11Hook::s_context = nullptr;
 ID3D11RenderTargetView* D3D11Hook::s_renderTargetView = nullptr;
 HWND D3D11Hook::s_hwnd = nullptr;
 bool D3D11Hook::s_imguiInitialized = false;
-bool D3D11Hook::s_menuOpen = true;
+bool D3D11Hook::s_menuOpen = false;
 bool D3D11Hook::s_initialized = false;
 std::atomic<bool> D3D11Hook::s_inFrame{ false };
 std::atomic<bool> D3D11Hook::s_anyItemActive{ false };
@@ -457,6 +458,19 @@ HRESULT WINAPI D3D11Hook::Hooked_Present(IDXGISwapChain* pSwapChain, UINT SyncIn
 
                 // 3. Render floating update notification banner if a newer build is ready
                 Updater::RenderUI(s_menuOpen);
+
+                // 4. Launch toast on normal startup (~4 seconds) when menu is closed
+                static uint64_t s_launchTime = 0;
+                if (s_launchTime == 0) s_launchTime = GetTickCount64();
+                const uint64_t now = GetTickCount64();
+                if (!s_menuOpen && (now - s_launchTime <= 4000) && !Settings::IsFirstRun()) {
+                    InputBinding b = InputManager::GetMenuToggleBinding();
+                    std::string keyName = b.name.empty() ? "F4" : b.name;
+                    const bool isRu = (UrushiUI::GetLanguage() == UrushiUI::Language::Russian);
+                    std::string msg = isRu ? ("URUSHI загружен — " + keyName + " чтобы открыть")
+                                           : ("URUSHI loaded — " + keyName + " to open");
+                    UrushiUI::RenderToast("##urushi_launch_toast", "URUSHI", msg.c_str());
+                }
             }
 
             // Crash prompt / Safe mode window (native, no Lua involved)
