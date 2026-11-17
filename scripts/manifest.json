@@ -5,8 +5,8 @@
     {
       "id": "carfx_mod",
       "path": "scripts/carfx_mod.lua",
-      "sha256": "81816192dd7844d4c5f0d989b6c72cebd5ab153e8ce4da4e13cd63d296f1d272",
-      "size": 22046,
+      "sha256": "732e1f67f55cf8c1d318e0c5192dbe31a8c7d1d0cece8a6880accd7996cd4143",
+      "size": 23250,
       "name": "CarFX Shaders",
       "name_ru": "CarFX Шейдеры",
       "description": "Custom body shaders, glass reflections, neon glow & tinting",
@@ -143,8 +143,8 @@
   "shaders": [
     {
       "path": "shaders/carfx.hlsli",
-      "sha256": "ee0eec4d51b560e20903eb1413f1ed676a0ba64f971e442595af93f581ef3f2c",
-      "size": 12871
+      "sha256": "88943b9a3514f3a78ef17c151d1a3d0a0ba342e3af1c5dcf0ffad5821581cbb8",
+      "size": 13885
     },
     {
       "path": "shaders/internals_neon.hlsl",
@@ -185,6 +185,11 @@
       "path": "shaders/livery_holo.hlsl",
       "sha256": "ea453d5b674a84e5979c894f305c7b553d237f37aa21a87bc03bafbdfdd521b3",
       "size": 1408
+    },
+    {
+      "path": "shaders/livery_music.hlsl",
+      "sha256": "263922e9230d5381515a761465cf14d88411c86cbfa8d9c173c35359e68122ff",
+      "size": 4966
     },
     {
       "path": "shaders/livery_proximity_reactive.hlsl",

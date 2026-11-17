@@ -33,6 +33,7 @@ Target: **CarX Drift Racing Online 2** (Unity 6000.3.19f1, IL2CPP, DX11, x64 Win
 | Shaders | `core/carfx.cpp`, `carfx_shader.cpp`, `carfx_draw.cpp`, `core/carfx_shader_decl.*`, `shaders/*.hlsl` | Per-car pixel-shader replacement/overlay, hot-reload/WIC loader, RT/depth copy & draw dispatch |
 | Post-processing | `core/postfx.*`, `core/bindings/lua_postfx.*`, `shaders/post/*.hlsl` | Full-screen postfx stage (Present hook, backbuffer copy, FS triangle PS, state restore, hot reload) |
 | Audio | `core/audio_player.*`, `core/bindings/lua_audio.*` | XAudio2 + Media Foundation playback engine (`urushi_data/audio/`, click-free fade, async decoding) |
+| Audio capture | `core/audio_capture.*`, `core/bindings/lua_audio_in.*` | WASAPI process loopback (`ActivateAudioInterfaceAsync`) & system loopback, 1024-FFT, beat onset & 32-band spectrum |
 | Replays | `core/replay_engine.*` | `.cxr2` multi-car recording/playback, embeds CarFX config |
 | Input | `core/input_manager.*` | Keyboard + XInput gamepad, rebindable bindings |
 | Dev tooling | `core/dev_pipe.*`, `tools/urushi_dev_mcp.py` | Named pipe `\\.\pipe\urushi_dev`: backbuffer screenshots, UI inspect, Lua eval, reload |
@@ -116,7 +117,7 @@ because panels call into Lua. `InputManager` and `NativeCarX` have their own mut
   `core/CMakeLists.txt`.
 
 ### Lua globals (registered in `LuaEngine::Init`)
-`carx` (cars, telemetry, tyres, physics, raycast, camera — `bindings/lua_carx.cpp`), `carfx`, `postfx`, `audio`, `replay`, `memory`,
+`carx` (cars, telemetry, tyres, physics, raycast, camera — `bindings/lua_carx.cpp`), `carfx`, `postfx`, `audio`, `audio_in`, `replay`, `memory`,
 `updater`, `cloud`, `optimizer`, `urushi` + `ui` + `input` (`bindings/lua_urushi.cpp`), `imgui` (`lua_imgui.cpp`), `events`, `log`.
 Stability-related `urushi.*`: `get_setting/set_setting(section,key,value)`, `list_scripts()`, `load_script(name)` (sandboxed),
 `reload_scripts()`, `get_last_crash()`, `open_crash_dir()`, `is_safe_mode()`.
@@ -157,6 +158,7 @@ schema table (declarative, `ui_schema`). It uses `T(ru, en)` from `i18n.lua` for
 | `perf_optimizer.lua` | multiplayer physics LOD | `car_sim_optimizer` |
 | `keybinds_mod.lua` | rebind actions to keys / gamepad | `input_manager` |
 | `initiald_mod.lua` | anime speed lines, cel look, drift music | `postfx`, `audio`, `carfx`, `native_carx` |
+| `music_mod.lua` | music-reactive audio capture, source picker & visualizer | `audio_capture`, `lua_audio_in` |
 | `config.lua` | the single JSON config (`urushi_data/config.json`) with autosave; `config.get/set/for_script` | — (pure Lua) |
 | `keybinds.lua` | bindings (persist `urushi_data/keybinds.json`) | `input_manager` |
 | `system_mod.lua` | settings, updater, stability, script list | `urushi_ui`, `updater`, `settings` |

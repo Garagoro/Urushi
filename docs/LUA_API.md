@@ -26,6 +26,7 @@ All scripts live inside the `scripts/` directory. The main entry point is [`scri
 15. [Memory Patching & Unity IL2CPP Reflection](#15-memory-patching--unity-il2cpp-reflection)
 16. [`postfx` Module — Full-Screen Post-Processing](#16-postfx-module--full-screen-post-processing)
 17. [`audio` Module — Audio Playback](#17-audio-module--audio-playback)
+18. [`audio_in` Module — Music Capture & Analysis](#18-audio_in-module--music-capture--analysis)
 
 ---
 
@@ -597,5 +598,75 @@ audio.set_volume(voice_id, 0.5)
 ### `audio.is_playing(voice_id)`
 Checks if the specified voice is actively playing.
 - **Returns:** `boolean`.
+
+---
+
+## 18. `audio_in` Module — Music Capture & Analysis
+
+The `audio_in` module captures audio played on the PC via WASAPI process-loopback (per-app capture, e.g. Spotify or browser, excluding game sounds) or system-wide loopback, analyzes frequency bands using a built-in 1024-FFT, and feeds real-time smoothed levels, beat onset pulses, and 32-band spectrums to CarFX shaders and Lua scripts.
+
+> **Security Note:** In accordance with URUSHI security policy ([`SECURITY.md`](SECURITY.md)), `audio_in` exposes **only** smoothed frequency band levels (0..1) and spectrum energy numbers — never raw PCM audio samples or waveforms.
+
+### API Reference
+
+* `audio_in.is_supported()`: Returns a table indicating runtime capability.
+  ```lua
+  local sup = audio_in.is_supported()
+  print(sup.process_loopback) -- boolean: true if Windows 10 2004+ process loopback is available
+  ```
+
+* `audio_in.list_sources()`: Enumerates candidate audio sources (active sessions on default render device).
+  ```lua
+  local sources = audio_in.list_sources()
+  for _, s in ipairs(sources) do
+      print(s.pid)         -- integer: process ID
+      print(s.exe)         -- string: executable name, e.g. "Spotify.exe"
+      print(s.name)        -- string: display name
+      print(s.active)      -- boolean: whether audio is actively playing
+      print(s.is_game)     -- boolean: true if this is CarX game itself
+  end
+  ```
+
+* `audio_in.set_source(exe_name_or_system)`: Selects target app executable (e.g. `"Spotify.exe"`) or `"system"`.
+  ```lua
+  audio_in.set_source("Spotify.exe") -- captures only Spotify
+  audio_in.set_source("system")      -- fallback: captures whole system audio
+  ```
+
+* `audio_in.get_source()`: Returns the currently selected source string (`"Spotify.exe"`, `"system"`).
+
+* `audio_in.set_enabled(enabled)`: Enables or disables audio capture. OFF by default.
+
+* `audio_in.is_enabled()`: Returns `boolean` whether capture is active.
+
+* `audio_in.get_status()`: Returns state string and detailed message.
+  ```lua
+  local state, text = audio_in.get_status()
+  -- state: "capturing" | "waiting" | "off" | "error"
+  -- text:  "Capturing Spotify.exe (PID 1234)" or "Waiting for Spotify.exe..."
+  ```
+
+* `audio_in.get_levels()`: Returns smoothed normalized metrics in range `[0.0 .. 1.0]`.
+  ```lua
+  local lv = audio_in.get_levels()
+  print(lv.level)    -- float: overall RMS volume
+  print(lv.bass)     -- float: bass band (20 - 250 Hz)
+  print(lv.low_mid)  -- float: low mids (250 - 1000 Hz)
+  print(lv.high_mid) -- float: high mids (1000 - 4000 Hz)
+  print(lv.treble)   -- float: treble (4000 - 16000 Hz)
+  print(lv.beat)     -- float: beat pulse (1.0 spike on drum/kick hits, decays smoothly)
+  ```
+
+* `audio_in.get_spectrum()`: Returns an array of 32 log-spaced frequency band values `[0.0 .. 1.0]`.
+  ```lua
+  local spec = audio_in.get_spectrum()
+  for i = 1, 32 do
+      -- spec[i] is between 0.0 and 1.0
+  end
+  ```
+
+* `audio_in.set_gain(gain)` / `audio_in.get_gain()`: Tunes auto-gain multiplier (default `1.0`).
+
+* `audio_in.set_smoothing(attack, release)` / `audio_in.get_smoothing()`: Tunes attack (`0.05..1.0`) and release decay (`0.02..0.8`).
 
 

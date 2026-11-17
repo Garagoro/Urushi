@@ -17,6 +17,7 @@
 #include "bindings/lua_cloud.h"
 #include "bindings/lua_disasm.h"
 #include "bindings/lua_pattern.h"
+#include "bindings/lua_audio_in.h"
 #include "pattern_scanner.h"
 #include "lua_sandbox.h"
 #include "lua_hardening.h"
@@ -75,6 +76,7 @@ bool LuaEngine::Init(const std::wstring& scriptsDir) {
     LuaCloud::Register(s_L);
     LuaDisasm::Register(s_L);
     LuaPattern::Register(s_L);
+    LuaAudioIn::Register(s_L);
     RegisterEventsModule(s_L);
     RegisterLogModule(s_L);
 

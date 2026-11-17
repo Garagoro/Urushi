@@ -66,6 +66,9 @@ cbuffer CarFx : register(b13) {
     float4 g_fxCamRight;          // xyz: main camera right axis (world)
     float4 g_fxCamUp;             // xyz: main camera up axis
     float4 g_fxCamFwd;            // xyz: main camera forward axis, w: basis valid (0/1)
+    float4 g_fxAudio;             // x: level, y: bass, z: mid, w: treble
+    float4 g_fxAudio2;            // x: beat pulse, y: low-mid, z: high-mid, w: enabled (0/1)
+    float4 g_fxAudioSpectrum[8];  // 32 log-spaced spectrum bands
 };
 
 // Custom SRV bindings on t32..t38 (RenderCore/Standard uses up to t28)
@@ -277,3 +280,27 @@ float CarPixelToWallHitDist(PSIn i, float4 wallHit) {
     if (wallHit.w > 900.0 || !HasCarSpatial()) return 999.0;
     return length(CarWorldPos(i) - wallHit.xyz);
 }
+
+// Audio reactive helpers
+float AudioLevel()   { return g_fxAudio.x; }
+float AudioBass()    { return g_fxAudio.y; }
+float AudioMid()     { return g_fxAudio.z; }
+float AudioTreble()  { return g_fxAudio.w; }
+float AudioBeat()    { return g_fxAudio2.x; }
+float AudioLowMid()  { return g_fxAudio2.y; }
+float AudioHighMid() { return g_fxAudio2.z; }
+bool  AudioEnabled() { return g_fxAudio2.w > 0.5; }
+
+float AudioSpectrumBand(uint band) {
+    if (band >= 32) return 0.0;
+    return g_fxAudioSpectrum[band / 4][band % 4];
+}
+
+float AudioSpectrum(float u) {
+    float pos = saturate(u) * 31.0;
+    uint idx0 = min((uint)floor(pos), 31u);
+    uint idx1 = min(idx0 + 1u, 31u);
+    float frac = pos - (float)idx0;
+    return lerp(AudioSpectrumBand(idx0), AudioSpectrumBand(idx1), frac);
+}
+

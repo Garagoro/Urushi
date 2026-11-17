@@ -42,10 +42,12 @@ add_library(urushi SHARED
     urushi_ui.h urushi_ui_internal.h urushi_ui.cpp urushi_ui_dock.cpp urushi_ui_widgets.cpp
     dev_pipe.h dev_pipe.cpp
     updater.h updater.cpp
+    audio_capture.h audio_capture.cpp
     bindings/lua_carx.h bindings/lua_carx.cpp
     bindings/lua_carfx.h bindings/lua_carfx.cpp
     bindings/lua_postfx.h bindings/lua_postfx.cpp
     bindings/lua_audio.h bindings/lua_audio.cpp
+    bindings/lua_audio_in.h bindings/lua_audio_in.cpp
     bindings/lua_imgui.h bindings/lua_imgui.cpp
     bindings/lua_replay.h bindings/lua_replay.cpp
     bindings/lua_memory.h bindings/lua_memory.cpp

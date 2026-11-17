@@ -151,6 +151,17 @@ All real-time environment, telemetry, and sensor data is pushed into `cbuffer Ca
 * `g_fxDriftState.z` — Normalized drift angle (`0.0` at 0°, `1.0` at 65°).
 * `g_fxDriftState.w` — Car speed in km/h.
 
+### Music Reactive Audio Inputs (App & System Loopback)
+* `g_fxAudio.x` — Overall RMS volume level (`0.0..1.0`).
+* `g_fxAudio.y` — Bass frequency band energy (`20..250 Hz`, `0.0..1.0`).
+* `g_fxAudio.z` — Combined mid frequency band energy (`250..4000 Hz`, `0.0..1.0`).
+* `g_fxAudio.w` — Treble frequency band energy (`4000..16000 Hz`, `0.0..1.0`).
+* `g_fxAudio2.x` — Beat onset pulse (`1.0` on bass onset/kick, decaying smoothly to `0.0`).
+* `g_fxAudio2.y` — Low-mid band energy (`250..1000 Hz`).
+* `g_fxAudio2.z` — High-mid band energy (`1000..4000 Hz`).
+* `g_fxAudio2.w` — Audio capture enabled flag (`1.0` if active, `0.0` if off).
+* `g_fxAudioSpectrum[8]` — 32 log-spaced spectrum bands (`float4[8]`). Zeroed when capture is off.
+
 ---
 
 ## 5. Textures & Samplers
@@ -188,6 +199,19 @@ Included in `carfx.hlsli`:
 * `float3 ViewDir(PSIn i)` — Returns normalized direction to camera `normalize(-i.posRelCam)`.
 * `float Fresnel(PSIn i, float power)` — Calculates standard Schlick Fresnel term.
 * `float2 ScreenUV(PSIn i)` — Returns normalized screen UVs `[0..1]`.
+
+### Audio Reactive Helpers
+* `bool AudioEnabled()` — Returns `true` if audio capture is active and feeding data.
+* `float AudioLevel()` — Overall volume level `[0..1]`.
+* `float AudioBass()` — Bass pulse energy `[0..1]`.
+* `float AudioMid()` — Mid-frequency energy `[0..1]`.
+* `float AudioTreble()` — Treble frequency energy `[0..1]`.
+* `float AudioBeat()` — Beat onset strobe pulse (jumps to `1.0` on drum/kick hits and decays).
+* `float AudioLowMid()`, `float AudioHighMid()` — Fine frequency ranges.
+* `float AudioSpectrumBand(uint band)` — Magnitude of band `0..31`.
+* `float AudioSpectrum(float u)` — Linearly interpolated continuous sampling across the 32 bands (`u in 0..1`). Sample along `CarLocalPos(i).z` to map frequencies across the length of the car!
+
+Sample shader: `shaders/livery_music.hlsl`.
 
 ---
 

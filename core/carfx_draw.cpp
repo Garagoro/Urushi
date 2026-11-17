@@ -2,6 +2,7 @@
 #include "carfx_internal.h"
 #include "logger.h"
 #include "native_carx.h"
+#include "audio_capture.h"
 
 #include <algorithm>
 #include <cstring>
@@ -849,6 +850,8 @@ bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, Draw
         memcpy(k.camUp, sp.camUp, sizeof(k.camUp));
         memcpy(k.camFwd, sp.camFwd, sizeof(k.camFwd));
     }
+
+    AudioCapture::GetShaderAudioData(k.audio, k.audio2, &k.audioSpectrum[0][0]);
 
     D3D11_MAPPED_SUBRESOURCE mapped{};
     if (FAILED(context->Map(g_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)) || !mapped.pData) {

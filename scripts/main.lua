@@ -94,7 +94,7 @@ local LUA_FUNCS = { "assert", "error", "ipairs", "pairs", "next", "pcall", "xpca
                     "type", "rawequal", "rawget", "rawset", "rawlen", "setmetatable", "print" }
 local LUA_LIBS = { "string", "table", "math", "utf8", "coroutine", "os", "debug" }
 local API_MODULES = { "carx", "steer_assist", "carfx", "postfx", "audio", "replay", "memory", "unity", "optimizer", "ui", "input", "imgui", "gui",
-                      "events", "log", "i18n", "keybinds", "il2cpp" }
+                      "events", "log", "i18n", "keybinds", "il2cpp", "audio_in" }
 local SETTINGS_NAMES = { settings = true, SETTINGS = true, config_data = true, CONFIG = true, state = true, STATE = true }
 
 local function make_env(script_id, cloud_id)
@@ -201,8 +201,10 @@ local FALLBACK_BUILTIN = {
     { id = "steer_assist_mod", ru = "Помощь руля (155°)",        en = "Steering Assist (155°)", default_enabled = false, window_ids = { "steer_assist" } },
     { id = "tires_mod",        ru = "Кузов и шины",              en = "Body & Tires",          default_enabled = false, window_ids = { "tires" } },
     { id = "perf_optimizer",   ru = "Оптимизатор FPS",           en = "FPS Optimizer",         default_enabled = true,  window_ids = { "perf" } },
+    { id = "music_mod",        ru = "Музыкальная ливрея",        en = "Music Reactive",        default_enabled = false, window_ids = { "music" } },
     { id = "keybinds_mod",     ru = "Горячие клавиши",           en = "Keybinds & Controls",   default_enabled = true,  window_ids = { "keybinds" } },
     { id = "initiald_mod",     ru = "Initial D режим",           en = "Initial D Mode",        default_enabled = false, window_ids = { "initiald" } },
+}
 }
 
 for _, fb in ipairs(FALLBACK_BUILTIN) do

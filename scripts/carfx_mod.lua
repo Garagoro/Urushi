@@ -372,6 +372,28 @@ local function render_carfx_window()
         end
     end)
 
+    if audio_in and audio_in.is_enabled then
+        local audio_on = audio_in.is_enabled()
+        local a_st, a_txt = audio_in.get_status()
+        ui.card(T("Музыкальная реактивность", "Music Reactivity"), nil, function()
+            local a_ch, new_a = ui.toggle(T("Захват звука для шейдеров##cfx_m_en", "Audio Capture for Shaders##cfx_m_en"), audio_on)
+            if a_ch then
+                audio_in.set_enabled(new_a)
+            end
+            ui.same_line(0, 10)
+            ui.badge(audio_on and (a_st == "capturing" and T("Активно", "Capturing") or T("Ожидание", "Waiting")) or T("Выкл", "Off"),
+                     audio_on and (a_st == "capturing" and "ok" or "warn") or "muted")
+            if a_txt and a_txt ~= "" then
+                ui.spacing(2)
+                ui.text_dim(a_txt)
+            end
+            ui.spacing(2)
+            if ui.button(T("Открыть окно настройки музыки##cfx_open_m", "Open Music Controls##cfx_open_m"), ui.avail_width(), 24, "ghost") then
+                if urushi and urushi.open_window then urushi.open_window("music") end
+            end
+        end)
+    end
+
     if st.params and #st.params > 0 then
         ui.card(T("Параметры шейдера", "Shader Parameters"), short_name ~= "" and short_name or nil, function()
             for idx = 1, #st.params do

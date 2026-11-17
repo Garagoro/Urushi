@@ -23,6 +23,7 @@ cannot download anything, cannot create runnable files, and cannot reach other p
 | Read / compile arbitrary files through CarFX | `carfx.load` / `carfx.set_tex` only accept files inside `shaders/`; HLSL `#include` is confined to `shaders/` too |
 | Read / compile arbitrary files through PostFX | `postfx.load` only accepts files inside `shaders/post/` (`.hlsl` only); path validation rejects `..`, absolute, or UNC paths |
 | Read arbitrary files / path traversal in audio | `audio.play` strictly confined to `urushi_data/audio/` (and isolated scripts confined to `urushi_data/<script>/` or `urushi_data/audio/`). Validated against `..`, `:`, UNC, device names, and extension whitelist (`.wav .mp3 .ogg .flac .aac .m4a .wma`). Decoding runs off the render thread on a worker thread. Max 8 voices |
+| Eavesdrop on sound / record microphone | `audio_in` only exposes smoothed frequency band levels (0..1) and 32-band spectrum energies — never raw PCM audio samples or waveforms (`core/bindings/lua_audio_in.cpp`) |
 | Hijack other scripts | Isolated scripts run in their own environment with private copies of the API tables; the string metatable is hidden; `load` is bound to the private environment |
 
 ### Trust tiers (`scripts/main.lua`)

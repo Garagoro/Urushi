@@ -60,6 +60,9 @@ struct FxConstants {
     float camRight[4];
     float camUp[4];
     float camFwd[4];
+    float audio[4];            // x: level, y: bass, z: mid, w: treble
+    float audio2[4];           // x: beat pulse, y: low-mid, z: high-mid, w: enabled (0/1)
+    float audioSpectrum[8][4]; // 32 log-spaced spectrum bands
 };
 static_assert(sizeof(FxConstants) % 16 == 0, "CarFx constant buffer must align to 16 bytes");
 

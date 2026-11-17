@@ -17,6 +17,7 @@
 #include "safe_mode.h"
 #include "cloud_scripts.h"
 #include "audio_player.h"
+#include "audio_capture.h"
 
 #pragma comment(lib, "shlwapi.lib")
 
@@ -69,6 +70,7 @@ extern "C" __declspec(dllexport) void ScriptHook_Unload() {
     Sleep(50);
 
     if (featuresUp) {
+        AudioCapture::Shutdown();
         FileWatcher::Stop();
         DevPipe::Shutdown();
         Updater::Shutdown();
@@ -126,6 +128,8 @@ static void StartFeatures() {
 
         // Start async auto-update check against GitHub repository (Garagoro/Urushi)
         Updater::Init(g_exeDir, g_module);
+
+        AudioCapture::Init();
     }
     catch (const std::exception& ex) {
         Logger::Error(std::string("Exception while starting features: ") + ex.what());
