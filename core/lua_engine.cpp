@@ -8,6 +8,13 @@
 #include "bindings/lua_postfx.h"
 #include "bindings/lua_audio.h"
 #include "audio_player.h"
+#include "audio_capture.h"
+#include "carfx.h"
+#include "postfx.h"
+#include "ecs_collision.h"
+#include "car_sim_optimizer.h"
+#include "native_carx.h"
+#include "unity_bridge.h"
 #include "bindings/lua_imgui.h"
 #include "bindings/lua_replay.h"
 #include "bindings/lua_memory.h"
@@ -120,10 +127,19 @@ void LuaEngine::Shutdown() {
     UiSchema::Shutdown();
     UrushiUI::ClearLuaRefs(s_L);
 
-    // Rollback any live memory code patches to keep game clean
+    // Rollback any live memory code patches and native script-driven overrides to keep game clean
     LuaMemory::RestoreAllPatchesNative();
     PatternScanner::ClearCache();
     AudioPlayer::OnLuaReload();
+    AudioCapture::SetEnabled(false);
+    PostFX::SetEnabled(false);
+    PostFX::UnloadShader();
+    CarFX::UnloadShader(CarFX::kTargetBody);
+    CarFX::UnloadShader(CarFX::kTargetInternals);
+    EcsCollision::SetConfig(SelectiveGhostConfig{});
+    UnityBridge::DestroyGhostVisual();
+    CarSimOptimizer::ResetDefaults();
+    NativeCarX::ResetTyreDefaults();
 
     if (s_L) {
         luaL_dostring(s_L, "if config and config.save then config.save() end");

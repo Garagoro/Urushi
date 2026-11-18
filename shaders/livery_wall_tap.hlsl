@@ -17,11 +17,12 @@
 #include "carfx.hlsli"
 
 float HexGridMask(float2 p) {
-    // Smooth architectural tech-hex lattice in car-local meters
+    // Smooth architectural tech-hex lattice in car-local meters (continuous across zero)
     float2 r = float2(1.0, 1.7320508);
     float2 h = r * 0.5;
-    float2 a = fmod(abs(p), r) - h;
-    float2 b = fmod(abs(p + h), r) - h;
+    float2 a = p - r * floor(p / r) - h;
+    float2 q = p + h;
+    float2 b = q - r * floor(q / r) - h;
     float2 gv = dot(a, a) < dot(b, b) ? a : b;
     float edge = 0.5 - max(abs(gv.x), dot(abs(gv), float2(0.5, 0.8660254)));
     return 1.0 - smoothstep(0.025, 0.095, edge);

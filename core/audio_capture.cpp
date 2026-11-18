@@ -840,6 +840,17 @@ std::vector<SourceInfo> ListSources() {
     std::vector<SourceInfo> result;
     const DWORD currentPid = GetCurrentProcessId();
 
+    struct ComScope {
+        bool didInit = false;
+        ComScope() {
+            HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+            didInit = (hr == S_OK || hr == S_FALSE);
+        }
+        ~ComScope() {
+            if (didInit) CoUninitialize();
+        }
+    } comScope;
+
     IMMDeviceEnumerator* pEnum = nullptr;
     if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&pEnum)))) {
         return result;

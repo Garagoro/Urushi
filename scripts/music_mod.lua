@@ -7,7 +7,7 @@ if not audio_in then
     return
 end
 
-local cfg = config.for_script("music_mod")
+local cfg = config.for_script("music")
 local settings = cfg.auto({
     enabled = false,
     source = "system",
@@ -58,42 +58,36 @@ if events and events.on_render then
         local st, txt = audio_in.get_status()
         state.status_state = st or "off"
         state.status_text = txt or ""
+        if audio_in.is_enabled then
+            local live_en = (audio_in.is_enabled() == true)
+            if live_en ~= (settings.enabled == true) then
+                settings.enabled = live_en
+                cfg.set("enabled", live_en)
+            end
+        end
     end)
 end
 
-local function render_spectrum_bars(spec, w, h)
-    if not imgui or not imgui.get_window_draw_list then return end
-    local dl = imgui.get_window_draw_list()
-    local cx, cy = imgui.get_cursor_screen_pos()
-    local S = (urushi and urushi.get_scale and urushi.get_scale()) or 1.0
+local BAND_LABELS = { "Sub", "Bass", "LoM", "Mid", "HiM", "Pres", "Bril", "Air" }
 
-    -- Background frame
-    local bg_col = imgui.color_convert_float4_to_u32(0.06, 0.08, 0.11, 0.9)
-    local border_col = imgui.color_convert_float4_to_u32(0.2, 0.25, 0.32, 0.4)
-    dl:add_rect_filled(cx, cy, cx + w, cy + h, bg_col, 4.0 * S)
-    dl:add_rect(cx, cy, cx + w, cy + h, border_col, 4.0 * S)
-
-    local num_bars = 32
-    local bar_gap = 2.0 * S
-    local total_gaps = (num_bars + 1) * bar_gap
-    local bar_w = math.max(1.0, (w - total_gaps) / num_bars)
-
-    for i = 1, num_bars do
-        local val = math.max(0.0, math.min(1.0, spec[i] or 0.0))
-        local bh = math.max(2.0 * S, val * (h - 6.0 * S))
-        local bx = cx + bar_gap + (i - 1) * (bar_w + bar_gap)
-        local by = cy + h - 3.0 * S - bh
-
-        -- Color gradient from Cyan (bass) to Magenta (mid) to Golden/White (treble)
-        local r = math.min(1.0, (i / num_bars) * 1.5)
-        local g = math.max(0.2, 1.0 - math.abs((i - 16) / 16.0) * 0.8)
-        local b = math.max(0.3, 1.0 - (i / num_bars))
-        local bar_col = imgui.color_convert_float4_to_u32(r, g, b, 0.85 + val * 0.15)
-
-        dl:add_rect_filled(bx, by, bx + bar_w, cy + h - 3.0 * S, bar_col, 2.0 * S)
+local function render_spectrum_bars(spec, avail_w)
+    -- Compact 8-band spectrum meter built from standard Urushi ui.progress_bar widgets
+    local bands = 8
+    local gap = 4.0
+    local bw = math.max(20.0, (avail_w - (bands - 1) * gap) / bands)
+    for b = 1, bands do
+        local s_idx = (b - 1) * 4 + 1
+        local peak = 0.0
+        for k = 0, 3 do
+            local v = spec[s_idx + k] or 0.0
+            if v > peak then peak = v end
+        end
+        peak = math.max(0.0, math.min(1.0, peak))
+        ui.progress_bar(peak, bw, 14, BAND_LABELS[b])
+        if b < bands then
+            ui.same_line(0, gap)
+        end
     end
-
-    ui.dummy(w, h)
 end
 
 local function render_music_window()
@@ -118,13 +112,13 @@ local function render_music_window()
         local badge_label = T("Выключено", "Disabled")
         if settings.enabled then
             if state.status_state == "capturing" then
-                badge_tone = "ok"
+                badge_tone = "green"
                 badge_label = T("Активно", "Capturing")
             elseif state.status_state == "waiting" then
-                badge_tone = "warn"
+                badge_tone = "yellow"
                 badge_label = T("Ожидание источника", "Waiting for app")
             elseif state.status_state == "error" then
-                badge_tone = "danger"
+                badge_tone = "red"
                 badge_label = T("Ошибка", "Error")
             end
         end
@@ -138,7 +132,7 @@ local function render_music_window()
         if not state.supported_loopback then
             ui.spacing(3)
             ui.text_wrapped(T("Внимание: WASAPI Process Loopback не поддерживается этой версией Windows (требуется Windows 10 2004+). Доступен только системный захват (Whole System).",
-                              "Note: WASAPI Process Loopback is not supported on this Windows version (requires Windows 10 2004+). Only whole system loopback is available."), "warn")
+                              "Note: WASAPI Process Loopback is not supported on this Windows version (requires Windows 10 2004+). Only whole system loopback is available."), "yellow")
         end
     end)
 
@@ -146,17 +140,15 @@ local function render_music_window()
     ui.card(T("Источник звука", "Audio Source"), T("Выберите приложение или системный звук", "Choose application or whole system"), function()
         local avail_w = ui.avail_width()
 
-        -- Refresh button
-        if ui.button(T("Обновить список приложений##m_ref", "Refresh Apps List##m_ref"), avail_w, 24, "ghost") then
+        if ui.button(T("Обновить список приложений##m_ref", "Refresh Apps List##m_ref"), avail_w, 26, "ghost") then
             refresh_sources()
         end
         ui.spacing(4)
 
-        -- "Whole system" option
         local is_system = (settings.source == "system" or settings.source == "" or settings.source == nil)
-        local sys_label = T("Весь системный звук (Whole System)##m_src_sys", "Whole System Audio##m_src_sys")
-        local sys_ch = ui.selectable(sys_label, is_system)
-        if sys_ch and not is_system then
+        local sys_prefix = is_system and "● " or ""
+        local sys_label = sys_prefix .. T("Весь системный звук (Whole System)##m_src_sys", "Whole System Audio##m_src_sys")
+        if ui.button(sys_label, avail_w, 26, is_system and "primary" or "ghost") and not is_system then
             settings.source = "system"
             audio_in.set_source("system")
             cfg.set("source", "system")
@@ -165,7 +157,6 @@ local function render_music_window()
         ui.separator()
         ui.spacing(2)
 
-        -- List running applications
         if #state.sources == 0 then
             ui.text_dim(T("Активные звуковые приложения не обнаружены (включите музыку и нажмите 'Обновить').",
                           "No active audio apps found (play music and click 'Refresh')."))
@@ -174,7 +165,7 @@ local function render_music_window()
             ui.spacing(2)
 
             for idx, src in ipairs(state.sources) do
-                local selected = (not is_system and string.lower(settings.source) == string.lower(src.exe))
+                local selected = (not is_system and string.lower(settings.source or "") == string.lower(src.exe or ""))
                 local tag = ""
                 if src.is_game then
                     tag = " [" .. T("Эта игра", "Game") .. "]"
@@ -182,9 +173,9 @@ local function render_music_window()
                     tag = " (" .. T("играет", "active") .. ")"
                 end
 
-                local label = string.format("%s (%s)%s##m_src_%d", src.name, src.exe, tag, idx)
-                local sel_ch = ui.selectable(label, selected)
-                if sel_ch and not selected then
+                local prefix = selected and "● " or ""
+                local label = string.format("%s%s (%s)%s##m_src_%d", prefix, src.name or "App", src.exe or "?", tag, idx)
+                if ui.button(label, avail_w, 24, selected and "primary" or "ghost") and not selected then
                     settings.source = src.exe
                     audio_in.set_source(src.exe)
                     cfg.set("source", src.exe)
@@ -221,46 +212,60 @@ local function render_music_window()
     ui.card(T("Монитор частот и бит-пульса", "Frequency & Beat Monitor"), nil, function()
         local lv = audio_in.get_levels and audio_in.get_levels() or { level = 0, bass = 0, mid = 0, treble = 0, beat = 0 }
         local spec = audio_in.get_spectrum and audio_in.get_spectrum() or {}
-
         local avail_w = ui.avail_width()
 
-        -- 32-band spectrum visualizer canvas
-        render_spectrum_bars(spec, avail_w, 54.0)
+        render_spectrum_bars(spec, avail_w)
 
         ui.spacing(4)
+        ui.stat_row({
+            { label = T("Бас", "Bass"),    value = string.format("%.0f%%", (lv.bass or 0.0) * 100),   tone = "accent" },
+            { label = T("СЧ", "Mid"),      value = string.format("%.0f%%", (lv.mid or 0.0) * 100),    tone = "default" },
+            { label = T("ВЧ", "Treble"),   value = string.format("%.0f%%", (lv.treble or 0.0) * 100), tone = "default" },
+            { label = T("Бит", "Beat"),    value = string.format("%.0f%%", (lv.beat or 0.0) * 100),   tone = (lv.beat or 0.0) > 0.35 and "green" or "muted" },
+        })
 
-        -- Discrete meters
+        ui.spacing(4)
         ui.text_dim(T("Общий уровень (RMS)", "Overall RMS Level"))
-        ui.progress_bar(lv.level or 0.0, avail_w, 14, string.format("%.0f%%", (lv.level or 0.0) * 100))
+        ui.progress_bar(lv.level or 0.0, avail_w, 12, string.format("%.0f%%", (lv.level or 0.0) * 100))
 
         ui.spacing(2)
-        local col_w = (avail_w - 12) / 3.0
+        local col_w = (avail_w - 12.0) / 3.0
+        ui.progress_bar(lv.bass or 0.0, col_w, 10, string.format(T("Бас %.0f%%", "Bass %.0f%%"), (lv.bass or 0.0) * 100))
+        ui.same_line(0, 6)
+        ui.progress_bar(lv.mid or 0.0, col_w, 10, string.format(T("СЧ %.0f%%", "Mid %.0f%%"), (lv.mid or 0.0) * 100))
+        ui.same_line(0, 6)
+        ui.progress_bar(lv.treble or 0.0, col_w, 10, string.format(T("ВЧ %.0f%%", "High %.0f%%"), (lv.treble or 0.0) * 100))
 
-        ui.columns(3)
-        ui.text_dim(T("Бас (20-250 Hz)", "Bass (20-250 Hz)"))
-        ui.progress_bar(lv.bass or 0.0, col_w, 12, string.format("%.0f%%", (lv.bass or 0.0) * 100))
-        ui.next_column()
-
-        ui.text_dim(T("СЧ (250-4k Hz)", "Mids (250-4k Hz)"))
-        local mid_val = lv.mid or ((lv.low_mid or 0.0) + (lv.high_mid or 0.0)) * 0.5
-        ui.progress_bar(mid_val, col_w, 12, string.format("%.0f%%", mid_val * 100))
-        ui.next_column()
-
-        ui.text_dim(T("ВЧ (4k-16k Hz)", "Treble (4k-16k)"))
-        ui.progress_bar(lv.treble or 0.0, col_w, 12, string.format("%.0f%%", (lv.treble or 0.0) * 100))
-        ui.columns(1)
-
-        ui.spacing(3)
-        ui.text_dim(T("Бит-пульс (Kick / Onset Pulse)", "Beat Onset Pulse"))
-        ui.progress_bar(lv.beat or 0.0, avail_w, 14, string.format("%.0f%%", (lv.beat or 0.0) * 100))
+        ui.spacing(2)
+        ui.progress_bar(lv.beat or 0.0, avail_w, 12, string.format(T("Бит-пульс: %.0f%%", "Beat Pulse: %.0f%%"), (lv.beat or 0.0) * 100))
     end)
 
     -- 5. CarFX Quick Action
     if carfx and carfx.load then
         ui.card(T("Шейдер ливреи CarFX", "CarFX Music Livery"), nil, function()
-            if ui.button(T("Загрузить livery_music.hlsl на кузов##m_apply_hlsl", "Load livery_music.hlsl on Car Body##m_apply_hlsl"), ui.avail_width(), 28, "primary") then
-                carfx.load("livery_music.hlsl", 0)
-                if carfx.set_enabled then carfx.set_enabled(true) end
+            local bw = (ui.avail_width() - 6.0) * 0.5
+            if ui.button(T("На кузов (livery_music)##m_apply_body", "Load on Body##m_apply_body"), bw, 28, "primary") then
+                local ok = carfx.load("livery_music.hlsl", 0)
+                if ok then
+                    if carfx.set_enabled then carfx.set_enabled(true) end
+                    if carfx.set_target_enabled then carfx.set_target_enabled(0, true) end
+                    if config then
+                        config.set("carfx", "body_enabled", true)
+                        config.set("carfx", "selected_shader", "livery_music.hlsl")
+                    end
+                end
+            end
+            ui.same_line(0, 6)
+            if ui.button(T("На салон/детали##m_apply_int", "Load on Internals##m_apply_int"), bw, 28, "ghost") then
+                local ok = carfx.load("livery_music.hlsl", 1)
+                if ok then
+                    if carfx.set_enabled then carfx.set_enabled(true) end
+                    if carfx.set_target_enabled then carfx.set_target_enabled(1, true) end
+                    if config then
+                        config.set("carfx", "internals_enabled", true)
+                        config.set("carfx", "internals_shader", "livery_music.hlsl")
+                    end
+                end
             end
         end)
     end
@@ -270,7 +275,7 @@ if urushi and urushi.register_window then
     urushi.register_window({
         id = "music",
         title = T("Музыкальная ливрея", "Music Reactive"),
-        icon = "sound",
+        icon = "hud",
         order = 36,
         default_open = false,
         default_pinned = false,
@@ -282,7 +287,4 @@ if urushi and urushi.register_window then
     })
 end
 
-_G.music_mod = {
-    apply = apply_settings,
-    refresh_sources = refresh_sources,
-}
+log.info("Music-reactive livery module loaded.")

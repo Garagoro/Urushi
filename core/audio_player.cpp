@@ -447,11 +447,13 @@ uint32_t Play(const std::string& filenameUtf8, const PlayOptions& options, std::
     s_activeDecodes.fetch_add(1);
 
     std::thread([fullPath, voiceId]() {
+        struct DecodeGuard {
+            ~DecodeGuard() { s_activeDecodes.fetch_sub(1); }
+        } guard;
+
         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
         auto decoded = DecodeWithMediaFoundation(fullPath);
         CoUninitialize();
-
-        s_activeDecodes.fetch_sub(1);
 
         std::lock_guard<std::mutex> lk(s_mutex);
         if (!s_xaudio2 || s_shuttingDown.load()) return;

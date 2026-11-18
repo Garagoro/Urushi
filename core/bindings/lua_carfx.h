@@ -16,10 +16,14 @@ public:
     static int Reload(lua_State* L);
     static int SetEnabled(lua_State* L);
     static int IsEnabled(lua_State* L);
+    static int SetTargetEnabled(lua_State* L);
+    static int IsTargetEnabled(lua_State* L);
     static int SetMode(lua_State* L);
     static int SetStealth(lua_State* L);
     static int SetParam(lua_State* L);
     static int GetParam(lua_State* L);
+    static int SetTargetParam(lua_State* L);
+    static int GetTargetParam(lua_State* L);
     static int SetTex(lua_State* L);
     static int ClearTex(lua_State* L);
     static int SetGameInput(lua_State* L);

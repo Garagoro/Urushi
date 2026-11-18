@@ -115,7 +115,39 @@ local function apply_ghost_time(t)
     end
 end
 
+local function stop_playback()
+    if state.frozen_car_ptr then
+        if carx.set_car_active then
+            carx.set_car_active(state.frozen_car_ptr, true)
+        end
+        state.frozen_car_ptr = nil
+    end
+
+    if state.using_ghost_clone then
+        if carx.destroy_ghost then
+            carx.destroy_ghost()
+        end
+        state.using_ghost_clone = false
+    end
+
+    if state.active_ghost_ptr then
+        if carx.destroy_car then
+            carx.destroy_car(state.active_ghost_ptr)
+        end
+        state.active_ghost_ptr = nil
+    end
+
+    state.mode = "IDLE"
+    state.playback_time = 0.0
+    state.countdown = 0.0
+    state.status_msg = ""
+end
+
 local function start_recording()
+    if state.mode == "PLAYING" or state.mode == "PAUSED" then
+        stop_playback()
+    end
+
     local cars = get_player_list()
     if #cars == 0 then
         state.status_msg = T("На трассе нет машин.", "No active car on track.")
@@ -178,35 +210,14 @@ local function stop_recording()
     end
 end
 
-local function stop_playback()
-    if state.frozen_car_ptr then
-        if carx.set_car_active then
-            carx.set_car_active(state.frozen_car_ptr, true)
-        end
-        state.frozen_car_ptr = nil
-    end
-
-    if state.using_ghost_clone then
-        if carx.destroy_ghost then
-            carx.destroy_ghost()
-        end
-        state.using_ghost_clone = false
-    end
-
-    if state.active_ghost_ptr then
-        if carx.destroy_car then
-            carx.destroy_car(state.active_ghost_ptr)
-        end
-        state.active_ghost_ptr = nil
-    end
-
-    state.mode = "IDLE"
-    state.playback_time = 0.0
-    state.countdown = 0.0
-    state.status_msg = ""
-end
-
 local function start_playback()
+    if replay.is_recording() or state.mode == "RECORDING" then
+        stop_recording()
+    end
+    if state.mode == "PLAYING" or state.mode == "PAUSED" then
+        stop_playback()
+    end
+
     if #state.saved_replays == 0 then
         refresh_replays()
     end
@@ -230,13 +241,8 @@ local function start_playback()
         carx.set_ghost_mirror(false)
     end
 
-    local track_count = (replay.get_track_count and replay.get_track_count()) or 1
-
     if state.playback_type == "GHOST" then
         if replay.apply_all_to_ghosts or (carx.spawn_ghost and replay.apply_to_ghost) then
-            if track_count == 1 and carx.spawn_ghost then
-                carx.spawn_ghost()
-            end
             state.using_ghost_clone = true
             apply_ghost_time(0.0)
         else
@@ -395,10 +401,11 @@ local function draw_ghost_radar()
 
     local cars = get_player_list()
     local active_ghosts = {}
+    local max_d = (state.ghost_cfg.max_distance and state.ghost_cfg.max_distance > 0.0) and state.ghost_cfg.max_distance or 99999.0
     for _, c in ipairs(cars) do
         if not c.is_local_player and c.is_selectively_ghosted then
             local d = c.dist_to_player or 0.0
-            if d <= 150.0 or c.ghost_mode == 1 then
+            if d <= max_d or c.ghost_mode == 1 then
                 table.insert(active_ghosts, c)
             end
         end
@@ -406,7 +413,8 @@ local function draw_ghost_radar()
     if #active_ghosts == 0 then return end
 
     if imgui and imgui.set_next_window_size then
-        imgui.set_next_window_size(310, 0, 2)
+        local ui_scale = (urushi and urushi.get_ui_scale and urushi.get_ui_scale()) or 1.0
+        imgui.set_next_window_size(310 * ui_scale, 0, 2)
     end
     local rOpen, keepRadar = imgui.begin_window(T("Радар встречки [J]##ww_radar", "Wrong-Way Radar [J]##ww_radar"), true)
     if rOpen then
@@ -537,6 +545,9 @@ local function render_replay_window()
             if #filenames > 0 then
                 local c_ch, new_idx = ui.combo(T("Выбор .cxr2##rep_file", "Select .cxr2##rep_file"), state.selected_replay_idx, filenames)
                 if c_ch then
+                    if state.mode == "PLAYING" or state.mode == "PAUSED" then
+                        stop_playback()
+                    end
                     state.selected_replay_idx = new_idx
                     replay.load(filenames[new_idx])
                 end

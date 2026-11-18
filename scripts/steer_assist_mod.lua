@@ -298,8 +298,20 @@ steer_assist = {
     get_stats = get_stats,
 }
 
--- Apply initial patches once module loads
+-- Apply initial patches once module loads (and retry in update if NativeCarX.dll loads later)
 apply_patches()
+
+if events and events.on_update then
+    local retry_accum = 0.0
+    events.on_update(function(dt)
+        if not sa_settings.enabled or runtime.patches_applied then return end
+        retry_accum = retry_accum + (dt or 0.016)
+        if retry_accum >= 0.5 then
+            retry_accum = 0.0
+            apply_patches()
+        end
+    end)
+end
 
 local function is_recommended_preset(cfg)
     return cfg.enabled == true

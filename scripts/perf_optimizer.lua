@@ -4,7 +4,7 @@ local VK_F5 = 0x74
 
 local opt_settings = (optimizer and optimizer.get_config and optimizer.get_config()) or {}
 if config and config.bind then
-    opt_settings = config.bind("optimizer", opt_settings)
+    opt_settings = config.bind("perf", opt_settings)
 end
 if optimizer and optimizer.set_config and type(opt_settings) == "table" and opt_settings.enabled ~= nil then
     optimizer.set_config(opt_settings)

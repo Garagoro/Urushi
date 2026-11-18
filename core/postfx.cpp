@@ -173,13 +173,32 @@ static LARGE_INTEGER s_startQpc = {};
 static int64_t s_lastFrameQpc = 0;
 static ULONGLONG s_nextHotReloadMs = 0;
 
+static void ShutdownLocked() {
+    UnloadShader();
+
+    if (s_sceneCopySrv) { s_sceneCopySrv->Release(); s_sceneCopySrv = nullptr; }
+    if (s_sceneCopyTex) { s_sceneCopyTex->Release(); s_sceneCopyTex = nullptr; }
+    s_sceneCopyDesc = {};
+
+    if (s_fullScreenVs) { s_fullScreenVs->Release(); s_fullScreenVs = nullptr; }
+    if (s_cb) { s_cb->Release(); s_cb = nullptr; }
+    if (s_linearSampler) { s_linearSampler->Release(); s_linearSampler = nullptr; }
+    if (s_pointSampler) { s_pointSampler->Release(); s_pointSampler = nullptr; }
+    if (s_opaqueBlend) { s_opaqueBlend->Release(); s_opaqueBlend = nullptr; }
+    if (s_noDepthDs) { s_noDepthDs->Release(); s_noDepthDs = nullptr; }
+    if (s_rs) { s_rs->Release(); s_rs = nullptr; }
+
+    if (s_context) { s_context->Release(); s_context = nullptr; }
+    if (s_device) { s_device->Release(); s_device = nullptr; }
+}
+
 } // namespace
 
 bool Init(ID3D11Device* device, ID3D11DeviceContext* context, const std::wstring& shadersDir) {
     std::lock_guard<std::mutex> lock(s_mutex);
     if (!device || !context) return false;
 
-    if (s_device) Shutdown();
+    if (s_device) ShutdownLocked();
 
     s_device = device;
     s_device->AddRef();
@@ -268,22 +287,7 @@ bool Init(ID3D11Device* device, ID3D11DeviceContext* context, const std::wstring
 
 void Shutdown() {
     std::lock_guard<std::mutex> lock(s_mutex);
-    UnloadShader();
-
-    if (s_sceneCopySrv) { s_sceneCopySrv->Release(); s_sceneCopySrv = nullptr; }
-    if (s_sceneCopyTex) { s_sceneCopyTex->Release(); s_sceneCopyTex = nullptr; }
-    s_sceneCopyDesc = {};
-
-    if (s_fullScreenVs) { s_fullScreenVs->Release(); s_fullScreenVs = nullptr; }
-    if (s_cb) { s_cb->Release(); s_cb = nullptr; }
-    if (s_linearSampler) { s_linearSampler->Release(); s_linearSampler = nullptr; }
-    if (s_pointSampler) { s_pointSampler->Release(); s_pointSampler = nullptr; }
-    if (s_opaqueBlend) { s_opaqueBlend->Release(); s_opaqueBlend = nullptr; }
-    if (s_noDepthDs) { s_noDepthDs->Release(); s_noDepthDs = nullptr; }
-    if (s_rs) { s_rs->Release(); s_rs = nullptr; }
-
-    if (s_context) { s_context->Release(); s_context = nullptr; }
-    if (s_device) { s_device->Release(); s_device = nullptr; }
+    ShutdownLocked();
 }
 
 void OnResizeBuffers() {

@@ -103,6 +103,7 @@ struct SpatialProximityInput {
 struct DiagnosticStatus {
     bool initialized = false;
     bool enabled = false;
+    bool targetEnabled = true;
     bool hookedDraw = false;
     bool compiled = false;
     int activeMode = kModeAuto;         // OverrideMode

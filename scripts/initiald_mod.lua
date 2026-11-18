@@ -17,7 +17,7 @@ local settings = {
 }
 
 if config and config.for_script then
-    settings = config.for_script("initiald_mod").bind(settings)
+    settings = config.for_script("initiald").bind(settings)
 elseif config and config.bind then
     settings = config.bind("initiald", settings)
 end
@@ -27,11 +27,35 @@ local live_state = {
     voice_id = nil,
     music_playing = false,
     cel_loaded = false,
+    prev_shader = nil,
+    prev_mode = 0,
+    prev_enabled = true,
+    prev_target_enabled = true,
     postfx_loaded = false,
     available_tracks = {},
     last_drift_tick = 0,
     in_drift = false,
 }
+
+local function restore_previous_body_shader()
+    if not live_state.cel_loaded then return end
+    live_state.cel_loaded = false
+    if not carfx then return end
+    local st0 = carfx.get_status and carfx.get_status(0)
+    local cur_name = st0 and ((st0.shader_path or ""):match("([^\\/]+)$") or "") or ""
+    -- Only restore if user didn't explicitly load a different shader in CarFX while cel was active
+    if cur_name == "livery_cel.hlsl" or cur_name == "" then
+        if live_state.prev_shader and live_state.prev_shader ~= "" and live_state.prev_shader ~= "livery_cel.hlsl" and carfx.load then
+            carfx.load(live_state.prev_shader, 0)
+        elseif carfx.unload then
+            carfx.unload(0)
+        end
+        if carfx.set_mode then carfx.set_mode(live_state.prev_mode or 0, 0) end
+        if carfx.set_target_enabled then carfx.set_target_enabled(0, live_state.prev_target_enabled ~= false) end
+        if carfx.set_enabled then carfx.set_enabled(live_state.prev_enabled ~= false) end
+    end
+    live_state.prev_shader = nil
+end
 
 local function refresh_tracks()
     if audio and audio.list then
@@ -74,26 +98,39 @@ if events and events.on_update then
                     postfx.set_enabled(false)
                 end
             end
-            if live_state.cel_loaded and carfx and carfx.unload then
-                carfx.unload(0)
-                live_state.cel_loaded = false
+            if live_state.cel_loaded then
+                restore_previous_body_shader()
             end
             return
         end
 
-        -- Handle Cel Shader on body (target 0)
+        -- Handle Cel Shader on body (target 0) without clobbering user's chosen CarFX shader
         if settings.apply_cel then
-            if not live_state.cel_loaded and carfx and carfx.load then
-                carfx.load("livery_cel.hlsl", 0)
-                live_state.cel_loaded = true
+            if not live_state.cel_loaded and carfx and carfx.get_status and carfx.load then
+                local st0 = carfx.get_status(0)
+                if st0 and st0.initialized then
+                    local cur_name = (st0.shader_path or ""):match("([^\\/]+)$") or ""
+                    if cur_name ~= "livery_cel.hlsl" then
+                        live_state.prev_shader = cur_name
+                        live_state.prev_mode = st0.active_mode or 0
+                        live_state.prev_enabled = st0.enabled ~= false
+                        live_state.prev_target_enabled = st0.target_enabled ~= false
+                    end
+                    local ok = carfx.load("livery_cel.hlsl", 0)
+                    if ok then
+                        live_state.cel_loaded = true
+                        if carfx.set_enabled then carfx.set_enabled(true) end
+                        if carfx.set_target_enabled then carfx.set_target_enabled(0, true) end
+                        if carfx.set_mode then carfx.set_mode(2, 0) end -- Always Overlay for manga lines
+                    end
+                end
             end
-            if carfx and carfx.set_param then
+            if live_state.cel_loaded and carfx and carfx.set_param then
                 carfx.set_param("inkOpacity", settings.cel_opacity or 0.85)
             end
         else
-            if live_state.cel_loaded and carfx and carfx.unload then
-                carfx.unload(0)
-                live_state.cel_loaded = false
+            if live_state.cel_loaded then
+                restore_previous_body_shader()
             end
         end
 
@@ -103,7 +140,7 @@ if events and events.on_update then
         if carx and carx.get_drift_info then
             local di = carx.get_drift_info()
             if di then
-                angle = math.abs(di.angle_deg or 0.0)
+                angle = di.abs_angle or math.abs(di.angle or 0.0)
                 speed = di.speed_kmh or 0.0
             end
         end
@@ -133,7 +170,7 @@ if events and events.on_update then
         -- Target intensity: 0 when idle, scales up to 1.0 when drifting hard (or test_preview)
         local target = 0.0
         if settings.test_preview then
-            target = settings.speedline_strength or 0.85
+            target = 1.0
         elseif drift_active then
             local excess = math.max(0.0, angle - (thresh - 5.0))
             target = math.min(1.0, 0.45 + (excess / 15.0) * 0.55)
@@ -153,14 +190,17 @@ if events and events.on_update then
         if postfx then
             if live_state.intensity > 0.001 then
                 if not live_state.postfx_loaded then
-                    postfx.load("speedlines.hlsl")
-                    live_state.postfx_loaded = true
+                    if postfx.load("speedlines.hlsl") then
+                        live_state.postfx_loaded = true
+                    end
                 end
-                if postfx.set_enabled and not postfx.is_enabled() then
-                    postfx.set_enabled(true)
+                if live_state.postfx_loaded then
+                    if postfx.set_enabled and not postfx.is_enabled() then
+                        postfx.set_enabled(true)
+                    end
+                    local strength = settings.speedline_strength or 0.85
+                    postfx.set_param(0, live_state.intensity * strength)
                 end
-                local strength = settings.speedline_strength or 0.85
-                postfx.set_param(0, live_state.intensity * strength)
             else
                 if postfx.set_enabled and postfx.is_enabled() then
                     postfx.set_param(0, 0.0)
@@ -271,7 +311,7 @@ end
 urushi.register_window({
     id = "initiald",
     title = T("Initial D режим", "Initial D Mode"),
-    icon = "⚡",
+    icon = "play",
     order = 45,
     default_open = false,
     settings = settings,

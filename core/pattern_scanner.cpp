@@ -131,26 +131,44 @@ static size_t SafeScanAllRawSEH(const uint8_t* scanStart, const uint8_t* end,
 }
 
 // Isolated SEH helper for walking back to function prologue
+static bool LooksLikeX64Prologue(const uint8_t* p) {
+    if (p[0] == 0x40 && p[1] >= 0x50 && p[1] <= 0x57) return true; // rex push
+    if (p[0] >= 0x53 && p[0] <= 0x57) return true;                 // push rbx/rbp/rsi/rdi
+    if (p[0] == 0x48 && p[1] == 0x89 && (p[2] == 0x4C || p[2] == 0x54 || p[2] == 0x5C || p[2] == 0x74) && p[3] == 0x24) return true; // mov [rsp+..], reg
+    if (p[0] == 0x48 && (p[1] == 0x83 || p[1] == 0x81) && p[2] == 0xEC) return true; // sub rsp, imm
+    if (p[0] == 0x48 && p[1] == 0x8B && p[2] == 0xC4) return true; // mov rax, rsp
+    if (p[0] == 0x4C && p[1] == 0x8B && p[2] == 0xDC) return true; // mov r11, rsp
+    return false;
+}
+
 static uintptr_t SafeFindEntryBacktrack(uintptr_t matchVa, size_t maxBacktrack) {
     if (!matchVa || maxBacktrack == 0) return 0;
     __try {
+        // MSVC x64 functions are 16-byte aligned and preceded by 0xCC padding or 0xC3 (ret).
+        const uintptr_t alignedTop = matchVa & ~static_cast<uintptr_t>(0xF);
+        const uintptr_t minAddr = (matchVa > maxBacktrack) ? (matchVa - maxBacktrack) : 0;
+        for (uintptr_t cand = alignedTop; cand >= minAddr; cand -= 16) {
+            const uint8_t* p = reinterpret_cast<const uint8_t*>(cand);
+            if ((p[-1] == 0xCC || p[-1] == 0xC3) && LooksLikeX64Prologue(p)) {
+                return cand;
+            }
+            if (cand < 16) break;
+        }
+
+        // Fallback: bytewise scan for 0xCC/0xC3 if unaligned, still requiring prologue check
         const uint8_t* p = reinterpret_cast<const uint8_t*>(matchVa);
         const uint8_t* lowerBound = p - maxBacktrack;
-
-        // Walk backwards looking for 0xCC (int3 padding) or 0xC3 (ret)
         const uint8_t* cur = p - 1;
-        while (cur > lowerBound && *cur != 0xCC && *cur != 0xC3) {
+        while (cur > lowerBound) {
+            if (*cur == 0xCC || *cur == 0xC3) {
+                const uint8_t* entry = cur + 1;
+                while (entry < p && *entry == 0xCC) ++entry;
+                if (entry < p && (reinterpret_cast<uintptr_t>(entry) & 0xF) == 0 && LooksLikeX64Prologue(entry)) {
+                    return reinterpret_cast<uintptr_t>(entry);
+                }
+            }
             --cur;
         }
-
-        if (*cur == 0xCC || *cur == 0xC3) {
-            const uint8_t* entry = cur + 1;
-            while (entry < p && *entry == 0xCC) {
-                ++entry;
-            }
-            return reinterpret_cast<uintptr_t>(entry);
-        }
-
         return 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;

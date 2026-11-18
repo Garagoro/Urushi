@@ -321,16 +321,6 @@ void NativeCarX::Hooked_CX_CarSetRenderMatrix(void* car, const float* matrix, fl
         if (s_originalSetRenderMatrix) s_originalSetRenderMatrix(car, matrix, factor);
         return;
     }
-    static int s_loggedReturnAddrs = 0;
-    if (s_loggedReturnAddrs < 10) {
-        void* retAddr = _ReturnAddress();
-        HMODULE hGA = GetModuleHandleW(L"GameAssembly.dll");
-        uintptr_t rva = hGA ? ((uintptr_t)retAddr - (uintptr_t)hGA) : (uintptr_t)retAddr;
-        char buf[64];
-        sprintf_s(buf, "0x%llX", (unsigned long long)rva);
-        Logger::Info(std::string("CX_CarSetRenderMatrix caller Return RVA: ") + buf + ", car=" + std::to_string((uintptr_t)car));
-        s_loggedReturnAddrs++;
-    }
     // 1. Forward immediately to original game function so xmm2 (factor) is 100% clean and intact
     if (s_originalSetRenderMatrix) {
         s_originalSetRenderMatrix(car, matrix, factor);
@@ -737,11 +727,15 @@ TyreConfig NativeCarX::GetTyreConfig() {
 
 void NativeCarX::SetTyreConfig(const TyreConfig& cfg) {
     std::lock_guard<std::recursive_mutex> lock(s_mutex);
+    const TyreConfig prevCfg = s_tyreConfig;
     s_tyreConfig = cfg;
     s_noTireWear = cfg.infiniteWear;
 
     void* car = s_knownPlayerCarPtr ? s_knownPlayerCarPtr : s_playerCarPtr;
     if (!car || !IsCarMemoryValid(car)) return;
+
+    const bool lifeChanged = std::fabs(prevCfg.desiredLife - cfg.desiredLife) > 0.001f;
+    const bool pressureTurnedOff = prevCfg.overridePressure && !cfg.overridePressure;
 
     if (pfn_CarSetTyreWearMode) {
         pfn_CarSetTyreWearMode(car, cfg.infiniteWear ? 0 : 1);
@@ -756,7 +750,7 @@ void NativeCarX::SetTyreConfig(const TyreConfig& cfg) {
                 pfn_WheelSetWearFactor(wheel, cfg.infiniteWear ? 0.0f : cfg.wearMultiplier);
             }
 
-            if (cfg.infiniteWear) {
+            if (cfg.infiniteWear || lifeChanged) {
                 if (pfn_WheelTyreWearReset) {
                     pfn_WheelTyreWearReset(wheel, cfg.desiredLife);
                 }
@@ -788,6 +782,9 @@ void NativeCarX::SetTyreConfig(const TyreConfig& cfg) {
                 if (pfn_WheelSetTyrePressure) {
                     pfn_WheelSetTyrePressure(wheel, targetKpa * 1000.0f);
                 }
+            } else if (pressureTurnedOff && pfn_WheelSetTyrePressure) {
+                float baseKpa = (i < 2) ? s_baselineFrontPressure : s_baselineRearPressure;
+                pfn_WheelSetTyrePressure(wheel, baseKpa * 1000.0f);
             }
         }
     }

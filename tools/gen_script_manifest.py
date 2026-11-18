@@ -101,6 +101,15 @@ SCRIPTS_METADATA = {
         "min_core": "1.2.1",
         "default_enabled": False,
     },
+    "music_mod": {
+        "name": "Music Reactive",
+        "name_ru": "Музыкальная ливрея",
+        "description": "WASAPI audio capture and FFT spectrum reactive CarFX shaders",
+        "description_ru": "WASAPI захват звука и FFT-спектр для музыкальных шейдеров",
+        "window_ids": ["music"],
+        "min_core": "1.2.1",
+        "default_enabled": False,
+    },
 }
 
 

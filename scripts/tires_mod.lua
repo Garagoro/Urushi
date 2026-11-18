@@ -168,6 +168,7 @@ local function render_tires_window()
                 tire_settings.desired_life = 1.0
                 tire_settings.wear_multiplier = 1.0
                 tire_settings.override_pressure = false
+                tire_settings.override_grip = false
                 tire_settings.lock_temp = false
                 tire_settings.target_temp = 80.0
                 if carx.reset_tyre_defaults then carx.reset_tyre_defaults() end

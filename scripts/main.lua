@@ -20,6 +20,26 @@ for _, id in ipairs({ "i18n", "config", "keybinds", "il2cpp" }) do
     if not ok then log.error("Core script '" .. id .. "' failed: " .. tostring(err)) end
 end
 
+-- Restore persisted UI theme / language / scale before registering windows
+if config and config.get and urushi then
+    local saved_lang = config.get("ui", "language")
+    if (saved_lang == "ru" or saved_lang == "en") and urushi.set_language then
+        urushi.set_language(saved_lang)
+    end
+    local saved_accent = config.get("ui", "accent")
+    if type(saved_accent) == "string" and saved_accent ~= "" and urushi.set_accent then
+        urushi.set_accent(saved_accent)
+    end
+    local saved_custom = config.get("ui", "custom_accent")
+    if type(saved_custom) == "table" and saved_custom[1] and urushi.set_custom_accent then
+        urushi.set_custom_accent(saved_custom[1], saved_custom[2] or 0.78, saved_custom[3] or 0.96)
+    end
+    local saved_scale = config.get("ui", "scale")
+    if type(saved_scale) == "number" and urushi.set_ui_scale then
+        urushi.set_ui_scale(saved_scale)
+    end
+end
+
 -- ---------------------------------------------------------------------------------------------
 -- Window registration interceptor: automatically binds opts.settings or opts.config
 -- ---------------------------------------------------------------------------------------------
@@ -28,7 +48,7 @@ if urushi and urushi.register_window then
     urushi.register_window = function(opts)
         if type(opts) == "table" and opts.id then
             local st = opts.settings or opts.config or opts.state
-            if type(st) == "table" and config and config.bind then
+            if type(st) == "table" and not rawget(st, "_raw") and config and config.bind then
                 opts.settings = config.bind(opts.id, st)
             end
         end

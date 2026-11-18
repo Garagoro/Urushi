@@ -626,7 +626,7 @@ local function render_teleport_window()
         end
 
         ui.spacing(4)
-        ui.collapsing(T("Управление трассами##tp_adv", "Track Management##tp_adv"), false, function()
+        if ui.collapsing(T("Управление трассами##tp_adv", "Track Management##tp_adv"), false) then
             local list = {}
             for k, _ in pairs(state.tracks) do
                 table.insert(list, k)
@@ -649,6 +649,8 @@ local function render_teleport_window()
             if ch_tr and list[sel_tr] then
                 state.current_track = list[sel_tr]
                 state.auto_track = false
+                tp_settings.auto_track = false
+                if config then config.mark_dirty() end
                 state.active_idx = 1
                 state.editing_idx = nil
             end
@@ -663,7 +665,7 @@ local function render_teleport_window()
                     set_status(T("Все точки очищены.", "All checkpoints cleared."), "muted")
                 end
             end
-        end)
+        end
     end)
 
     -- Status Notification Toast

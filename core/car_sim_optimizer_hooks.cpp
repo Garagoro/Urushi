@@ -541,60 +541,52 @@ void ResolveStaticsIfNeeded() {
         s_sfDeformSleep = Il2CppHelpers::LookupTypeStaticFields(
             kIdxDeformSkeletonSleep, "DeformationSkeletonSleepSystem",
             "CarX.DeformationPhysics.Systems", s_rvaDeformSleepTypeInfoGlobal);
-        if (s_sfDeformSleep && !s_deformBase.captured) {
-            uintptr_t p = reinterpret_cast<uintptr_t>(s_sfDeformSleep);
-            uint8_t en = 1;
-            int32_t steps = 30;
-            float dist = 30.0f;
-            if (SafeRead(p + 0x00, &en) && SafeRead(p + 0x04, &steps) && SafeRead(p + 0x08, &dist) &&
-                dist > 0.1f && dist < 5000.0f && steps > 0 && steps < 1000) {
-                s_deformBase = { true, en, steps, dist };
-            } else {
-                s_sfDeformSleep = nullptr;
-            }
+    }
+    if (s_sfDeformSleep && !s_deformBase.captured) {
+        uintptr_t p = reinterpret_cast<uintptr_t>(s_sfDeformSleep);
+        uint8_t en = 1;
+        int32_t steps = 30;
+        float dist = 30.0f;
+        if (SafeRead(p + 0x00, &en) && SafeRead(p + 0x04, &steps) && SafeRead(p + 0x08, &dist) &&
+            dist > 0.1f && dist < 5000.0f && steps > 0 && steps < 1000) {
+            s_deformBase = { true, en, steps, dist };
         }
     }
     if (!s_sfRootSleep) {
         s_sfRootSleep = Il2CppHelpers::LookupTypeStaticFields(
             kIdxPhysicsRootSleep, "PhysicsRootSleepSystem", "CarX.DeformationPhysics.Systems");
-        if (s_sfRootSleep && !s_rootBase.captured) {
-            uintptr_t p = reinterpret_cast<uintptr_t>(s_sfRootSleep);
-            uint8_t en = 1;
-            int32_t steps = 30;
-            if (SafeRead(p + 0x00, &en) && SafeRead(p + 0x04, &steps) && steps > 0 && steps < 1000) {
-                s_rootBase = { true, en, steps };
-            } else {
-                s_sfRootSleep = nullptr;
-            }
+    }
+    if (s_sfRootSleep && !s_rootBase.captured) {
+        uintptr_t p = reinterpret_cast<uintptr_t>(s_sfRootSleep);
+        uint8_t en = 1;
+        int32_t steps = 30;
+        if (SafeRead(p + 0x00, &en) && SafeRead(p + 0x04, &steps) && steps > 0 && steps < 1000) {
+            s_rootBase = { true, en, steps };
         }
     }
     if (!s_sfRenderPolicy) {
         s_sfRenderPolicy = Il2CppHelpers::LookupTypeStaticFields(
             kIdxRemoteCarRenderPolicy, "RemoteCarRenderPolicy", "Framework.Views.Cars.Components");
-        if (s_sfRenderPolicy && !s_renderBase.captured) {
-            uintptr_t p = reinterpret_cast<uintptr_t>(s_sfRenderPolicy);
-            uint8_t en = 1;
-            float rSmall = 0.40f, rTiny = 0.20f, hideD = 25.0f;
-            if (SafeRead(p + 0x00, &en) && SafeRead(p + 0x04, &rSmall) &&
-                SafeRead(p + 0x08, &rTiny) && SafeRead(p + 0x0C, &hideD) &&
-                hideD >= 1.0f && hideD < 5000.0f) {
-                s_renderBase = { true, en, rSmall, rTiny, hideD };
-            } else {
-                s_sfRenderPolicy = nullptr;
-            }
+    }
+    if (s_sfRenderPolicy && !s_renderBase.captured) {
+        uintptr_t p = reinterpret_cast<uintptr_t>(s_sfRenderPolicy);
+        uint8_t en = 1;
+        float rSmall = 0.40f, rTiny = 0.20f, hideD = 25.0f;
+        if (SafeRead(p + 0x00, &en) && SafeRead(p + 0x04, &rSmall) &&
+            SafeRead(p + 0x08, &rTiny) && SafeRead(p + 0x0C, &hideD) &&
+            hideD >= 1.0f && hideD < 5000.0f) {
+            s_renderBase = { true, en, rSmall, rTiny, hideD };
         }
     }
     if (!s_sfOptimizeGeom) {
         s_sfOptimizeGeom = Il2CppHelpers::LookupTypeStaticFields(
             kIdxOptimizeCarGeometry, "OptimizeCarGeometryComponent", "Framework.Views.Cars.Components");
-        if (s_sfOptimizeGeom && !s_geomBase.captured) {
-            uintptr_t p = reinterpret_cast<uintptr_t>(s_sfOptimizeGeom);
-            uint8_t pol = 1, half = 1, best = 0;
-            if (SafeRead(p + 0x00, &pol) && SafeRead(p + 0x01, &half) && SafeRead(p + 0x02, &best)) {
-                s_geomBase = { true, pol, half, best };
-            } else {
-                s_sfOptimizeGeom = nullptr;
-            }
+    }
+    if (s_sfOptimizeGeom && !s_geomBase.captured) {
+        uintptr_t p = reinterpret_cast<uintptr_t>(s_sfOptimizeGeom);
+        uint8_t pol = 1, half = 1, best = 0;
+        if (SafeRead(p + 0x00, &pol) && SafeRead(p + 0x01, &half) && SafeRead(p + 0x02, &best)) {
+            s_geomBase = { true, pol, half, best };
         }
     }
 }
@@ -882,13 +874,27 @@ bool InstallHooksAndResolvers(HMODULE hGA) {
         hGA, "48 8B 89 68 01 00 00 48 85 C9 74 ? 45 33 C0 E8 ? ? ? ? 48 8B BF 70 01 00 00",
         GameBuild::Pick(kFbCarBehaviourSetEffects), 256, "CarBehaviour_SetEffectsEnabled"));
 
-    // 2. DistanceBasedPhysicsSwitchingSubController::Update & IsFarCar
-    s_rvaSwitchingUpdate = toRva(PatternScanner::FindFunctionEntryOrFallback(
-        hGA, "4C 8B 46 28 4D 85 C0 0F 84 ? ? ? ? 33 C9 48 8B 15 ? ? ? ? E8 ? ? ? ? 48 89 44 24 50",
-        GameBuild::Pick(kFbSwitchingUpdate), 256, "DistanceBasedSwitching_Update"));
-    s_rvaIsFarCar = toRva(PatternScanner::FindOrFallback(
-        hGA, "48 89 5C 24 10 48 89 74 24 18 57 41 54 41 55 41 56 41 57 48 81 EC B0 01 00 00 4C 8B E9",
-        GameBuild::Pick(kFbIsFarCar), "DistanceBasedSwitching_IsFarCar"));
+    // 2. DistanceBasedPhysicsSwitchingSubController::Update & IsFarCar (prefer IL2CPP metadata lookup)
+    uintptr_t switchingKlass = Il2CppHelpers::LookupTypeClass(
+        "DistanceBasedPhysicsSwitchingSubController", "CarX.Physics.SubControllers");
+    if (!switchingKlass) {
+        switchingKlass = Il2CppHelpers::LookupTypeClass(
+            "DistanceBasedPhysicsSwitchingSubController", "Framework.Views.Cars.Components");
+    }
+    uintptr_t vaSwitchingUpdate = switchingKlass
+        ? reinterpret_cast<uintptr_t>(Il2CppHelpers::LookupClassMethod(switchingKlass, "Update")) : 0;
+    s_rvaSwitchingUpdate = vaSwitchingUpdate
+        ? toRva(vaSwitchingUpdate)
+        : toRva(PatternScanner::FindFunctionEntryOrFallback(
+            hGA, "4C 8B 46 28 4D 85 C0 0F 84 ? ? ? ? 33 C9 48 8B 15 ? ? ? ? E8 ? ? ? ? 48 89 44 24 50",
+            GameBuild::Pick(kFbSwitchingUpdate), 256, "DistanceBasedSwitching_Update"));
+    uintptr_t vaIsFar = switchingKlass
+        ? reinterpret_cast<uintptr_t>(Il2CppHelpers::LookupClassMethod(switchingKlass, "IsFarCar")) : 0;
+    s_rvaIsFarCar = vaIsFar
+        ? toRva(vaIsFar)
+        : toRva(PatternScanner::FindOrFallback(
+            hGA, "48 89 5C 24 10 48 89 74 24 18 57 41 54 41 55 41 56 41 57 48 81 EC B0 01 00 00 4C 8B E9",
+            GameBuild::Pick(kFbIsFarCar), "DistanceBasedSwitching_IsFarCar"));
 
     // 3. CarX provider get_transform
     s_rvaProviderGetTransform = toRva(PatternScanner::FindRipOrFallback(

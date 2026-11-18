@@ -290,47 +290,10 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
     const bool haveFastSlots =
         (!needAlbSlot || s_rtKnownAlbSlot >= kScanStartSlot) &&
         (!needPackSlot || s_rtKnownPackSlot >= kScanStartSlot);
+    const bool bodyActiveNow = playerCanMatch && IsTargetActiveInternal(kTargetBody);
 
-    if (internalsCanMatch) {
-        constexpr int kIntScanSlots = 32;
-        ID3D11ShaderResourceView* isrv[kIntScanSlots] = {};
-        c->PSGetShaderResources(0, kIntScanSlots, isrv);
-        const bool needRes = !s_rtIntRes.empty();
-        for (int i = 0; i < kIntScanSlots; ++i) {
-            ID3D11ShaderResourceView* v = isrv[i];
-            if (!v || matchedTarget != kTargetNone) continue;
-            for (ID3D11ShaderResourceView* t : s_rtIntSrvs) {
-                if (t == v) {
-                    matchedTarget = kTargetInternals;
-                    matchedAlbedoSrv = v;
-                    matchedAlbedoSrv->AddRef();
-                    mask |= (1u << i);
-                    break;
-                }
-            }
-            if (matchedTarget == kTargetNone && needRes) {
-                ID3D11Resource* r = nullptr;
-                v->GetResource(&r);
-                if (r) {
-                    for (ID3D11Resource* t : s_rtIntRes) {
-                        if (t == r) {
-                            matchedTarget = kTargetInternals;
-                            matchedAlbedoSrv = v;
-                            matchedAlbedoSrv->AddRef();
-                            mask |= (1u << i);
-                            break;
-                        }
-                    }
-                    r->Release();
-                }
-            }
-        }
-        for (int i = 0; i < kIntScanSlots; ++i) if (isrv[i]) isrv[i]->Release();
-    }
-
-    if (matchedTarget != kTargetNone) {
-        // internals matched: nothing else to discover
-    } else if (haveFastSlots) {
+    // Check active ghost targets and active player body target BEFORE internals so body/ghost draws are never hijacked
+    if (haveFastSlots && (anyGhostTex || bodyActiveNow)) {
         ID3D11ShaderResourceView* vAlb = nullptr;
         ID3D11ShaderResourceView* vPack = nullptr;
         ID3D11Resource* resAlb = nullptr;
@@ -342,7 +305,6 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
             c->PSGetShaderResources(static_cast<UINT>(s_rtKnownPackSlot), 1, &vPack);
         }
 
-        // Check active ghost targets FIRST so isolated ghost clones never leak into player target
         if (anyGhostTex) {
             for (int t = kTargetGhostBase; t < kTargetCount; ++t) {
                 const GameSrvSnapshot& gs = s_rtSnap[t];
@@ -370,7 +332,7 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
             }
         }
 
-        if (matchedTarget == kTargetNone && playerCanMatch) {
+        if (matchedTarget == kTargetNone && bodyActiveNow) {
             bool match = false;
             bool albMatch = !body.albedoIsDefault && (body.albedoSrv || body.albedoRes) &&
                             srvMatches(vAlb, &resAlb, body.albedoSrv, body.albedoRes);
@@ -420,16 +382,55 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
         if (resPack) resPack->Release();
         if (vAlb) vAlb->Release();
         if (vPack) vPack->Release();
+    }
 
-        if (matchedTarget == kTargetNone) {
-            const uint32_t frameId = g_frameCounter.load(std::memory_order_relaxed);
-            if (g_matchedDrawsLastFrame.load(std::memory_order_relaxed) == 0 && (frameId - s_rtRediscoveryFrame) >= 60) {
-                s_rtRediscoveryFrame = frameId;
-                s_rtKnownAlbSlot = -1;
-                s_rtKnownPackSlot = -1;
+    if (matchedTarget == kTargetNone && internalsCanMatch) {
+        constexpr int kIntScanSlots = 32;
+        ID3D11ShaderResourceView* isrv[kIntScanSlots] = {};
+        c->PSGetShaderResources(0, kIntScanSlots, isrv);
+        const bool needRes = !s_rtIntRes.empty();
+        for (int i = 0; i < kIntScanSlots; ++i) {
+            ID3D11ShaderResourceView* v = isrv[i];
+            if (!v || matchedTarget != kTargetNone) continue;
+            for (ID3D11ShaderResourceView* t : s_rtIntSrvs) {
+                if (t == v) {
+                    matchedTarget = kTargetInternals;
+                    matchedAlbedoSrv = v;
+                    matchedAlbedoSrv->AddRef();
+                    mask |= (1u << i);
+                    break;
+                }
             }
-            return false;
+            if (matchedTarget == kTargetNone && needRes) {
+                ID3D11Resource* r = nullptr;
+                v->GetResource(&r);
+                if (r) {
+                    for (ID3D11Resource* t : s_rtIntRes) {
+                        if (t == r) {
+                            matchedTarget = kTargetInternals;
+                            matchedAlbedoSrv = v;
+                            matchedAlbedoSrv->AddRef();
+                            mask |= (1u << i);
+                            break;
+                        }
+                    }
+                    r->Release();
+                }
+            }
         }
+        for (int i = 0; i < kIntScanSlots; ++i) if (isrv[i]) isrv[i]->Release();
+    }
+
+    if (matchedTarget != kTargetNone) {
+        // Already matched cleanly in fast slots or internals scan
+    } else if (haveFastSlots) {
+        const uint32_t frameId = g_frameCounter.load(std::memory_order_relaxed);
+        if (g_matchedDrawsLastFrame.load(std::memory_order_relaxed) == 0 && (frameId - s_rtRediscoveryFrame) >= 60) {
+            s_rtRediscoveryFrame = frameId;
+            s_rtKnownAlbSlot = -1;
+            s_rtKnownPackSlot = -1;
+        }
+        return false;
     } else {
         ID3D11ShaderResourceView* srvs[kScanSlotCount] = {};
         c->PSGetShaderResources(kScanStartSlot, kScanSlotCount, srvs);
@@ -809,7 +810,7 @@ bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, Draw
     ID3D11ShaderResourceView* tex2 = ts.userTex[2].load(std::memory_order_acquire);
     ID3D11ShaderResourceView* tex3 = ts.userTex[3].load(std::memory_order_acquire);
 
-    const bool isBodyLivery = (matchedTarget == kTargetBody && albedoSrv != nullptr);
+    const bool isBodyLivery = ((matchedTarget == kTargetBody || IsGhostTarget(matchedTarget)) && albedoSrv != nullptr);
     k.frameInfo[0] = isBodyLivery ? 1.0f : 0.0f;
     k.frameInfo[1] = tex0 ? 1.0f : 0.0f;
     k.frameInfo[2] = tex1 ? 1.0f : 0.0f;
@@ -971,6 +972,7 @@ DiagnosticStatus GetStatus(int target) {
     if (ValidTarget(target)) {
         TargetSlotState& ts = g_targets[target];
         std::lock_guard<std::mutex> lk(ts.publishMtx);
+        st.targetEnabled = ts.slotEnabled.load(std::memory_order_relaxed);
         st.compiled = (ts.ps.load(std::memory_order_relaxed) != nullptr);
         st.activeMode = ts.overrideMode.load(std::memory_order_relaxed);
         int eff = st.activeMode != kModeAuto ? st.activeMode : ts.declMode.load(std::memory_order_relaxed);

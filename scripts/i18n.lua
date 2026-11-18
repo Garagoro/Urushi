@@ -25,6 +25,7 @@ local WINDOW_TITLES = {
     keybinds      = { "Горячие клавиши", "Keybinds" },
     welcome       = { "Добро пожаловать", "Welcome" },
     initiald      = { "Initial D режим", "Initial D Mode" },
+    music         = { "Музыкальная ливрея", "Music Reactive" },
 }
 
 function i18n.sync_titles()

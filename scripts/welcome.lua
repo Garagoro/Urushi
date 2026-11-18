@@ -1,5 +1,6 @@
 -- scripts/welcome.lua
 -- First-run welcome window for URUSHI
+local T = i18n.t
 
 local function is_script_downloaded(id)
     if urushi and urushi.script_exists then
@@ -70,7 +71,7 @@ local function render_welcome_window()
             ui.text_dim(T("Файл: ", "File: ") .. cur_f)
 
         elseif is_failed then
-            ui.text_colored(1.0, 0.35, 0.35, T("Ошибка скачивания: ", "Download error: ") .. tostring(pst.error))
+            ui.text_colored(1.0, 0.35, 0.35, 1.0, T("Ошибка скачивания: ", "Download error: ") .. tostring(pst.error))
             ui.spacing(3)
 
             if ui.button(T("Повторить попытку##welc_retry", "Retry##welc_retry"), w, 28, "primary") then

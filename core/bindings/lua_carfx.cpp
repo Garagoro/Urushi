@@ -9,13 +9,17 @@ static const luaL_Reg kCarfxFuncs[] = {
     { "compile",        LuaCarFX::Compile },
     { "unload",         LuaCarFX::Unload },
     { "reload",         LuaCarFX::Reload },
-    { "set_enabled",    LuaCarFX::SetEnabled },
-    { "is_enabled",     LuaCarFX::IsEnabled },
+    { "set_enabled",        LuaCarFX::SetEnabled },
+    { "is_enabled",         LuaCarFX::IsEnabled },
+    { "set_target_enabled", LuaCarFX::SetTargetEnabled },
+    { "is_target_enabled",  LuaCarFX::IsTargetEnabled },
     { "set_mode",       LuaCarFX::SetMode },
     { "set_stealth",    LuaCarFX::SetStealth },
-    { "set_param",      LuaCarFX::SetParam },
-    { "get_param",      LuaCarFX::GetParam },
-    { "set_tex",        LuaCarFX::SetTex },
+    { "set_param",        LuaCarFX::SetParam },
+    { "get_param",        LuaCarFX::GetParam },
+    { "set_target_param", LuaCarFX::SetTargetParam },
+    { "get_target_param", LuaCarFX::GetTargetParam },
+    { "set_tex",          LuaCarFX::SetTex },
     { "clear_tex",      LuaCarFX::ClearTex },
     { "set_game_input", LuaCarFX::SetGameInput },
     { "get_game_input", LuaCarFX::GetGameInput },
@@ -87,6 +91,19 @@ int LuaCarFX::SetEnabled(lua_State* L) {
 
 int LuaCarFX::IsEnabled(lua_State* L) {
     lua_pushboolean(L, CarFX::IsEnabled());
+    return 1;
+}
+
+int LuaCarFX::SetTargetEnabled(lua_State* L) {
+    int target = static_cast<int>(luaL_checkinteger(L, 1));
+    bool en = lua_toboolean(L, 2) != 0;
+    CarFX::SetTargetEnabled(target, en);
+    return 0;
+}
+
+int LuaCarFX::IsTargetEnabled(lua_State* L) {
+    int target = static_cast<int>(luaL_optinteger(L, 1, CarFX::kTargetBody));
+    lua_pushboolean(L, CarFX::IsTargetActive(target));
     return 1;
 }
 
@@ -166,11 +183,58 @@ int LuaCarFX::GetParam(lua_State* L) {
     return pd->count;
 }
 
+int LuaCarFX::SetTargetParam(lua_State* L) {
+    int target = static_cast<int>(luaL_checkinteger(L, 1));
+    float vals[4] = {};
+    int count = 0;
+    for (int i = 3; i <= lua_gettop(L) && count < 4; ++i) {
+        vals[count++] = static_cast<float>(luaL_checknumber(L, i));
+    }
+    if (count == 0) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    bool ok = false;
+    if (lua_type(L, 2) == LUA_TNUMBER) {
+        int slot = static_cast<int>(lua_tointeger(L, 2));
+        ok = CarFX::SetParamSlot(target, slot, vals, count);
+    } else {
+        const char* name = luaL_checkstring(L, 2);
+        ok = CarFX::SetParamByName(target, name, vals, count);
+    }
+    lua_pushboolean(L, ok);
+    return 1;
+}
+
+int LuaCarFX::GetTargetParam(lua_State* L) {
+    int target = static_cast<int>(luaL_checkinteger(L, 1));
+    float v[4] = {};
+    if (lua_type(L, 2) == LUA_TNUMBER) {
+        int slot = static_cast<int>(lua_tointeger(L, 2));
+        if (!CarFX::GetParamSlot(target, slot, v)) return 0;
+        lua_pushnumber(L, v[0]);
+        lua_pushnumber(L, v[1]);
+        lua_pushnumber(L, v[2]);
+        lua_pushnumber(L, v[3]);
+        return 4;
+    }
+    const char* name = luaL_checkstring(L, 2);
+    CarFX::DiagnosticStatus st = CarFX::GetStatus(target);
+    const CarFX::ParamDecl* pd = CarFX::FindParam(st.decl, name);
+    if (!pd || !CarFX::GetParamSlot(target, pd->slot, v)) return 0;
+    for (int i = 0; i < pd->count; ++i) {
+        lua_pushnumber(L, v[pd->first + i]);
+    }
+    return pd->count;
+}
+
 int LuaCarFX::SetTex(lua_State* L) {
     int slot = static_cast<int>(luaL_checkinteger(L, 1));
     const char* path = luaL_checkstring(L, 2);
+    int target = static_cast<int>(luaL_optinteger(L, 3, CarFX::kTargetBody));
     std::string err;
-    bool ok = CarFX::SetUserTexture(CarFX::kTargetBody, slot, path, &err);
+    bool ok = CarFX::SetUserTexture(target, slot, path, &err);
     lua_pushboolean(L, ok);
     if (ok) lua_pushnil(L);
     else lua_pushstring(L, err.c_str());
@@ -179,7 +243,8 @@ int LuaCarFX::SetTex(lua_State* L) {
 
 int LuaCarFX::ClearTex(lua_State* L) {
     int slot = static_cast<int>(luaL_checkinteger(L, 1));
-    CarFX::ClearUserTexture(CarFX::kTargetBody, slot);
+    int target = static_cast<int>(luaL_optinteger(L, 2, CarFX::kTargetBody));
+    CarFX::ClearUserTexture(target, slot);
     return 0;
 }
 
@@ -265,6 +330,7 @@ int LuaCarFX::GetStatus(lua_State* L) {
     lua_newtable(L);
     setBool("initialized", st.initialized);
     setBool("enabled", st.enabled);
+    setBool("target_enabled", st.targetEnabled);
     setBool("hooked_draw", st.hookedDraw);
     setBool("compiled", st.compiled);
     setInt("active_mode", st.activeMode);

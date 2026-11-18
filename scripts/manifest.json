@@ -5,8 +5,8 @@
     {
       "id": "carfx_mod",
       "path": "scripts/carfx_mod.lua",
-      "sha256": "732e1f67f55cf8c1d318e0c5192dbe31a8c7d1d0cece8a6880accd7996cd4143",
-      "size": 23250,
+      "sha256": "b2c990a6b4581055f626bf786331e2432aa2438678edb63aa1959cf138466c0a",
+      "size": 29473,
       "name": "CarFX Shaders",
       "name_ru": "CarFX Шейдеры",
       "description": "Custom body shaders, glass reflections, neon glow & tinting",
@@ -20,8 +20,8 @@
     {
       "id": "initiald_mod",
       "path": "scripts/initiald_mod.lua",
-      "sha256": "3bc608abc87abf39789dd27a57f14b413f96e2567a16a601978f26f682cc3b49",
-      "size": 12513,
+      "sha256": "5a01527235881d80d97ae09500adc90da0747709965cb9aa7efc4683112f144c",
+      "size": 14669,
       "name": "Initial D Mode",
       "name_ru": "Initial D режим",
       "description": "Anime speedlines postfx, cel shading and eurobeat drift audio",
@@ -48,10 +48,25 @@
       "default_enabled": true
     },
     {
+      "id": "music_mod",
+      "path": "scripts/music_mod.lua",
+      "sha256": "f0dae9180d448d83d990d844a083420e8126c5ab718501447e4145b4cb23cec6",
+      "size": 12200,
+      "name": "Music Reactive",
+      "name_ru": "Музыкальная ливрея",
+      "description": "WASAPI audio capture and FFT spectrum reactive CarFX shaders",
+      "description_ru": "WASAPI захват звука и FFT-спектр для музыкальных шейдеров",
+      "window_ids": [
+        "music"
+      ],
+      "min_core": "1.2.1",
+      "default_enabled": false
+    },
+    {
       "id": "perf_optimizer",
       "path": "scripts/perf_optimizer.lua",
-      "sha256": "86819c131659341b8a17b61c98e882dcdbfe60ef5b646eda12ea40a51fd727d7",
-      "size": 8359,
+      "sha256": "36148260051f8b6e5959a0b96fb29acbd8e3131787b94f5a1964f324348764da",
+      "size": 8354,
       "name": "FPS Optimizer",
       "name_ru": "Оптимизатор FPS",
       "description": "Physics solver optimization, component auto-sleep, FPS boost",
@@ -65,8 +80,8 @@
     {
       "id": "replay_mod",
       "path": "scripts/replay_mod.lua",
-      "sha256": "e5ee4e4245ed5dd7dff940b308ce275425845a9dbad5f2c74597c600f6fc4f95",
-      "size": 33635,
+      "sha256": "63885a4366722906e8f398b92310ab2faf83c57a6046c8817bf473e7eb6824b9",
+      "size": 34104,
       "name": "Replays & Anti-Collision",
       "name_ru": "Реплеи и Анти-встречка",
       "description": "3D trajectory replay, ghost car and TTC anti-collision defense",
@@ -81,8 +96,8 @@
     {
       "id": "steer_assist_mod",
       "path": "scripts/steer_assist_mod.lua",
-      "sha256": "2aeaae898edfc444651edffb6c3d7b982f52fcd83baa824f08ebe531a6598874",
-      "size": 18953,
+      "sha256": "98696f58c01aca03ebcc9565c7c7d6666b959b63f1d8b2390d61233c300fc6b5",
+      "size": 19350,
       "name": "Steering Assist (155°)",
       "name_ru": "Помощь руля (155°)",
       "description": "Smart wheel angle assist for deep drift angles up to 155°",
@@ -112,8 +127,8 @@
     {
       "id": "teleport_mod",
       "path": "scripts/teleport_mod.lua",
-      "sha256": "3e00ae924244208e3c5d935a68b70f9c9c7f29813a20a8cea857a8f3b6d5a3e9",
-      "size": 25186,
+      "sha256": "21907878db3654c08dabeea42fb810fb73556b655194a2e7ffc48536d67026d4",
+      "size": 25284,
       "name": "Checkpoint Teleport",
       "name_ru": "Телепорт по точкам",
       "description": "Quick save & instant teleport to checkpoints on any track",
@@ -127,8 +142,8 @@
     {
       "id": "tires_mod",
       "path": "scripts/tires_mod.lua",
-      "sha256": "087e04eeaa6fe01831499621b86d66120e82a561721d7238611fe2141e42b042",
-      "size": 15925,
+      "sha256": "b0c0fa89cc385ece984e43f07bebc09c8b7d8b92c0d1e008b6ed0594db63f4ed",
+      "size": 15977,
       "name": "Body & Tires",
       "name_ru": "Кузов и шины",
       "description": "Dense tire smoke, infinite tire wear, pressure and visual damage",
@@ -208,8 +223,8 @@
     },
     {
       "path": "shaders/livery_wall_tap.hlsl",
-      "sha256": "95b3bb8055dbe18ff9ff0826fa91a99e671a188a54186161d40bed33f26a1e70",
-      "size": 8386
+      "sha256": "b8f0ca185999acdbbed6d61de5c52d342afd0a8c22ac6e23b83dbde5c87a37cf",
+      "size": 8439
     },
     {
       "path": "shaders/post/speedlines.hlsl",

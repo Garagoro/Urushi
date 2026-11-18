@@ -4,7 +4,10 @@
 #include "logger.h"
 
 #include <cstring>
+#include <mutex>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace Il2CppHelpers {
 
@@ -81,6 +84,16 @@ uintptr_t LookupTypeClass(const char* expectedName, const char* expectedNs, uint
     EnsureInitialized();
     if (!s_gaBase || !expectedName || !expectedNs) return 0;
 
+    static std::mutex s_cacheMtx;
+    static std::unordered_map<std::string, uintptr_t> s_klassCache;
+    const std::string key = std::string(expectedNs) + "." + expectedName;
+    {
+        std::lock_guard<std::mutex> lk(s_cacheMtx);
+        auto it = s_klassCache.find(key);
+        if (it != s_klassCache.end()) return it->second;
+    }
+
+    uintptr_t found = 0;
     if (s_rvaTypeInfoDefinitionTable) {
         uintptr_t tablePtr = 0;
         if (SafeRead(s_gaBase + s_rvaTypeInfoDefinitionTable, &tablePtr) && IsCanonPtr(tablePtr, sizeof(uintptr_t))) {
@@ -92,41 +105,70 @@ uintptr_t LookupTypeClass(const char* expectedName, const char* expectedNs, uint
                 char nameBuf[96] = {}, nsBuf[96] = {};
                 if (SafeReadCString(namePtr, nameBuf, sizeof(nameBuf)) && SafeReadCString(nsPtr, nsBuf, sizeof(nsBuf))) {
                     if (strcmp(nameBuf, expectedName) == 0 && strcmp(nsBuf, expectedNs) == 0) {
-                        return k;
+                        found = k;
+                        break;
                     }
                 }
             }
         }
     }
 
-    if (fallbackGlobalRva != 0) {
+    if (!found && fallbackGlobalRva != 0) {
         uintptr_t klassPtr = 0;
         if (SafeRead(s_gaBase + fallbackGlobalRva, &klassPtr) && IsCanonPtr(klassPtr, 0xC0)) {
-            return klassPtr;
+            found = klassPtr;
         }
     }
-    return 0;
+    if (found) {
+        std::lock_guard<std::mutex> lk(s_cacheMtx);
+        s_klassCache.emplace(key, found);
+    }
+    return found;
 }
 
 void* LookupTypeStaticFields(uint32_t hintTypeIdx, const char* expectedName, const char* expectedNs, uintptr_t fallbackGlobalRva) {
     EnsureInitialized();
     if (!s_gaBase || !expectedName || !expectedNs) return nullptr;
 
+    static std::mutex s_sfCacheMtx;
+    static std::unordered_map<std::string, uint32_t> s_idxCache;
+    static std::unordered_set<std::string> s_loggedDynamic;
+    const std::string key = std::string(expectedNs) + "." + expectedName;
+
+    uint32_t cachedIdx = 0;
+    {
+        std::lock_guard<std::mutex> lk(s_sfCacheMtx);
+        auto it = s_idxCache.find(key);
+        if (it != s_idxCache.end()) cachedIdx = it->second;
+    }
+
     if (s_rvaTypeInfoDefinitionTable) {
         uintptr_t tablePtr = 0;
         if (SafeRead(s_gaBase + s_rvaTypeInfoDefinitionTable, &tablePtr) && IsCanonPtr(tablePtr, sizeof(uintptr_t))) {
             uintptr_t klassPtr = 0;
-            if (hintTypeIdx > 0 && SafeRead(tablePtr + static_cast<uintptr_t>(hintTypeIdx) * sizeof(uintptr_t), &klassPtr)) {
+            if (cachedIdx > 0 && SafeRead(tablePtr + static_cast<uintptr_t>(cachedIdx) * sizeof(uintptr_t), &klassPtr)) {
                 if (void* sf = ResolveStaticFieldsFromTypeInfo(klassPtr, expectedName, expectedNs)) {
                     return sf;
                 }
             }
+            if (hintTypeIdx > 0 && hintTypeIdx != cachedIdx &&
+                SafeRead(tablePtr + static_cast<uintptr_t>(hintTypeIdx) * sizeof(uintptr_t), &klassPtr)) {
+                if (void* sf = ResolveStaticFieldsFromTypeInfo(klassPtr, expectedName, expectedNs)) {
+                    std::lock_guard<std::mutex> lk(s_sfCacheMtx);
+                    s_idxCache[key] = hintTypeIdx;
+                    return sf;
+                }
+            }
             for (uint32_t i = 1; i < 65536; ++i) {
-                if (i == hintTypeIdx) continue;
+                if (i == hintTypeIdx || i == cachedIdx) continue;
                 uintptr_t k = 0;
                 if (!SafeRead(tablePtr + static_cast<uintptr_t>(i) * sizeof(uintptr_t), &k) || !k) continue;
                 if (void* sf = ResolveStaticFieldsFromTypeInfo(k, expectedName, expectedNs)) {
-                    Logger::Info(std::string("Il2CppHelpers: dynamically found ") + expectedName + " at type index " + std::to_string(i));
+                    std::lock_guard<std::mutex> lk(s_sfCacheMtx);
+                    s_idxCache[key] = i;
+                    if (s_loggedDynamic.insert(key).second) {
+                        Logger::Info(std::string("Il2CppHelpers: dynamically found ") + expectedName + " at type index " + std::to_string(i));
+                    }
                     return sf;
                 }
             }
