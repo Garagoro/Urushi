@@ -44,7 +44,7 @@ if urushi and urushi.register_window then
         id = "hud",
         title = T("Телеметрия HUD", "Telemetry HUD"),
         icon = "hud",
-        order = 60,
+        order = 65,
         default_open = false,
         default_pinned = true,
         hud_no_inputs = true,

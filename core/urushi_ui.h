@@ -51,7 +51,7 @@ public:
         std::string id;
         std::string title;
         std::string icon = "settings";
-        int order = 100;
+        int order = 75;
         bool defaultOpen = false;
         bool defaultPinned = false;
         bool hudNoInputs = false;

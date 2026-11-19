@@ -5,7 +5,7 @@
     {
       "id": "carfx_mod",
       "path": "scripts/carfx_mod.lua",
-      "sha256": "75aeb7ee7d58971236c3ed13fac49f38631d8918d0c0fb3d1683ff062497dc55",
+      "sha256": "fb9b104e77487d17c5a338954e68dacaaff711d35bf7737f028060c2362da594",
       "size": 30768,
       "name": "CarFX Shaders",
       "name_ru": "CarFX Шейдеры",
@@ -20,7 +20,7 @@
     {
       "id": "initiald_mod",
       "path": "scripts/initiald_mod.lua",
-      "sha256": "5a01527235881d80d97ae09500adc90da0747709965cb9aa7efc4683112f144c",
+      "sha256": "e8e24f0a1477eb6b50fbe36c213fc3ec8c8ee03e0b53034355aeda46e365ce32",
       "size": 14669,
       "name": "Initial D Mode",
       "name_ru": "Initial D режим",
@@ -30,12 +30,12 @@
         "initiald"
       ],
       "min_core": "1.2.1",
-      "default_enabled": false
+      "default_enabled": true
     },
     {
       "id": "keybinds_mod",
       "path": "scripts/keybinds_mod.lua",
-      "sha256": "9dd2e2283f6258855c6155eeddb3bcb7a39db3c20e7071fd735256cb0ff6aade",
+      "sha256": "35b41835f0ca11755800ea92dfbb1e996edd26471605a58f2f4ea220142a7ac6",
       "size": 2383,
       "name": "Keybinds & Controls",
       "name_ru": "Горячие клавиши",
@@ -50,7 +50,7 @@
     {
       "id": "music_mod",
       "path": "scripts/music_mod.lua",
-      "sha256": "7295fa46c860d589fe5112c730a0050d12ce9c3f8d641e3cd21a97bd85eb993f",
+      "sha256": "67db70eba1d0f26d1c59a7839dc670bb8a4b7972799d45491feb569b8be2fa51",
       "size": 12177,
       "name": "Music Reactive",
       "name_ru": "Музыкальная ливрея",
@@ -60,12 +60,12 @@
         "music"
       ],
       "min_core": "1.2.1",
-      "default_enabled": false
+      "default_enabled": true
     },
     {
       "id": "perf_optimizer",
       "path": "scripts/perf_optimizer.lua",
-      "sha256": "36148260051f8b6e5959a0b96fb29acbd8e3131787b94f5a1964f324348764da",
+      "sha256": "c3fba1b3223a3974e5b08fb6f94266660a88d36fd69304cf7d7f2c1fe20e4901",
       "size": 8354,
       "name": "FPS Optimizer",
       "name_ru": "Оптимизатор FPS",
@@ -80,7 +80,7 @@
     {
       "id": "replay_mod",
       "path": "scripts/replay_mod.lua",
-      "sha256": "63885a4366722906e8f398b92310ab2faf83c57a6046c8817bf473e7eb6824b9",
+      "sha256": "9d2ca64ea5f30a078f2e5b3738c27b5344025f5f94b127fb2d07d47d0b2c0ba3",
       "size": 34104,
       "name": "Replays & Anti-Collision",
       "name_ru": "Реплеи и Анти-встречка",
@@ -96,8 +96,8 @@
     {
       "id": "steer_assist_mod",
       "path": "scripts/steer_assist_mod.lua",
-      "sha256": "98696f58c01aca03ebcc9565c7c7d6666b959b63f1d8b2390d61233c300fc6b5",
-      "size": 19350,
+      "sha256": "af698941af3796c60d6c8340182a4ca6879be326d1eff9aa65c37657223e15f6",
+      "size": 19351,
       "name": "Steering Assist (155°)",
       "name_ru": "Помощь руля (155°)",
       "description": "Smart wheel angle assist for deep drift angles up to 155°",
@@ -106,12 +106,12 @@
         "steer_assist"
       ],
       "min_core": "1.2.1",
-      "default_enabled": false
+      "default_enabled": true
     },
     {
       "id": "telemetry_hud",
       "path": "scripts/telemetry_hud.lua",
-      "sha256": "72e997b464e67cbf772ace398098c0e276b5ce0904c447ea2371262e94fa3593",
+      "sha256": "bea460af4d5d9f6d1dd731e3f679715c473477d5b9100892ca53fd60570e3e31",
       "size": 1929,
       "name": "Telemetry HUD",
       "name_ru": "Телеметрия HUD",
@@ -142,7 +142,7 @@
     {
       "id": "tires_mod",
       "path": "scripts/tires_mod.lua",
-      "sha256": "b0c0fa89cc385ece984e43f07bebc09c8b7d8b92c0d1e008b6ed0594db63f4ed",
+      "sha256": "21f0db97b8db62455b9f427cb22aca81b45df1c1d2de8e0e56ae128b653c0a34",
       "size": 15977,
       "name": "Body & Tires",
       "name_ru": "Кузов и шины",
@@ -152,7 +152,7 @@
         "tires"
       ],
       "min_core": "1.2.1",
-      "default_enabled": false
+      "default_enabled": true
     }
   ],
   "shaders": [

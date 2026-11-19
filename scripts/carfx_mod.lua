@@ -679,7 +679,7 @@ if urushi and urushi.register_window then
         id = "carfx",
         title = T("CarFX Шейдеры", "CarFX Shaders"),
         icon = "shader",
-        order = 20,
+        order = 10,
         default_open = false,
         default_pinned = false,
         x = 696,

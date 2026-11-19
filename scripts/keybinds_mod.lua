@@ -54,7 +54,7 @@ if urushi and urushi.register_window then
         id = "keybinds",
         title = T("Горячие клавиши", "Keybinds"),
         icon = "keyboard",
-        order = 45,
+        order = 80,
         default_open = false,
         width = 412,
         render = render_keybinds_window,

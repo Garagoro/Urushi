@@ -312,7 +312,7 @@ urushi.register_window({
     id = "initiald",
     title = T("Initial D режим", "Initial D Mode"),
     icon = "play",
-    order = 45,
+    order = 20,
     default_open = false,
     settings = settings,
     render = render_window,

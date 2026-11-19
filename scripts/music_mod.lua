@@ -276,7 +276,7 @@ if urushi and urushi.register_window then
         id = "music",
         title = T("Музыкальная ливрея", "Music Reactive"),
         icon = "hud",
-        order = 36,
+        order = 15,
         default_open = false,
         default_pinned = false,
         x = 380,

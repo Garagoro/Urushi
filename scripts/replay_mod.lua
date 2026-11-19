@@ -790,7 +790,7 @@ if urushi and urushi.register_window then
         id = "replay",
         title = T("Реплеи 3D", "3D Replays"),
         icon = "play",
-        order = 30,
+        order = 50,
         default_open = false,
         default_pinned = false,
         x = 264,

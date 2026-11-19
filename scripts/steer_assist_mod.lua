@@ -19,7 +19,7 @@ local OFF_WHEEL_SLIP_NEG      = 0xF6C
 local OFF_WHEEL_HAS_SLIP_GATE = 0x26930
 
 local DEFAULT_CFG = {
-    enabled = true,
+    enabled = false,
     flip_angle_deg = 155.0,
     disable_early_steer_flip = true,
     early_steer_flip_deg = 135.0,
@@ -453,7 +453,7 @@ if urushi and urushi.register_window then
         id = "steer_assist",
         title = T("Помощник руля", "Steering Assist"),
         icon = "wheel",
-        order = 35,
+        order = 30,
         default_open = false,
         default_pinned = false,
         x = 716,

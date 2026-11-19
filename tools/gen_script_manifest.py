@@ -81,7 +81,7 @@ SCRIPTS_METADATA = {
         "description_ru": "Умная коррекция выворота колес под угол заноса до 155°",
         "window_ids": ["steer_assist"],
         "min_core": "1.2.1",
-        "default_enabled": False,
+        "default_enabled": True,
     },
     "tires_mod": {
         "name": "Body & Tires",
@@ -90,7 +90,7 @@ SCRIPTS_METADATA = {
         "description_ru": "Густой дым, блокировка износа шин, давление и деформация",
         "window_ids": ["tires"],
         "min_core": "1.2.1",
-        "default_enabled": False,
+        "default_enabled": True,
     },
     "initiald_mod": {
         "name": "Initial D Mode",
@@ -99,7 +99,7 @@ SCRIPTS_METADATA = {
         "description_ru": "Аниме speedlines postfx, cel-шейдинг кузова и евробит",
         "window_ids": ["initiald"],
         "min_core": "1.2.1",
-        "default_enabled": False,
+        "default_enabled": True,
     },
     "music_mod": {
         "name": "Music Reactive",
@@ -108,7 +108,7 @@ SCRIPTS_METADATA = {
         "description_ru": "WASAPI захват звука и FFT-спектр для музыкальных шейдеров",
         "window_ids": ["music"],
         "min_core": "1.2.1",
-        "default_enabled": False,
+        "default_enabled": True,
     },
 }
 

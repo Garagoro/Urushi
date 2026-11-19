@@ -323,7 +323,7 @@ if urushi and urushi.register_window then
         id = "tires",
         title = T("Кузов и шины", "Body & Tires"),
         icon = "wheel",
-        order = 38,
+        order = 35,
         default_open = false,
         default_pinned = false,
         x = 350,

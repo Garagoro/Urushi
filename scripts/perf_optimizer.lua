@@ -179,7 +179,7 @@ if urushi and urushi.register_window then
         id = "perf",
         title = T("Оптимизатор", "Optimizer"),
         icon = "gauge",
-        order = 10,
+        order = 60,
         default_open = false,
         default_pinned = false,
         x = 264,
