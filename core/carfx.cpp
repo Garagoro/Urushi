@@ -1,6 +1,7 @@
 #include "carfx.h"
 #include "carfx_internal.h"
 #include "audio_capture.h"
+#include "carfx_anim.h"
 #include "logger.h"
 #include "native_carx.h"
 
@@ -382,12 +383,14 @@ bool Init(ID3D11Device* device, ID3D11DeviceContext* immediateContext, const std
     g_bodyDepthDs = g_bodyDepthDsByFunc[D3D11_COMPARISON_GREATER_EQUAL];
 
     g_initialized.store(true, std::memory_order_release);
+    Anim::Init();
     Logger::Info("CarFX initialized. Shaders dir: " + WideToUtf8(g_shadersDir));
     return true;
 }
 
 void Shutdown() {
     g_initialized.store(false, std::memory_order_release);
+    Anim::Shutdown();
 
     for (int t = 0; t < kTargetCount; ++t) {
         UnloadShader(t);
@@ -460,6 +463,19 @@ void OnNewFrame(ID3D11DeviceContext* context) {
     }
 
     AudioCapture::GetShaderAudioData(g_cachedFrameAudio.audio, g_cachedFrameAudio.audio2, &g_cachedFrameAudio.spectrum[0][0]);
+
+    LARGE_INTEGER nowQpc{};
+    QueryPerformanceCounter(&nowQpc);
+    static int64_t s_lastFrameQpc = 0;
+    double dt = 0.0;
+    if (s_lastFrameQpc != 0 && g_qpcFreq.QuadPart > 0) {
+        dt = static_cast<double>(nowQpc.QuadPart - s_lastFrameQpc) / static_cast<double>(g_qpcFreq.QuadPart);
+        if (dt < 0.0) dt = 0.0;
+        if (dt > 0.25) dt = 0.25;
+    }
+    s_lastFrameQpc = nowQpc.QuadPart;
+
+    Anim::OnNewFrame(g_device, dt);
 
     const uint32_t prevFrame = g_frameCounter.fetch_add(1, std::memory_order_relaxed);
     const uint32_t totalPrev = g_totalDrawsFrame.exchange(0, std::memory_order_relaxed);

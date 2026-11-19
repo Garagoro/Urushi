@@ -26,6 +26,9 @@ public:
     static int GetTargetParam(lua_State* L);
     static int SetTex(lua_State* L);
     static int ClearTex(lua_State* L);
+    static int GetTexInfo(lua_State* L);
+    static int SetTexPlayback(lua_State* L);
+    static int ListTextures(lua_State* L);
     static int SetGameInput(lua_State* L);
     static int GetGameInput(lua_State* L);
     static int ListShaders(lua_State* L);

@@ -32,7 +32,7 @@ add_library(urushi SHARED
     car_sim_optimizer.h car_sim_optimizer_internal.h car_sim_optimizer.cpp car_sim_optimizer_hooks.cpp
     d3d11_hook.h d3d11_hook.cpp
     carfx_shader_decl.h carfx_shader_decl.cpp
-    carfx.h carfx_internal.h carfx.cpp carfx_shader.cpp carfx_draw.cpp
+    carfx.h carfx_internal.h carfx_anim.h carfx.cpp carfx_shader.cpp carfx_draw.cpp carfx_anim.cpp
     postfx.h postfx.cpp
     audio_player.h audio_player.cpp
     replay_engine.h replay_engine.cpp

@@ -69,7 +69,23 @@ cbuffer CarFx : register(b13) {
     float4 g_fxAudio;             // x: level, y: bass, z: mid, w: treble
     float4 g_fxAudio2;            // x: beat pulse, y: low-mid, z: high-mid, w: enabled (0/1)
     float4 g_fxAudioSpectrum[8];  // 32 log-spaced spectrum bands
+
+    // Animated texture status for user textures 0..3:
+    // x: normalized playback progress (0.0 .. 1.0)
+    // y: current frame index (0-based)
+    // z: total frame count
+    // w: is playing (1.0 = playing, 0.0 = paused / static)
+    float4 g_fxTexAnim[4];
 };
+
+#define p0 g_fxParam[0]
+#define p1 g_fxParam[1]
+#define p2 g_fxParam[2]
+#define p3 g_fxParam[3]
+#define p4 g_fxParam[4]
+#define p5 g_fxParam[5]
+#define p6 g_fxParam[6]
+#define p7 g_fxParam[7]
 
 // Custom SRV bindings on t32..t38 (RenderCore/Standard uses up to t28)
 Texture2D g_fxScene  : register(t32);   // Scene snapshot behind the car (copied if shader reads g_fxScene)

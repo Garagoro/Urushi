@@ -63,6 +63,13 @@ struct FxConstants {
     float audio[4];            // x: level, y: bass, z: mid, w: treble
     float audio2[4];           // x: beat pulse, y: low-mid, z: high-mid, w: enabled (0/1)
     float audioSpectrum[8][4]; // 32 log-spaced spectrum bands
+
+    // Video livery / animated texture status for user textures 0..3:
+    // x: normalized playback progress (0.0 .. 1.0)
+    // y: current frame index (0-based)
+    // z: total frame count
+    // w: playing state (1.0 = playing, 0.0 = paused / static)
+    float texAnim[kTextures][4];
 };
 static_assert(sizeof(FxConstants) % 16 == 0, "CarFx constant buffer must align to 16 bytes");
 

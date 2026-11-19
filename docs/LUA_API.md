@@ -242,6 +242,28 @@ Provides modern, cohesive ImGui components with automatic layout and accent colo
 * `carfx.set_param(param_index, x, y, z, w)`: Overrides `p0..p7` parameters directly from Lua.
 * `carfx.reload_shaders()`: Hot-reloads all shaders from disk.
 * `carfx.load(file, target)` / `carfx.unload(target)`: `target` 0 = body (always one piece: bumpers, doors... are not split), 1 = internals (see below).
+* `carfx.set_tex(slot, path [, target])`: Sets a custom texture for slot 0..3 (`t33`..`t36`). Accepts static images (`.png`, `.jpg`, `.jpeg`, `.bmp`, `.tga`), animated GIFs (`.gif`), or image sequence folders (`shaders/<dir>/`). Paths are strictly confined to `shaders/`. Returns `ok, err`.
+* `carfx.clear_tex(slot [, target])`: Clears the specified texture slot and releases any associated GPU/CPU resources.
+* `carfx.get_tex_info(slot [, target])`: Returns a table with texture and animation status:
+  ```lua
+  {
+      file = "flame.gif",
+      animated = true,
+      frames = 48,
+      fps = 24.0,
+      duration = 2.0,
+      width = 512,
+      height = 512,
+      playing = true,
+      speed = 1.0,
+      mode = "loop", -- "loop" | "pingpong" | "once"
+      frame = 12,    -- 0-based current frame index
+      state = "ready", -- "loading" | "ready" | "error"
+      error = nil
+  }
+  ```
+* `carfx.set_tex_playback(slot, options [, target])`: Adjusts playback settings for an animated slot. `options` is a table with any of: `{ playing = bool, speed = float, mode = "loop"|"pingpong"|"once", fps = float, frame = int }`.
+* `carfx.list_textures()`: Returns an array of candidate image files and sequence directories found in `shaders/`.
 * `carfx.get_parts()` -> `{ engine, suspension, brakes, wheels, interior }` booleans: which groups of non-body parts the **internals** target (1) applies to.
   Defaults: everything on except `wheels`. `carfx.set_parts{ wheels = true }` changes only the listed groups and returns the new table.
   `interior` means every other non-body, non-glass part (seats, dashboard, cage, driver...).

@@ -1,5 +1,6 @@
 #include "lua_carfx.h"
 #include "../carfx.h"
+#include "../carfx_anim.h"
 
 #include <cstdio>
 #include <cstring>
@@ -20,7 +21,10 @@ static const luaL_Reg kCarfxFuncs[] = {
     { "set_target_param", LuaCarFX::SetTargetParam },
     { "get_target_param", LuaCarFX::GetTargetParam },
     { "set_tex",          LuaCarFX::SetTex },
-    { "clear_tex",      LuaCarFX::ClearTex },
+    { "clear_tex",        LuaCarFX::ClearTex },
+    { "get_tex_info",     LuaCarFX::GetTexInfo },
+    { "set_tex_playback", LuaCarFX::SetTexPlayback },
+    { "list_textures",    LuaCarFX::ListTextures },
     { "set_game_input", LuaCarFX::SetGameInput },
     { "get_game_input", LuaCarFX::GetGameInput },
     { "list_shaders",   LuaCarFX::ListShaders },
@@ -248,6 +252,123 @@ int LuaCarFX::ClearTex(lua_State* L) {
     int target = static_cast<int>(luaL_optinteger(L, 2, CarFX::kTargetBody));
     CarFX::ClearUserTexture(target, slot);
     return 0;
+}
+
+int LuaCarFX::GetTexInfo(lua_State* L) {
+    int slot = static_cast<int>(luaL_checkinteger(L, 1));
+    int target = static_cast<int>(luaL_optinteger(L, 2, CarFX::kTargetBody));
+
+    CarFX::Anim::SlotInfo info = CarFX::Anim::GetInfo(target, slot);
+
+    lua_createtable(L, 0, 13);
+    lua_pushstring(L, info.file.c_str());
+    lua_setfield(L, -2, "file");
+
+    lua_pushboolean(L, info.animated);
+    lua_setfield(L, -2, "animated");
+
+    lua_pushinteger(L, info.frames);
+    lua_setfield(L, -2, "frames");
+
+    lua_pushnumber(L, info.fps);
+    lua_setfield(L, -2, "fps");
+
+    lua_pushnumber(L, info.duration);
+    lua_setfield(L, -2, "duration");
+
+    lua_pushinteger(L, info.width);
+    lua_setfield(L, -2, "width");
+
+    lua_pushinteger(L, info.height);
+    lua_setfield(L, -2, "height");
+
+    lua_pushboolean(L, info.playing);
+    lua_setfield(L, -2, "playing");
+
+    lua_pushnumber(L, info.speed);
+    lua_setfield(L, -2, "speed");
+
+    lua_pushstring(L, info.mode.c_str());
+    lua_setfield(L, -2, "mode");
+
+    lua_pushinteger(L, info.frame);
+    lua_setfield(L, -2, "frame");
+
+    lua_pushstring(L, info.state.c_str());
+    lua_setfield(L, -2, "state");
+
+    if (!info.error.empty()) {
+        lua_pushstring(L, info.error.c_str());
+    } else {
+        lua_pushnil(L);
+    }
+    lua_setfield(L, -2, "error");
+
+    return 1;
+}
+
+int LuaCarFX::SetTexPlayback(lua_State* L) {
+    int slot = static_cast<int>(luaL_checkinteger(L, 1));
+    luaL_checktype(L, 2, LUA_TTABLE);
+    int target = static_cast<int>(luaL_optinteger(L, 3, CarFX::kTargetBody));
+
+    CarFX::Anim::PlaybackConfig cfg;
+
+    lua_getfield(L, 2, "playing");
+    if (lua_isboolean(L, -1)) {
+        cfg.hasPlaying = true;
+        cfg.playing = (lua_toboolean(L, -1) != 0);
+    }
+    lua_pop(L, 1);
+
+    lua_getfield(L, 2, "speed");
+    if (lua_isnumber(L, -1)) {
+        cfg.hasSpeed = true;
+        cfg.speed = static_cast<float>(lua_tonumber(L, -1));
+    }
+    lua_pop(L, 1);
+
+    lua_getfield(L, 2, "mode");
+    if (lua_isstring(L, -1)) {
+        cfg.hasMode = true;
+        const char* m = lua_tostring(L, -1);
+        if (_stricmp(m, "pingpong") == 0 || _stricmp(m, "ping-pong") == 0) {
+            cfg.mode = CarFX::Anim::LoopMode::PingPong;
+        } else if (_stricmp(m, "once") == 0) {
+            cfg.mode = CarFX::Anim::LoopMode::Once;
+        } else {
+            cfg.mode = CarFX::Anim::LoopMode::Loop;
+        }
+    }
+    lua_pop(L, 1);
+
+    lua_getfield(L, 2, "fps");
+    if (lua_isnumber(L, -1)) {
+        cfg.hasFps = true;
+        cfg.fps = static_cast<float>(lua_tonumber(L, -1));
+    }
+    lua_pop(L, 1);
+
+    lua_getfield(L, 2, "frame");
+    if (lua_isinteger(L, -1)) {
+        cfg.hasFrame = true;
+        cfg.frame = static_cast<int>(lua_tointeger(L, -1));
+    }
+    lua_pop(L, 1);
+
+    bool ok = CarFX::Anim::SetPlayback(target, slot, cfg);
+    lua_pushboolean(L, ok);
+    return 1;
+}
+
+int LuaCarFX::ListTextures(lua_State* L) {
+    std::vector<std::string> list = CarFX::Anim::ListCandidateTextures();
+    lua_createtable(L, static_cast<int>(list.size()), 0);
+    for (size_t i = 0; i < list.size(); ++i) {
+        lua_pushstring(L, list[i].c_str());
+        lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+    }
+    return 1;
 }
 
 int LuaCarFX::SetGameInput(lua_State* L) {

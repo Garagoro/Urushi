@@ -5,8 +5,8 @@
     {
       "id": "carfx_mod",
       "path": "scripts/carfx_mod.lua",
-      "sha256": "86533da02365f5b7379034fd4df09f87baba206702d2e4ac4326aca7e5cc7f61",
-      "size": 24464,
+      "sha256": "262f56aee693b20f6a67907719b1b4201765495711e719629cefa9837bf9461b",
+      "size": 30795,
       "name": "CarFX Shaders",
       "name_ru": "CarFX Шейдеры",
       "description": "Custom body shaders, glass reflections, neon glow & tinting",
@@ -50,8 +50,8 @@
     {
       "id": "music_mod",
       "path": "scripts/music_mod.lua",
-      "sha256": "f0dae9180d448d83d990d844a083420e8126c5ab718501447e4145b4cb23cec6",
-      "size": 12200,
+      "sha256": "7295fa46c860d589fe5112c730a0050d12ce9c3f8d641e3cd21a97bd85eb993f",
+      "size": 12177,
       "name": "Music Reactive",
       "name_ru": "Музыкальная ливрея",
       "description": "WASAPI audio capture and FFT spectrum reactive CarFX shaders",
@@ -158,8 +158,8 @@
   "shaders": [
     {
       "path": "shaders/carfx.hlsli",
-      "sha256": "88943b9a3514f3a78ef17c151d1a3d0a0ba342e3af1c5dcf0ffad5821581cbb8",
-      "size": 13885
+      "sha256": "f572b992b5da9a2775cf8e3700de58ae431ff2d9ffff8ff01021c6fd3ce93c67",
+      "size": 14341
     },
     {
       "path": "shaders/internals_neon.hlsl",
@@ -203,8 +203,8 @@
     },
     {
       "path": "shaders/livery_music.hlsl",
-      "sha256": "263922e9230d5381515a761465cf14d88411c86cbfa8d9c173c35359e68122ff",
-      "size": 4966
+      "sha256": "a0ce806eb16d67d59a62701644eb4807091cdeb97ee73326215e3ac93af4e538",
+      "size": 10317
     },
     {
       "path": "shaders/livery_proximity_reactive.hlsl",
@@ -220,6 +220,11 @@
       "path": "shaders/livery_tandem_angle.hlsl",
       "sha256": "ba585040b00fa6a16db9ccb64a3dee3a0b45e7fa279f395ab42a7d7e7325fa10",
       "size": 7062
+    },
+    {
+      "path": "shaders/livery_video.hlsl",
+      "sha256": "a01c447c733f4e31f65bbdc60164d3eca933b104d84493235ad84e92421f8511",
+      "size": 2671
     },
     {
       "path": "shaders/livery_wall_tap.hlsl",

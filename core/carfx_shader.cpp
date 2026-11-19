@@ -1,5 +1,6 @@
 #include "carfx.h"
 #include "carfx_internal.h"
+#include "carfx_anim.h"
 #include "logger.h"
 
 #include <wincodec.h>
@@ -313,6 +314,7 @@ bool CompileShaderSource(int target, const std::string& source, const std::strin
 
 void UnloadShader(int target) {
     if (!ValidTarget(target)) return;
+    Anim::StopAndClearTarget(target);
     TargetSlotState& ts = g_targets[target];
     {
         std::lock_guard<std::mutex> lk(ts.publishMtx);
@@ -388,8 +390,10 @@ ReplayShaderConfig CaptureActiveConfig(int target) {
     }
     for (int i = 0; i < kTextures; ++i) {
         if (!ts.userTexPaths[i].empty()) {
-            size_t tSlash = ts.userTexPaths[i].find_last_of("\\/");
-            cfg.texPaths[i] = (tSlash != std::string::npos) ? ts.userTexPaths[i].substr(tSlash + 1) : ts.userTexPaths[i];
+            std::string p = ts.userTexPaths[i];
+            while (!p.empty() && (p.back() == '/' || p.back() == '\\')) p.pop_back();
+            size_t tSlash = p.find_last_of("\\/");
+            cfg.texPaths[i] = (tSlash != std::string::npos) ? p.substr(tSlash + 1) : p;
         }
     }
     return cfg;
@@ -607,6 +611,36 @@ bool SetUserTexture(int target, int texSlot, const std::string& imagePathUtf8, s
     }
 
     std::wstring full = ResolvePathW(imagePathUtf8);
+    if (full.empty()) {
+        if (outError) *outError = "File not found or outside shaders/ directory";
+        return false;
+    }
+
+    DWORD attr = GetFileAttributesW(full.c_str());
+    if (attr == INVALID_FILE_ATTRIBUTES) {
+        if (outError) *outError = "File or directory does not exist";
+        return false;
+    }
+
+    bool isDir = (attr & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    bool isGif = false;
+    if (!isDir) {
+        size_t dot = full.find_last_of(L'.');
+        if (dot != std::wstring::npos) {
+            std::wstring ext = full.substr(dot);
+            if (_wcsicmp(ext.c_str(), L".gif") == 0) {
+                isGif = true;
+            }
+        }
+    }
+
+    if (isDir || isGif) {
+        return Anim::StartLoad(target, texSlot, imagePathUtf8, full, isDir, outError);
+    }
+
+    // Static image path: stop any animated playback on this slot first
+    Anim::StopAndClearSlot(target, texSlot);
+
     HRESULT hrCom = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     bool needUninit = SUCCEEDED(hrCom);
 
@@ -707,6 +741,7 @@ bool SetUserTexture(int target, int texSlot, const std::string& imagePathUtf8, s
 
 void ClearUserTexture(int target, int texSlot) {
     if (!ValidTarget(target) || texSlot < 0 || texSlot >= kTextures) return;
+    Anim::StopAndClearSlot(target, texSlot);
     {
         std::lock_guard<std::mutex> lk(g_targets[target].publishMtx);
         g_targets[target].userTexPaths[texSlot].clear();

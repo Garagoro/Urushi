@@ -1,5 +1,6 @@
 #include "carfx.h"
 #include "carfx_internal.h"
+#include "carfx_anim.h"
 #include "logger.h"
 #include "native_carx.h"
 #include "audio_capture.h"
@@ -927,6 +928,7 @@ bool TryHandleDraw(ID3D11DeviceContext* context, UINT /*countPerInstance*/, Draw
     memcpy(k.audio, g_cachedFrameAudio.audio, sizeof(k.audio));
     memcpy(k.audio2, g_cachedFrameAudio.audio2, sizeof(k.audio2));
     memcpy(k.audioSpectrum, g_cachedFrameAudio.spectrum, sizeof(k.audioSpectrum));
+    Anim::GetConstantData(matchedTarget, k.texAnim);
 
     D3D11_MAPPED_SUBRESOURCE mapped{};
     if (FAILED(context->Map(g_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)) || !mapped.pData) {

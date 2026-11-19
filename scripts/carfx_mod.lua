@@ -73,6 +73,7 @@ if type(cfx_settings.internals_tex_paths) ~= "table" then cfx_settings.internals
 local state = {
     tab = 1, -- 1: Body, 2: Internals
     shaders = {},
+    available_textures = {},
     tex_inputs = { [0] = { [0] = "", [1] = "", [2] = "", [3] = "" }, [1] = { [0] = "", [1] = "", [2] = "", [3] = "" } },
     status_msg = { [0] = "", [1] = "" },
     status_tone = { [0] = "muted", [1] = "muted" },
@@ -85,6 +86,9 @@ end
 local function refresh_shader_list()
     if carfx and carfx.list_shaders then
         state.shaders = carfx.list_shaders() or {}
+    end
+    if carfx and carfx.list_textures then
+        state.available_textures = carfx.list_textures() or {}
     end
 end
 refresh_shader_list()
@@ -238,6 +242,7 @@ events.on_update(function(dt)
     if refresh_timer >= 2.0 then
         refresh_timer = 0
         refresh_shader_list()
+        refresh_tex_list()
     end
     if keybinds and keybinds.is_pressed and keybinds.is_pressed("carfx_menu") then
         if urushi and urushi.toggle_window then
@@ -357,7 +362,31 @@ local function render_shader_textures(target, st)
             local slot = tx.slot or 0
             local lbl = (tx.desc and tx.desc ~= "") and tx.desc or tx.name
             local cur_path = state.tex_inputs[target][slot] or ""
-            local tch, np = ui.input_text(string.format("%s##cfx_tx_%s_%d", lbl, id_sfx, slot), cur_path, 256)
+
+            if state.available_textures and #state.available_textures > 0 then
+                local combo_items = { T("<Выбрать из shaders/>", "<Select from shaders/>") }
+                local cur_sel = 1
+                for _, fn in ipairs(state.available_textures) do
+                    combo_items[#combo_items + 1] = fn
+                    if cur_path == fn then cur_sel = #combo_items end
+                end
+                local c_ch, new_sel = ui.combo(string.format("##cfx_tx_cb_%s_%d", id_sfx, slot), cur_sel, combo_items)
+                if c_ch and new_sel > 1 then
+                    local picked = combo_items[new_sel]
+                    state.tex_inputs[target][slot] = picked
+                    local ok, err = carfx.set_tex(slot, picked, target)
+                    if not ok then
+                        state.status_msg[target] = tostring(err)
+                        state.status_tone[target] = "red"
+                    else
+                        state.status_msg[target] = ""
+                        tex_store[slot] = picked
+                        if config then config.mark_dirty() end
+                    end
+                end
+            end
+
+            local tch, np = ui.input_text(string.format("%s##cfx_tx_%s_%d", lbl, id_sfx, slot), state.tex_inputs[target][slot] or "", 256)
             if tch then state.tex_inputs[target][slot] = np end
             if ui.button(T("Применить##cfx_tx_s_", "Apply##cfx_tx_s_") .. id_sfx .. "_" .. slot, bw, 24, "primary") then
                 local p = state.tex_inputs[target][slot] or ""
@@ -366,6 +395,7 @@ local function render_shader_textures(target, st)
                     state.status_msg[target] = tostring(err)
                     state.status_tone[target] = "red"
                 else
+                    state.status_msg[target] = ""
                     tex_store[slot] = p
                     if config then config.mark_dirty() end
                 end
@@ -377,6 +407,50 @@ local function render_shader_textures(target, st)
                 tex_store[slot] = ""
                 if config then config.mark_dirty() end
             end
+
+            if carfx and carfx.get_tex_info and carfx.set_tex_playback then
+                local info = carfx.get_tex_info(slot, target)
+                if info and (info.animated or info.state == "loading" or info.state == "error") then
+                    ui.spacing(3)
+                    if info.state == "loading" then
+                        ui.badge(T("Загрузка анимации...", "Loading animation..."), "yellow")
+                    elseif info.state == "error" then
+                        ui.badge(T("Ошибка анимации", "Animation error"), "red")
+                        if info.error and info.error ~= "" then
+                            ui.text_wrapped(info.error, "red")
+                        end
+                    elseif info.state == "ready" then
+                        ui.badge(string.format(T("Анимация: %d к., %.1f FPS", "Anim: %d fr, %.1f FPS"), info.frames or 0, info.fps or 0), "accent")
+                        ui.spacing(2)
+                        local p_lbl = info.playing and T("Пауза##cfx_ap_", "Pause##cfx_ap_") or T("Старт##cfx_ap_", "Play##cfx_ap_")
+                        if ui.button(p_lbl .. id_sfx .. "_" .. slot, 80, 24, info.playing and "ghost" or "primary") then
+                            carfx.set_tex_playback(slot, { playing = not info.playing }, target)
+                        end
+                        ui.same_line(0, 6)
+                        local mode_opts = { T("Цикл", "Loop"), T("Пинг-понг", "Ping-Pong"), T("1 раз", "Once") }
+                        local mode_map = { "loop", "pingpong", "once" }
+                        local cur_mi = (info.mode == "pingpong" and 2) or (info.mode == "once" and 3) or 1
+                        local seg_ch, new_mi = ui.segmented(string.format("cfx_am_%s_%d", id_sfx, slot), cur_mi, mode_opts)
+                        if seg_ch and new_mi ~= cur_mi then
+                            carfx.set_tex_playback(slot, { mode = mode_map[new_mi] }, target)
+                        end
+                        local spd_ch, new_spd = ui.slider_float(
+                            string.format(T("Скорость##cfx_aspd_%s_%d", "Speed##cfx_aspd_%s_%d"), id_sfx, slot),
+                            info.speed or 1.0, 0.1, 3.0, "%.2fx")
+                        if spd_ch and math.abs(new_spd - (info.speed or 1.0)) > 0.01 then
+                            carfx.set_tex_playback(slot, { speed = new_spd }, target)
+                        end
+                        local max_f = math.max(0, (info.frames or 1) - 1)
+                        local frm_ch, new_frm = ui.slider_int(
+                            string.format(T("Кадр##cfx_afrm_%s_%d", "Frame##cfx_afrm_%s_%d"), id_sfx, slot),
+                            info.frame or 0, 0, max_f)
+                        if frm_ch and new_frm ~= (info.frame or 0) then
+                            carfx.set_tex_playback(slot, { frame = new_frm }, target)
+                        end
+                    end
+                end
+            end
+
             if idx < #st.textures then ui.spacing(4) end
         end
     end)

@@ -82,6 +82,17 @@ Binds custom texture assets:
 // @tex <slot 0..3> <name> [coverage | colour] : <Description>
 ```
 * Binds to registers `g_fxTex0` (`t33`) through `g_fxTex3` (`t36`).
+* **Supported sources** (confined strictly to `shaders/`):
+  * **Static images**: `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tga`.
+  * **Animated GIF**: `.gif` — full GIF89a composite with frame rects, per-frame delays (delays $\le 10\text{ ms}$ normalized to $100\text{ ms}$), and disposal modes 0..3.
+  * **Image sequence folders**: `shaders/<dir>/` containing numbered `.png`/`.jpg` frames sorted naturally, running at a configurable FPS (default 24 FPS; optional `fps.txt` in the folder).
+* **Budgets & Performance**:
+  * Decoded entirely on background worker threads; no disk I/O or decode stalls on the render thread.
+  * Long-side resolution downscaled to $\le 1024\text{ px}$ by default (hard max $2048\text{ px}$).
+  * Total decoded memory capped at $256\text{ MB}$ per clip; clips exceeding budget are automatically downscaled / subsampled with a warning log.
+  * Maximum frame count capped at 600 frames.
+  * Swapped on the GPU as immutable textures on `OnNewFrame` with zero per-frame CPU upload.
+  * Playback status exposed in the UI (play/pause, speed, loop/ping-pong/once, frame scrubber).
 
 ### `@stealth`
 ```hlsl
@@ -161,6 +172,13 @@ All real-time environment, telemetry, and sensor data is pushed into `cbuffer Ca
 * `g_fxAudio2.z` — High-mid band energy (`1000..4000 Hz`).
 * `g_fxAudio2.w` — Audio capture enabled flag (`1.0` if active, `0.0` if off).
 * `g_fxAudioSpectrum[8]` — 32 log-spaced spectrum bands (`float4[8]`). Zeroed when capture is off.
+
+### Animated Texture Metrics (`g_fxTexAnim[4]`)
+Status for texture slots 0..3 (`g_fxTex0`..`g_fxTex3`):
+* `g_fxTexAnim[slot].x` — Normalized playback progress (`0.0 .. 1.0`).
+* `g_fxTexAnim[slot].y` — Current frame index (0-based).
+* `g_fxTexAnim[slot].z` — Total frame count.
+* `g_fxTexAnim[slot].w` — Playing state (`1.0` = playing, `0.0` = paused / static).
 
 ---
 
@@ -322,3 +340,18 @@ Header annotations (`@param` and `@color`) are parsed identically to CarFX shade
 
 Sample post-process shader: `shaders/post/speedlines.hlsl` (Initial D anime radial speed lines).
 
+---
+
+## 10. Animated Video Livery (`shaders/livery_video.hlsl`)
+
+Maps animated GIF or image sequence textures from user texture slot 0 onto the car body with real-time UV transformation, brightness, emissive boost, and optional preservation of the player's decals:
+
+* `@param uvScaleX` (`p0.x`), `@param uvScaleY` (`p0.y`): UV tiling / scale.
+* `@param uvOffsetX` (`p0.z`), `@param uvOffsetY` (`p0.w`): Horizontal and vertical UV offset.
+* `@param uvRotation` (`p1.x`): Texture rotation in degrees (-180°..+180°).
+* `@param wrapMode` (`p1.y`): `1.0` = Repeat / Tile, `0.0` = Clamp with edge cutoff.
+* `@param brightness` (`p1.z`): Albedo brightness scale.
+* `@param emissiveBoost` (`p1.w`): Glowing neon intensity.
+* `@param paintBlend` (`p2.x`): Blends video output with base car paint (`0.0` = full video, `1.0` = full paint).
+* `@param keepDecals` (`p2.y`): Blends the player's baked vinyl decals and livery stickers on top.
+* `@color basePaint` (`p3.xyz`): Base body color shown underneath clamped borders or blended.
