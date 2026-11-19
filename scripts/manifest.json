@@ -5,8 +5,8 @@
     {
       "id": "carfx_mod",
       "path": "scripts/carfx_mod.lua",
-      "sha256": "262f56aee693b20f6a67907719b1b4201765495711e719629cefa9837bf9461b",
-      "size": 30795,
+      "sha256": "75aeb7ee7d58971236c3ed13fac49f38631d8918d0c0fb3d1683ff062497dc55",
+      "size": 30768,
       "name": "CarFX Shaders",
       "name_ru": "CarFX Шейдеры",
       "description": "Custom body shaders, glass reflections, neon glow & tinting",

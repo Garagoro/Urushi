@@ -985,6 +985,20 @@ void DownloadPackAsync(std::function<void(bool ok)> onDone) {
             }
         }
 
+        auto shaderRelPath = [](const std::string& p) -> std::wstring {
+            std::string rel = p;
+            if (rel.rfind("shaders/", 0) == 0) rel = rel.substr(8);
+            else {
+                size_t slash = rel.rfind('/');
+                if (slash != std::string::npos) rel = rel.substr(slash + 1);
+            }
+            if (rel.empty() || rel.find("..") != std::string::npos || rel.find(':') != std::string::npos) {
+                return L"";
+            }
+            for (char& ch : rel) if (ch == '/') ch = '\\';
+            return Logger::ToWide(rel);
+        };
+
         // 2. Download & verify shaders into staging
         if (allOk) {
             for (const auto& sh : manifest.shaders) {
@@ -994,13 +1008,17 @@ void DownloadPackAsync(std::function<void(bool ok)> onDone) {
                     failErr = "Cancelled";
                     break;
                 }
-                std::string fname = sh.path;
-                size_t slash = fname.rfind('/');
-                if (slash != std::string::npos) fname = fname.substr(slash + 1);
+                std::wstring relW = shaderRelPath(sh.path);
+                if (relW.empty()) {
+                    cleanupStage();
+                    allOk = false;
+                    failErr = "Invalid shader path: " + sh.path;
+                    break;
+                }
 
                 {
                     std::lock_guard<std::mutex> lk(g_mtx);
-                    g_packStatus.currentFile = fname;
+                    g_packStatus.currentFile = sh.path;
                 }
 
                 std::vector<uint8_t> shBytes;
@@ -1021,12 +1039,16 @@ void DownloadPackAsync(std::function<void(bool ok)> onDone) {
                     break;
                 }
 
-                std::wstring dest = shStage + L"\\" + Logger::ToWide(fname);
+                std::wstring dest = shStage + L"\\" + relW;
+                size_t lastSlash = dest.rfind(L'\\');
+                if (lastSlash != std::wstring::npos) {
+                    EnsureDirs(dest.substr(0, lastSlash));
+                }
                 std::ofstream shOut(dest, std::ios::binary);
                 if (!shOut.is_open()) {
                     cleanupStage();
                     allOk = false;
-                    failErr = "Cannot write staging shader: " + fname;
+                    failErr = "Cannot write staging shader: " + sh.path;
                     break;
                 }
                 shOut.write(reinterpret_cast<const char*>(shBytes.data()), shBytes.size());
@@ -1070,11 +1092,14 @@ void DownloadPackAsync(std::function<void(bool ok)> onDone) {
         }
 
         for (const auto& sh : manifest.shaders) {
-            std::string fname = sh.path;
-            size_t slash = fname.rfind('/');
-            if (slash != std::string::npos) fname = fname.substr(slash + 1);
-            std::wstring src = shStage + L"\\" + Logger::ToWide(fname);
-            std::wstring dst = shDir + L"\\" + Logger::ToWide(fname);
+            std::wstring relW = shaderRelPath(sh.path);
+            if (relW.empty()) continue;
+            std::wstring src = shStage + L"\\" + relW;
+            std::wstring dst = shDir + L"\\" + relW;
+            size_t lastSlash = dst.rfind(L'\\');
+            if (lastSlash != std::wstring::npos) {
+                EnsureDirs(dst.substr(0, lastSlash));
+            }
             MoveFileExW(src.c_str(), dst.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
         }
 

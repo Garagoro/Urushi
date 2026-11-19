@@ -90,12 +90,12 @@ local function render_welcome_window()
 
         else
             -- Initial state: NO network requests made prior to user clicking the button
-            ui.text_dim(T("У вас установлена базовая mod.io сборка. Хотите установить официальный набор скриптов (HUD, телеметрия, оптимизатор FPS, реплеи, CarFX)?",
-                          "You are running the minimal mod.io package. Would you like to install the official script & shader pack (HUD, telemetry, FPS optimizer, replays, CarFX)?"))
+            ui.text_wrapped(T("У вас установлена базовая mod.io сборка. Хотите установить официальный набор скриптов (HUD, телеметрия, оптимизатор FPS, реплеи, CarFX)?",
+                              "You are running the minimal mod.io package. Would you like to install the official script & shader pack (HUD, telemetry, FPS optimizer, replays, CarFX)?"), "muted")
             ui.spacing(3)
 
-            local btn_text = T(string.format("⬇ Установить официальный пак (%d)##welc_dl", #missing),
-                               string.format("⬇ Install Official Pack (%d)##welc_dl", #missing))
+            local btn_text = T(string.format("Установить официальный пак (%d)##welc_dl", #missing),
+                               string.format("Install Official Pack (%d)##welc_dl", #missing))
             if ui.button(btn_text, w, 30, "primary") then
                 if cloud and cloud.download_pack then
                     cloud.download_pack()

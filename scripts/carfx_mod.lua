@@ -242,7 +242,6 @@ events.on_update(function(dt)
     if refresh_timer >= 2.0 then
         refresh_timer = 0
         refresh_shader_list()
-        refresh_tex_list()
     end
     if keybinds and keybinds.is_pressed and keybinds.is_pressed("carfx_menu") then
         if urushi and urushi.toggle_window then
