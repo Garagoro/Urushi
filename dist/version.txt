@@ -1,3 +1,3 @@
 version=1.3.0
-link_time=1795074956
+link_time=1795075799
 notes=Automated release build v1.3.0: Native NetworkSafeMode anti-collision, CarFX video/animated & music-reactive liveries, body extras/lights controls, and stability fixes
