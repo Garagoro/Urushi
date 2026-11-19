@@ -413,6 +413,17 @@ static void* SafeIdToObjectSEH(uintptr_t unityBase, int32_t id) {
     }
 }
 
+static int32_t SafeReadObjInstanceIdSEH(void* natObj) {
+    if (!natObj) return 0;
+    const uintptr_t addr = reinterpret_cast<uintptr_t>(natObj);
+    if (!IsReadableMem(addr, 0x10)) return 0;
+    __try {
+        return *reinterpret_cast<const int32_t*>(addr + 0x08);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
 // Which internals group a material belongs to (0 = not an internal: body, glass, shadow proxy).
 static uint32_t InternalsPartOfMaterial(const char* name) {
     char l[64] = {};
@@ -968,6 +979,7 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
     static void* s_prevStealthRootGo = nullptr;
     static void* s_playerIsoRootGo = nullptr;
     static void* s_playerIsoPackTex = nullptr;
+    static int32_t s_playerIsoPackObjId = 0;
     static void* s_playerIsoPackSrv = nullptr;
     static uint32_t s_playerIsoPackId = 0;
     static void* s_loggedDefRootGo = nullptr;
@@ -979,7 +991,7 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
     struct SavedInternalsTexRestore {
         int32_t matId = 0;
         int32_t propId = 0;
-        void* origTex = nullptr;
+        int32_t origTexId = 0;
     };
     static void* s_prevInternalsRootGo = nullptr;
     static uint32_t s_prevInternalsPartMask = 0;
@@ -995,14 +1007,18 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
     static std::unordered_map<void*, void*> s_internalsOrigToClonedTex;
     static std::unordered_map<void*, void*> s_bodyExtraOrigToClonedTex;
     static std::vector<void*> s_internalsClonedTexList;
+    static std::vector<int32_t> s_internalsClonedTexIds;
     static std::vector<void*> s_internalsClonedSrvList;
     static std::vector<void*> s_bodyExtraClonedSrvList;
 
     auto releasePlayerIsoPackTex = [&]() {
-        if (s_playerIsoPackTex) {
-            DestroyObjectDirect(s_playerIsoPackTex, 0.0f);
-            s_playerIsoPackTex = nullptr;
+        if (s_playerIsoPackObjId != 0) {
+            if (void* liveIso = SafeIdToObjectSEH(unityBase, s_playerIsoPackObjId)) {
+                DestroyObjectDirect(liveIso, 0.0f);
+            }
+            s_playerIsoPackObjId = 0;
         }
+        s_playerIsoPackTex = nullptr;
         s_playerIsoPackSrv = nullptr;
         s_playerIsoPackId = 0;
         s_playerIsoRootGo = nullptr;
@@ -1010,8 +1026,8 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
 
     auto restoreInternalsIsolation = [&]() {
         if (s_savedInternalsTexRestores.empty() && s_savedInternalsMatSwaps.empty() &&
-            s_internalsClonedTexList.empty() && s_internalsClonedSrvList.empty() &&
-            s_bodyExtraClonedSrvList.empty()) {
+            s_internalsClonedTexList.empty() && s_internalsClonedTexIds.empty() &&
+            s_internalsClonedSrvList.empty() && s_bodyExtraClonedSrvList.empty()) {
             s_internalsAssetToCloneMat.clear();
             s_internalsOrigToClonedTex.clear();
             s_bodyExtraOrigToClonedTex.clear();
@@ -1019,8 +1035,9 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
         }
         for (const auto& tr : s_savedInternalsTexRestores) {
             void* natM = SafeIdToObjectSEH(unityBase, tr.matId);
-            if (natM && tr.origTex) {
-                SafeSetMatTextureSEH(unityBase, natM, tr.propId, tr.origTex);
+            void* origT = SafeIdToObjectSEH(unityBase, tr.origTexId);
+            if (natM && origT) {
+                SafeSetMatTextureSEH(unityBase, natM, tr.propId, origT);
             }
         }
         s_savedInternalsTexRestores.clear();
@@ -1029,9 +1046,12 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
         }
         s_savedInternalsMatSwaps.clear();
         s_internalsAssetToCloneMat.clear();
-        for (void* ct : s_internalsClonedTexList) {
-            if (ct) DestroyObjectDirect(ct, 0.0f);
+        for (int32_t ctId : s_internalsClonedTexIds) {
+            if (void* liveCt = SafeIdToObjectSEH(unityBase, ctId)) {
+                DestroyObjectDirect(liveCt, 0.0f);
+            }
         }
+        s_internalsClonedTexIds.clear();
         s_internalsClonedTexList.clear();
         s_internalsOrigToClonedTex.clear();
         s_bodyExtraOrigToClonedTex.clear();
@@ -1264,11 +1284,17 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
                     }
                     origMap.emplace(origTex, clonedTex);
                     s_internalsClonedTexList.push_back(clonedTex);
+                    if (int32_t cid = SafeReadObjInstanceIdSEH(clonedTex); cid != 0) {
+                        s_internalsClonedTexIds.push_back(cid);
+                    }
                     srvList.push_back(extSrv);
                 }
 
+                const int32_t origTexId = SafeReadObjInstanceIdSEH(origTex);
                 if (!SafeSetMatTextureSEH(unityBase, natMat, propId, clonedTex)) return false;
-                s_savedInternalsTexRestores.push_back({ matId, propId, origTex });
+                if (origTexId != 0) {
+                    s_savedInternalsTexRestores.push_back({ matId, propId, origTexId });
+                }
                 return true;
             };
 
@@ -1595,6 +1621,7 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
                     void* isoTex = CreateIsolatedPackedTexture(matPack, packIsDef, s_natWhite, s_natBlack, &isoSrv, &copyOk);
                     if (isoTex && isoSrv) {
                         s_playerIsoPackTex = isoTex;
+                        s_playerIsoPackObjId = SafeReadObjInstanceIdSEH(isoTex);
                         s_playerIsoPackSrv = isoSrv;
                         s_playerIsoPackId = SafeReadNativeTexIdSEH(isoTex);
                         s_playerIsoRootGo = rootGo;
