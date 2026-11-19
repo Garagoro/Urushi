@@ -41,6 +41,7 @@ local ghost_settings = {
     max_ttc_sec = 1.2,
     safe_mode_duration_sec = 1.5,
     ghost_stopped_cars = false,
+    stopped_speed_kmh = 10.0,
 }
 if config and config.bind then
     ghost_settings = config.bind("anticollision", ghost_settings)
@@ -718,6 +719,13 @@ local function render_anticollision_window()
             ui.spacing(2)
         end
 
+        local stop_ch, stop_val = ui.toggle(T("Защита от стоячих (< 10 км/ч)##sg_afk", "Stopped / Slow Protection (< 10 km/h)##sg_afk"), state.ghost_cfg.ghost_stopped_cars == true)
+        if stop_ch then
+            state.ghost_cfg.ghost_stopped_cars = stop_val
+            state.ghost_cfg.stopped_speed_kmh = 10.0
+            sync_selective_ghost_cfg()
+        end
+
         local hud_ch, hud_val = ui.toggle(T("Радар на экране##sg_hud", "On-Screen Radar##sg_hud"), state.ghost_cfg.show_hud_alert)
         if hud_ch then
             state.ghost_cfg.show_hud_alert = hud_val
@@ -726,7 +734,7 @@ local function render_anticollision_window()
 
         local sd_ch, sd_val = ui.slider_float(
             T("Длительность SafeMode##sg_smdur", "SafeMode Duration##sg_smdur"),
-            state.ghost_cfg.safe_mode_duration_sec or 2.0, 0.8, 5.0, T("%.1f сек", "%.1f sec"))
+            state.ghost_cfg.safe_mode_duration_sec or 1.5, 0.8, 5.0, T("%.1f сек", "%.1f sec"))
         if sd_ch then
             state.ghost_cfg.safe_mode_duration_sec = sd_val
             sync_selective_ghost_cfg()
@@ -734,7 +742,7 @@ local function render_anticollision_window()
 
         ui.spacing(3)
         if carx and carx.test_safemode then
-            local dur_ms = math.floor((state.ghost_cfg.safe_mode_duration_sec or 2.0) * 1000)
+            local dur_ms = math.floor((state.ghost_cfg.safe_mode_duration_sec or 1.5) * 1000)
             local lbl = sm.in_lobby
                 and string.format(T("Тест SafeMode (%.1f сек)##sg_test_sm", "Test SafeMode (%.1f sec)##sg_test_sm"), dur_ms / 1000.0)
                 or  T("Тест SafeMode (зайдите в онлайн-лобби)##sg_test_sm", "Test SafeMode (join online lobby)##sg_test_sm")
@@ -745,7 +753,7 @@ local function render_anticollision_window()
 
         ui.spacing(2)
         if ui.collapsing(T("Параметры детектора##sg_det", "Detector Settings##sg_det"), false) then
-            local s0, v0 = ui.slider_float(T("Время до удара (TTC)##sg_ttc", "Time-To-Collision (TTC)##sg_ttc"), state.ghost_cfg.max_ttc_sec or 2.5, 0.0, 6.0, T("%.1f сек (0=выкл)", "%.1f sec (0=off)"))
+            local s0, v0 = ui.slider_float(T("Время до удара (TTC)##sg_ttc", "Time-To-Collision (TTC)##sg_ttc"), state.ghost_cfg.max_ttc_sec or 1.2, 0.0, 6.0, T("%.1f сек (0=выкл)", "%.1f sec (0=off)"))
             if s0 then state.ghost_cfg.max_ttc_sec = v0; sync_selective_ghost_cfg() end
 
             local s1, v1 = ui.slider_float(T("Мин. скорость##sg_v", "Min Speed##sg_v"), state.ghost_cfg.min_speed_kmh, 0.0, 60.0, T("%.0f км/ч", "%.0f km/h"))
@@ -756,9 +764,6 @@ local function render_anticollision_window()
 
             local s3, v3 = ui.slider_float(T("Дистанция (0 = вся карта)##sg_dist", "Max Range (0 = unlimited)##sg_dist"), state.ghost_cfg.max_distance, 0.0, 300.0, T("%.0f м", "%.0f m"))
             if s3 then state.ghost_cfg.max_distance = v3; sync_selective_ghost_cfg() end
-
-            local s4, v4 = ui.toggle(T("Срабатывать на стоячих/AFK##sg_afk", "Trigger on Stopped/AFK Cars##sg_afk"), state.ghost_cfg.ghost_stopped_cars == true)
-            if s4 then state.ghost_cfg.ghost_stopped_cars = v4; sync_selective_ghost_cfg() end
         end
     end)
 

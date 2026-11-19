@@ -18,8 +18,8 @@ struct SelectiveGhostConfig {
     float dotThreshold = -0.35f;
     float maxDistanceMeters = 40.0f;
     float maxTtcSec = 1.2f;           // Max Time-To-Collision in seconds (0 = disable TTC check)
-    bool ghostStoppedCars = false;    // Auto-ghost obstacle/AFK cars stopped on track
-    float stoppedSpeedKmh = 3.0f;     // Threshold to consider an obstacle car stopped
+    bool ghostStoppedCars = false;    // Auto-SafeMode for stopped/slow cars (<10 km/h, >=30 km/h delta)
+    float stoppedSpeedKmh = 10.0f;    // Threshold to consider a car stopped/slow
     float safeModeDurationSec = 1.5f; // Native Network SafeMode duration in seconds
     bool showHudAlert = true;
 };

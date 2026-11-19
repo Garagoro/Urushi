@@ -514,19 +514,25 @@ void EcsCollision::UpdateOnMainThread(float dt, const std::vector<LiveCarInfo>& 
                         }
                     }
 
-                    // Criterion B: Opponent charging directly into a stopped / slow Player
-                    if (!rawWrongWay && pSpeedKmh < 5.0f && oSpeedKmh >= s_config.minSpeedKmh && hasODir) {
-                        const float chargeDot = -(oDirX * uRx + oDirZ * uRz);
-                        if (chargeDot > 0.65f && (onCollisionCourse || (dist < 7.5f && vClose > 1.0f))) {
-                            rawWrongWay = true;
-                        }
-                    }
+                    // Criterion B & C (optional toggle): Stopped / slow car protection (< stoppedSpeedKmh, speed delta >= 30 km/h)
+                    if (!rawWrongWay && s_config.ghostStoppedCars) {
+                        const float slowThresh = (s_config.stoppedSpeedKmh > 0.0f) ? s_config.stoppedSpeedKmh : 10.0f;
+                        const bool hitNow = onCollisionCourse || (dist < 7.5f && vClose > 1.0f);
 
-                    // Criterion C: Stopped obstacle / AFK car directly in player's path
-                    if (!rawWrongWay && s_config.ghostStoppedCars && oSpeedKmh < s_config.stoppedSpeedKmh && pSpeedKmh >= 30.0f) {
-                        const float approachDot = (pDirX * uRx + pDirZ * uRz);
-                        if (approachDot > 0.75f && (onCollisionCourse || (dist < 7.5f && vClose > 1.0f))) {
-                            rawWrongWay = true;
+                        // B: Player is stopped/slow (< 10 km/h) and any car approaches with >= 30 km/h speed difference
+                        if (pSpeedKmh < slowThresh && (oSpeedKmh - pSpeedKmh) >= 30.0f && hasODir) {
+                            const float chargeDot = -(oDirX * uRx + oDirZ * uRz);
+                            if (chargeDot > 0.65f && hitNow) {
+                                rawWrongWay = true;
+                            }
+                        }
+
+                        // C: Opponent is stopped/slow (< 10 km/h) and player approaches with >= 30 km/h speed difference
+                        if (!rawWrongWay && oSpeedKmh < slowThresh && (pSpeedKmh - oSpeedKmh) >= 30.0f && hasPDir) {
+                            const float approachDot = (pDirX * uRx + pDirZ * uRz);
+                            if (approachDot > 0.65f && hitNow) {
+                                rawWrongWay = true;
+                            }
                         }
                     }
                 }
