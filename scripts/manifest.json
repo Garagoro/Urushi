@@ -142,8 +142,8 @@
     {
       "id": "tires_mod",
       "path": "scripts/tires_mod.lua",
-      "sha256": "21f0db97b8db62455b9f427cb22aca81b45df1c1d2de8e0e56ae128b653c0a34",
-      "size": 15977,
+      "sha256": "862ca0cf25734b896fdb2cfe29eb80cf239d0e9b0b74a60236131974903b51a1",
+      "size": 15979,
       "name": "Body & Tires",
       "name_ru": "Кузов и шины",
       "description": "Dense tire smoke, infinite tire wear, pressure and visual damage",

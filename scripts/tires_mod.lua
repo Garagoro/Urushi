@@ -5,8 +5,8 @@ local T = i18n.t
 local active_tab = "body_wear" -- "body_wear", "thermal", "telemetry"
 
 local tire_settings = {
-    no_damage = true,
-    infinite_wear = true,
+    no_damage = false,
+    infinite_wear = false,
     desired_life = 1.0,
     wear_multiplier = 1.0,
     override_pressure = false,
