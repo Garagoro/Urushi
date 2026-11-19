@@ -954,62 +954,8 @@ std::string UrushiUI::ScriptRow(const ScriptRowItem& item) {
         dl->AddText(ImVec2(startX + iconW + gap, centerY - tSz.y * 0.5f), loadFg, lTxt);
     }
 
-    // --- Secondary Icon Buttons ---
-    const float iconBtnW = 24.0f * S;
-    const float gap = 4.0f * S;
-
-    // 1. Delete / Trash Button (shown if downloaded)
-    bool delHovered = false;
-    if (item.downloaded) {
-        rx -= (iconBtnW + gap);
-        ImVec2 dMin(rx, btnY);
-        ImVec2 dMax(rx + iconBtnW, btnY + btnH);
-        ImGui::SetCursorScreenPos(dMin);
-        if (ImGui::InvisibleButton(("##del_" + item.id).c_str(), ImVec2(iconBtnW, btnH))) {
-            action = "delete";
-        }
-        delHovered = ImGui::IsItemHovered();
-        if (delHovered) {
-            dl->AddRectFilled(dMin, dMax, IM_COL32(220, 50, 50, 40), 4.0f * S);
-            dl->AddRect(dMin, dMax, IM_COL32(220, 50, 50, 120), 4.0f * S);
-            ImGui::SetTooltip("%s", (g_language == Language::Russian) ? "Удалить с диска" : "Delete from disk");
-        }
-        ImU32 delCol = delHovered ? IM_COL32(240, 80, 80, 255) : kColTextMuted;
-        ImVec2 center(dMin.x + iconBtnW * 0.5f, dMin.y + btnH * 0.5f);
-        const float th = (std::max)(1.2f, 1.4f * S);
-        dl->AddLine(ImVec2(center.x - 4.5f * S, center.y - 3.5f * S), ImVec2(center.x + 4.5f * S, center.y - 3.5f * S), delCol, th);
-        dl->AddLine(ImVec2(center.x - 2.0f * S, center.y - 5.0f * S), ImVec2(center.x + 2.0f * S, center.y - 5.0f * S), delCol, th);
-        dl->AddRect(ImVec2(center.x - 3.5f * S, center.y - 3.0f * S), ImVec2(center.x + 3.5f * S, center.y + 5.0f * S), delCol, 1.0f * S, 0, th);
-        dl->AddLine(ImVec2(center.x - 1.2f * S, center.y - 0.5f * S), ImVec2(center.x - 1.2f * S, center.y + 3.0f * S), delCol, th * 0.9f);
-        dl->AddLine(ImVec2(center.x + 1.2f * S, center.y - 0.5f * S), ImVec2(center.x + 1.2f * S, center.y + 3.0f * S), delCol, th * 0.9f);
-    }
-
-    // 2. Refresh / Update Button (shown if update available, or if running)
-    bool updHovered = false;
-    if (item.hasUpdate || item.running) {
-        rx -= (iconBtnW + gap);
-        ImVec2 uMin(rx, btnY);
-        ImVec2 uMax(rx + iconBtnW, btnY + btnH);
-        ImGui::SetCursorScreenPos(uMin);
-        if (ImGui::InvisibleButton(("##upd_" + item.id).c_str(), ImVec2(iconBtnW, btnH))) {
-            action = "update";
-        }
-        updHovered = ImGui::IsItemHovered();
-        if (updHovered) {
-            dl->AddRectFilled(uMin, uMax, IM_COL32(255, 255, 255, 20), 4.0f * S);
-            dl->AddRect(uMin, uMax, IM_COL32(255, 255, 255, 60), 4.0f * S);
-            ImGui::SetTooltip("%s", (item.hasUpdate)
-                ? ((g_language == Language::Russian) ? "Доступно обновление (нажмите для скачивания)" : "Update available (click to download)")
-                : ((g_language == Language::Russian) ? "Проверить обновление на GitHub" : "Check GitHub for update"));
-        }
-        ImU32 updCol = item.hasUpdate ? IM_COL32(245, 180, 50, 255) : (updHovered ? kColTextPrimary : kColTextMuted);
-        const float iconSz = 13.0f * S;
-        ImVec2 ipos(uMin.x + (iconBtnW - iconSz) * 0.5f, uMin.y + (btnH - iconSz) * 0.5f);
-        DrawAlphaMask(dl, ipos, iconSz, kLucideRefreshAlpha16, 16, 16, updCol);
-    }
-
     // Left side text (Title & Subtext)
-    float textMaxX = rx - 8.0f * S;
+    float textMaxX = rx - 10.0f * S;
     float startTextX = pos.x + (item.running ? (15.0f * S) : (12.0f * S));
 
     dl->PushClipRect(ImVec2(startTextX, pos.y), ImVec2(textMaxX, pos.y + h), true);
@@ -1058,8 +1004,8 @@ std::string UrushiUI::ScriptRow(const ScriptRowItem& item) {
     if (AppFonts::Small) ImGui::PopFont();
     dl->PopClipRect();
 
-    // 4. Description Tooltip on row hover (only if NOT hovering buttons)
-    if (rowHovered && !mbHovered && !delHovered && !updHovered) {
+    // Description Tooltip on row hover (only if NOT hovering the action button)
+    if (rowHovered && !mbHovered) {
         if (!item.desc.empty()) {
             ImGui::BeginTooltip();
             ImGui::Text("%s", item.title.c_str());
