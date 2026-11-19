@@ -34,7 +34,8 @@ local state = {
 local ghost_settings = {
     enabled = true,
     anti_wrong_way = true,
-    show_hud_alert = true,
+    show_hud_alert = false,
+    show_game_indicator = false,
     min_speed_kmh = 15.0,
     dot_threshold = -0.35,
     max_distance = 40.0,
@@ -726,9 +727,15 @@ local function render_anticollision_window()
             sync_selective_ghost_cfg()
         end
 
-        local hud_ch, hud_val = ui.toggle(T("Радар на экране##sg_hud", "On-Screen Radar##sg_hud"), state.ghost_cfg.show_hud_alert)
+        local hud_ch, hud_val = ui.toggle(T("Индикатор встречки на экране##sg_hud", "On-Screen Wrong-Way Indicator##sg_hud"), state.ghost_cfg.show_hud_alert == true)
         if hud_ch then
             state.ghost_cfg.show_hud_alert = hud_val
+            sync_selective_ghost_cfg()
+        end
+
+        local gi_ch, gi_val = ui.toggle(T("Игровой значок SafeMode##sg_gind", "Game SafeMode HUD Icon##sg_gind"), state.ghost_cfg.show_game_indicator == true)
+        if gi_ch then
+            state.ghost_cfg.show_game_indicator = gi_val
             sync_selective_ghost_cfg()
         end
 

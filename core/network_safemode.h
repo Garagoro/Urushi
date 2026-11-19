@@ -24,6 +24,10 @@ void Trigger(int durationMs, bool forceImmediate = false);
 // Optional explicit deactivation (cancels our SafeMode source early).
 void Deactivate();
 
+// Controls whether CarX DR2's native on-screen SafeMode HUD indicator is shown.
+void SetShowGameIndicator(bool show);
+bool GetShowGameIndicator();
+
 // Must be called on the Unity Main Thread (e.g. from EcsCollision::Update).
 void TickOnMainThread();
 

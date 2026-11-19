@@ -21,7 +21,8 @@ struct SelectiveGhostConfig {
     bool ghostStoppedCars = false;    // Auto-SafeMode for stopped/slow cars (<10 km/h, >=30 km/h delta)
     float stoppedSpeedKmh = 10.0f;    // Threshold to consider a car stopped/slow
     float safeModeDurationSec = 1.5f; // Native Network SafeMode duration in seconds
-    bool showHudAlert = true;
+    bool showHudAlert = false;
+    bool showGameIndicator = false;
 };
 
 struct CarGhostState {

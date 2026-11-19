@@ -365,6 +365,8 @@ static void PushSelectiveGhostConfig(lua_State* L, const SelectiveGhostConfig& c
     lua_setfield(L, -2, "safe_mode_duration_sec");
     lua_pushboolean(L, cfg.showHudAlert);
     lua_setfield(L, -2, "show_hud_alert");
+    lua_pushboolean(L, cfg.showGameIndicator);
+    lua_setfield(L, -2, "show_game_indicator");
 }
 
 int LuaCarX::SetSelectiveGhostConfig(lua_State* L) {
@@ -408,6 +410,10 @@ int LuaCarX::SetSelectiveGhostConfig(lua_State* L) {
 
         lua_getfield(L, 1, "show_hud_alert");
         if (!lua_isnil(L, -1)) cfg.showHudAlert = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+
+        lua_getfield(L, 1, "show_game_indicator");
+        if (!lua_isnil(L, -1)) cfg.showGameIndicator = lua_toboolean(L, -1) != 0;
         lua_pop(L, 1);
     } else if (lua_isboolean(L, 1)) {
         cfg.enabled = lua_toboolean(L, 1) != 0;

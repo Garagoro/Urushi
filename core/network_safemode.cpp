@@ -14,14 +14,17 @@ namespace NetworkSafeMode {
 namespace {
 
 using t_VoidThis      = void(__fastcall*)(void* thisPtr, const void* methodInfo);
+using t_SetBoolThis   = void(__fastcall*)(void* thisPtr, bool value, const void* methodInfo);
 using t_ActivateMs    = void(__fastcall*)(void* thisModel, int32_t durationMs, void* ownerObj, const void* methodInfo);
 using t_Deactivate    = void(__fastcall*)(void* thisModel, void* ownerObj, const void* methodInfo);
 using t_GetSafeMode   = bool(__fastcall*)(void* thisModel, const void* methodInfo);
 
-t_VoidThis   s_origOnActivate   = nullptr;
-t_VoidThis   s_origOnDeactivate = nullptr;
-void*        s_hookOnActivate   = nullptr;
-void*        s_hookOnDeactivate = nullptr;
+t_VoidThis    s_origOnActivate   = nullptr;
+t_VoidThis    s_origOnDeactivate = nullptr;
+t_SetBoolThis s_origSetIndActive = nullptr;
+void*         s_hookOnActivate   = nullptr;
+void*         s_hookOnDeactivate = nullptr;
+void*         s_hookSetIndActive = nullptr;
 
 t_ActivateMs  s_fnActivateMs  = nullptr;
 t_Deactivate  s_fnDeactivate  = nullptr;
@@ -35,6 +38,7 @@ std::atomic<bool>     s_initialized{ false };
 std::atomic<bool>     s_hooksOk{ false };
 std::atomic<bool>     s_inLobby{ false };
 std::atomic<bool>     s_safeModeActive{ false };
+std::atomic<bool>     s_showGameIndicator{ false };
 std::atomic<uint32_t> s_triggersTotal{ 0 };
 
 std::atomic<int>      s_pendingDurationMs{ 0 };
@@ -144,6 +148,15 @@ static void __fastcall Hook_OnDeactivate(void* thisPtr, const void* methodInfo) 
     }
 }
 
+static void __fastcall Hook_SetActiveSafeMode(void* thisPtr, bool active, const void* methodInfo) {
+    if (active && !s_showGameIndicator.load(std::memory_order_acquire)) {
+        active = false;
+    }
+    if (s_origSetIndActive) {
+        s_origSetIndActive(thisPtr, active, methodInfo);
+    }
+}
+
 static bool SafeCallGetSafeModeSEH(void* model) {
     if (!model || !s_fnGetSafeMode) return false;
     __try {
@@ -218,13 +231,30 @@ bool Init() {
     }
     s_hookOnDeactivate = fnOnDeact;
 
+    const uintptr_t indKlass = Il2CppHelpers::LookupTypeClass("UINetworkSafeModeIndicatorContext", "UI.Contexts.Race");
+    if (indKlass) {
+        if (void* fnSetInd = Il2CppHelpers::LookupClassMethod(indKlass, "SetActiveSafeMode")) {
+            if (MH_CreateHook(fnSetInd, reinterpret_cast<void*>(&Hook_SetActiveSafeMode),
+                              reinterpret_cast<void**>(&s_origSetIndActive)) == MH_OK &&
+                MH_EnableHook(fnSetInd) == MH_OK) {
+                s_hookSetIndActive = fnSetInd;
+            }
+        }
+    }
+
     s_hooksOk.store(true, std::memory_order_release);
-    Logger::Info("NetworkSafeMode initialized (hooks=OK, ActivateSafeMode(ms) resolved).");
+    Logger::Info(std::string("NetworkSafeMode initialized (hooks=OK, indicatorHook=") +
+                 (s_hookSetIndActive ? "OK" : "OFF") + ").");
     return true;
 }
 
 void Shutdown() {
     if (!s_initialized.exchange(false)) return;
+    if (s_hookSetIndActive) {
+        MH_DisableHook(s_hookSetIndActive);
+        MH_RemoveHook(s_hookSetIndActive);
+        s_hookSetIndActive = nullptr;
+    }
     if (s_hookOnActivate) {
         MH_DisableHook(s_hookOnActivate);
         MH_RemoveHook(s_hookOnActivate);
@@ -255,6 +285,14 @@ void Trigger(int durationMs, bool forceImmediate) {
 void Deactivate() {
     if (!s_inLobby.load(std::memory_order_acquire)) return;
     s_pendingDeactivate.store(true, std::memory_order_release);
+}
+
+void SetShowGameIndicator(bool show) {
+    s_showGameIndicator.store(show, std::memory_order_release);
+}
+
+bool GetShowGameIndicator() {
+    return s_showGameIndicator.load(std::memory_order_acquire);
 }
 
 void TickOnMainThread() {

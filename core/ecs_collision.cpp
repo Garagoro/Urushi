@@ -276,6 +276,7 @@ void EcsCollision::SetConfig(const SelectiveGhostConfig& cfg) {
     s_config.minSpeedKmh = std::clamp(s_config.minSpeedKmh, 0.0f, 120.0f);
     s_config.dotThreshold = std::clamp(s_config.dotThreshold, -0.95f, 0.25f);
     s_config.maxDistanceMeters = std::clamp(s_config.maxDistanceMeters, 0.0f, 1000.0f);
+    NetworkSafeMode::SetShowGameIndicator(s_config.showGameIndicator);
 }
 
 SelectiveGhostConfig EcsCollision::GetConfig() {

@@ -3,6 +3,7 @@
 #include "carfx_anim.h"
 #include "logger.h"
 #include "native_carx.h"
+#include "network_safemode.h"
 #include "audio_capture.h"
 
 #include <algorithm>
@@ -225,12 +226,25 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
     static uint32_t s_rtBodyTrackFrame = ~0u;
     static uint32_t s_rtBodyPrimaryCur = 0;
     static uint32_t s_rtBodyPrimaryLast = 0;
+    static bool s_rtPrevSafeMode = false;
+    static uint32_t s_rtSafeModeFlipFrame = ~0u;
 
     const uint32_t curFrameId = g_frameCounter.load(std::memory_order_relaxed);
     if (curFrameId != s_rtBodyTrackFrame) {
         s_rtBodyPrimaryLast = s_rtBodyPrimaryCur;
         s_rtBodyPrimaryCur = 0;
         s_rtBodyTrackFrame = curFrameId;
+    }
+
+    const bool curSafeMode = NetworkSafeMode::GetStatus().safeModeActive;
+    if (curSafeMode != s_rtPrevSafeMode) {
+        s_rtPrevSafeMode = curSafeMode;
+        s_rtSafeModeFlipFrame = curFrameId;
+        // SafeMode switches the car material/shader pass (opaque <-> transparent ghost) which can move SRV slots.
+        // Immediately invalidate fast slots on this exact frame to prevent 1-2 frame flicker.
+        s_rtKnownAlbSlot = -1;
+        s_rtKnownPackSlot = -1;
+        s_rtRediscoveryFrame = ~0u;
     }
 
     const uint64_t curGen = g_gameTexGen.load(std::memory_order_acquire);
@@ -512,8 +526,8 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
     } else if (haveFastSlots) {
         const uint32_t frameId = curFrameId;
         const bool primaryBodyStarved = bodyActiveNow && (s_rtBodyPrimaryLast == 0);
-        if ((primaryBodyStarved || g_matchedDrawsLastFrame.load(std::memory_order_relaxed) == 0) &&
-            (frameId - s_rtRediscoveryFrame) >= 30) {
+        if ((primaryBodyStarved && (frameId - s_rtRediscoveryFrame) >= 2) ||
+            (g_matchedDrawsLastFrame.load(std::memory_order_relaxed) == 0 && (frameId - s_rtRediscoveryFrame) >= 30)) {
             s_rtRediscoveryFrame = frameId;
             s_rtKnownAlbSlot = -1;
             s_rtKnownPackSlot = -1;
