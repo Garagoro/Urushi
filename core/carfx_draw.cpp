@@ -218,11 +218,13 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
     *outAlbedoSrv = nullptr;
 
     // Render-thread cache keyed by g_gameTexGen: avoids SRWLock + 20-slot GetResource on every draw call!
-    // Separate fast-slot pairs for [0] normal opaque pass and [1] SafeMode transparent pass so toggling SafeMode has 0-frame flicker.
+    // Keeps up to 2 slot pairs (e.g. normal opaque pass + SafeMode transparent pass) and checks all known slots
+    // directly on the Render Thread without relying on Main-Thread state flags (which are 1 frame ahead of DX11).
     static uint64_t s_rtCachedGen = 0;
     static GameSrvSnapshot s_rtSnap[kTargetCount]{};
     static int s_rtKnownAlbSlot[2] = { -1, -1 };
     static int s_rtKnownPackSlot[2] = { -1, -1 };
+    static bool s_rtForceFullScan = false;
     static uint32_t s_rtRediscoveryFrame = ~0u;
     static uint32_t s_rtBodyTrackFrame = ~0u;
     static uint32_t s_rtBodyPrimaryCur = 0;
@@ -233,11 +235,10 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
         s_rtBodyPrimaryLast = s_rtBodyPrimaryCur;
         s_rtBodyPrimaryCur = 0;
         s_rtBodyTrackFrame = curFrameId;
+        if (s_rtForceFullScan) {
+            s_rtForceFullScan = false;
+        }
     }
-
-    const int smIdx = NetworkSafeMode::GetStatus().safeModeActive ? 1 : 0;
-    int& curAlbSlot = s_rtKnownAlbSlot[smIdx];
-    int& curPackSlot = s_rtKnownPackSlot[smIdx];
 
     const uint64_t curGen = g_gameTexGen.load(std::memory_order_acquire);
     if (curGen != s_rtCachedGen) {
@@ -247,6 +248,7 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
         ReleaseSRWLockShared(&g_gameTexLock);
         s_rtKnownAlbSlot[0] = s_rtKnownAlbSlot[1] = -1;
         s_rtKnownPackSlot[0] = s_rtKnownPackSlot[1] = -1;
+        s_rtForceFullScan = false;
         s_rtRediscoveryFrame = ~0u;
     }
 
@@ -318,102 +320,109 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
         return (*cachedRes == targetRes);
     };
 
-    const bool haveFastSlots =
-        (!needAlbSlot || curAlbSlot >= kScanStartSlot) &&
-        (!needPackSlot || curPackSlot >= kScanStartSlot);
+    auto pairReady = [&](int pi) -> bool {
+        return (!needAlbSlot || s_rtKnownAlbSlot[pi] >= kScanStartSlot) &&
+               (!needPackSlot || s_rtKnownPackSlot[pi] >= kScanStartSlot);
+    };
+    const bool haveFastSlots = !s_rtForceFullScan && (pairReady(0) || pairReady(1));
     const bool bodyActiveNow = playerCanMatch && IsTargetActiveInternal(kTargetBody);
 
     // Check active ghost targets and active player body target BEFORE internals so body/ghost draws are never hijacked
     if (haveFastSlots && (anyGhostTex || bodyActiveNow)) {
-        ID3D11ShaderResourceView* vAlb = nullptr;
-        ID3D11ShaderResourceView* vPack = nullptr;
-        ID3D11Resource* resAlb = nullptr;
-        ID3D11Resource* resPack = nullptr;
-        if (needAlbSlot && curAlbSlot >= kScanStartSlot) {
-            c->PSGetShaderResources(static_cast<UINT>(curAlbSlot), 1, &vAlb);
-        }
-        if (needPackSlot && curPackSlot >= kScanStartSlot) {
-            c->PSGetShaderResources(static_cast<UINT>(curPackSlot), 1, &vPack);
-        }
-
-        if (anyGhostTex) {
-            for (int t = kTargetGhostBase; t < kTargetCount; ++t) {
-                const GameSrvSnapshot& gs = s_rtSnap[t];
-                if (!targetHasMatchableSrv(gs)) continue;
-                bool match = false;
-                if (!gs.packedIsDefault && (gs.packedSrv || gs.packedRes)) {
-                    match = srvMatches(vPack, &resPack, gs.packedSrv, gs.packedRes);
-                } else if (!gs.albedoIsDefault && (gs.albedoSrv || gs.albedoRes)) {
-                    match = srvMatches(vAlb, &resAlb, gs.albedoSrv, gs.albedoRes);
-                }
-                if (match) {
-                    matchedTarget = t;
-                    if (!gs.packedIsDefault && curPackSlot >= kScanStartSlot &&
-                        srvMatches(vPack, &resPack, gs.packedSrv, gs.packedRes)) {
-                        mask |= (1u << curPackSlot);
-                    }
-                    if (!gs.albedoIsDefault && curAlbSlot >= kScanStartSlot &&
-                        srvMatches(vAlb, &resAlb, gs.albedoSrv, gs.albedoRes)) {
-                        mask |= (1u << curAlbSlot);
-                        matchedAlbedoSrv = vAlb;
-                        matchedAlbedoSrv->AddRef();
-                    }
-                    break;
-                }
+        for (int pi = 0; pi < 2 && matchedTarget == kTargetNone; ++pi) {
+            if (!pairReady(pi)) continue;
+            const int curAlbSlot = s_rtKnownAlbSlot[pi];
+            const int curPackSlot = s_rtKnownPackSlot[pi];
+            ID3D11ShaderResourceView* vAlb = nullptr;
+            ID3D11ShaderResourceView* vPack = nullptr;
+            ID3D11Resource* resAlb = nullptr;
+            ID3D11Resource* resPack = nullptr;
+            if (needAlbSlot && curAlbSlot >= kScanStartSlot) {
+                c->PSGetShaderResources(static_cast<UINT>(curAlbSlot), 1, &vAlb);
             }
-        }
-
-        if (matchedTarget == kTargetNone && bodyActiveNow) {
-            bool match = false;
-            bool albMatch = !body.albedoIsDefault && (body.albedoSrv || body.albedoRes) &&
-                            srvMatches(vAlb, &resAlb, body.albedoSrv, body.albedoRes);
-            bool packMatch = !body.packedIsDefault && (body.packedSrv || body.packedRes) &&
-                             srvMatches(vPack, &resPack, body.packedSrv, body.packedRes);
-            if (!body.albedoIsDefault && (body.albedoSrv || body.albedoRes)) {
-                match = albMatch && (!bodyNeedBoth || packMatch);
-            } else if (!body.packedIsDefault && (body.packedSrv || body.packedRes)) {
-                match = packMatch;
+            if (needPackSlot && curPackSlot >= kScanStartSlot) {
+                c->PSGetShaderResources(static_cast<UINT>(curPackSlot), 1, &vPack);
             }
-            if (!match && !body.extraPairs.empty()) {
-                for (const auto& ep : body.extraPairs) {
-                    const bool epAlb = !ep.albedoIsDefault && (ep.albedoSrv || ep.albedoRes) &&
-                                       srvMatches(vAlb, &resAlb, ep.albedoSrv, ep.albedoRes);
-                    const bool epPack = !ep.packedIsDefault && (ep.packedSrv || ep.packedRes) &&
-                                        srvMatches(vPack, &resPack, ep.packedSrv, ep.packedRes);
-                    const bool epNeedBoth = !ep.albedoIsDefault && !ep.packedIsDefault &&
-                                            (ep.packedSrv || ep.packedRes) && (ep.albedoRes != ep.packedRes);
-                    bool epOk = false;
-                    if (!ep.albedoIsDefault && (ep.albedoSrv || ep.albedoRes)) {
-                        epOk = epAlb && (!epNeedBoth || epPack);
-                    } else if (!ep.packedIsDefault && (ep.packedSrv || ep.packedRes)) {
-                        epOk = epPack;
+
+            if (anyGhostTex) {
+                for (int t = kTargetGhostBase; t < kTargetCount; ++t) {
+                    const GameSrvSnapshot& gs = s_rtSnap[t];
+                    if (!targetHasMatchableSrv(gs)) continue;
+                    bool match = false;
+                    if (!gs.packedIsDefault && (gs.packedSrv || gs.packedRes)) {
+                        match = srvMatches(vPack, &resPack, gs.packedSrv, gs.packedRes);
+                    } else if (!gs.albedoIsDefault && (gs.albedoSrv || gs.albedoRes)) {
+                        match = srvMatches(vAlb, &resAlb, gs.albedoSrv, gs.albedoRes);
                     }
-                    if (epOk) {
-                        match = true;
-                        albMatch = epAlb;
-                        packMatch = epPack;
+                    if (match) {
+                        matchedTarget = t;
+                        if (!gs.packedIsDefault && curPackSlot >= kScanStartSlot &&
+                            srvMatches(vPack, &resPack, gs.packedSrv, gs.packedRes)) {
+                            mask |= (1u << curPackSlot);
+                        }
+                        if (!gs.albedoIsDefault && curAlbSlot >= kScanStartSlot &&
+                            srvMatches(vAlb, &resAlb, gs.albedoSrv, gs.albedoRes)) {
+                            mask |= (1u << curAlbSlot);
+                            matchedAlbedoSrv = vAlb;
+                            matchedAlbedoSrv->AddRef();
+                        }
                         break;
                     }
                 }
             }
-            if (match) {
-                matchedTarget = kTargetBody;
-                ++s_rtBodyPrimaryCur;
-                if (albMatch && vAlb) {
-                    mask |= (1u << curAlbSlot);
-                    matchedAlbedoSrv = vAlb;
-                    matchedAlbedoSrv->AddRef();
+
+            if (matchedTarget == kTargetNone && bodyActiveNow) {
+                bool match = false;
+                bool albMatch = !body.albedoIsDefault && (body.albedoSrv || body.albedoRes) &&
+                                srvMatches(vAlb, &resAlb, body.albedoSrv, body.albedoRes);
+                bool packMatch = !body.packedIsDefault && (body.packedSrv || body.packedRes) &&
+                                 srvMatches(vPack, &resPack, body.packedSrv, body.packedRes);
+                if (!body.albedoIsDefault && (body.albedoSrv || body.albedoRes)) {
+                    match = albMatch && (!bodyNeedBoth || packMatch);
+                } else if (!body.packedIsDefault && (body.packedSrv || body.packedRes)) {
+                    match = packMatch;
                 }
-                if (packMatch && curPackSlot >= kScanStartSlot) {
-                    mask |= (1u << curPackSlot);
+                if (!match && !body.extraPairs.empty()) {
+                    for (const auto& ep : body.extraPairs) {
+                        const bool epAlb = !ep.albedoIsDefault && (ep.albedoSrv || ep.albedoRes) &&
+                                           srvMatches(vAlb, &resAlb, ep.albedoSrv, ep.albedoRes);
+                        const bool epPack = !ep.packedIsDefault && (ep.packedSrv || ep.packedRes) &&
+                                            srvMatches(vPack, &resPack, ep.packedSrv, ep.packedRes);
+                        const bool epNeedBoth = !ep.albedoIsDefault && !ep.packedIsDefault &&
+                                                (ep.packedSrv || ep.packedRes) && (ep.albedoRes != ep.packedRes);
+                        bool epOk = false;
+                        if (!ep.albedoIsDefault && (ep.albedoSrv || ep.albedoRes)) {
+                            epOk = epAlb && (!epNeedBoth || epPack);
+                        } else if (!ep.packedIsDefault && (ep.packedSrv || ep.packedRes)) {
+                            epOk = epPack;
+                        }
+                        if (epOk) {
+                            match = true;
+                            albMatch = epAlb;
+                            packMatch = epPack;
+                            break;
+                        }
+                    }
+                }
+                if (match) {
+                    matchedTarget = kTargetBody;
+                    ++s_rtBodyPrimaryCur;
+                    if (albMatch && vAlb) {
+                        mask |= (1u << curAlbSlot);
+                        matchedAlbedoSrv = vAlb;
+                        matchedAlbedoSrv->AddRef();
+                    }
+                    if (packMatch && curPackSlot >= kScanStartSlot) {
+                        mask |= (1u << curPackSlot);
+                    }
                 }
             }
-        }
 
-        if (resAlb) resAlb->Release();
-        if (resPack) resPack->Release();
-        if (vAlb) vAlb->Release();
-        if (vPack) vPack->Release();
+            if (resAlb) resAlb->Release();
+            if (resPack) resPack->Release();
+            if (vAlb) vAlb->Release();
+            if (vPack) vPack->Release();
+        }
     }
 
     struct TexSetSlotCache {
@@ -521,8 +530,7 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
         if ((primaryBodyStarved && (frameId - s_rtRediscoveryFrame) >= 2) ||
             (g_matchedDrawsLastFrame.load(std::memory_order_relaxed) == 0 && (frameId - s_rtRediscoveryFrame) >= 30)) {
             s_rtRediscoveryFrame = frameId;
-            curAlbSlot = -1;
-            curPackSlot = -1;
+            s_rtForceFullScan = true;
         }
         return false;
     } else {
@@ -672,11 +680,22 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
 
     // Latch discovered slot indices only after confirming main color RT!
     if (matchedTarget != kTargetInternals) {
-        if (discoveredAlbSlot >= kScanStartSlot) {
-            curAlbSlot = discoveredAlbSlot;
-        }
-        if (discoveredPackSlot >= kScanStartSlot) {
-            curPackSlot = discoveredPackSlot;
+        if (discoveredAlbSlot >= kScanStartSlot || discoveredPackSlot >= kScanStartSlot) {
+            const int newAlb = (discoveredAlbSlot >= kScanStartSlot) ? discoveredAlbSlot : -1;
+            const int newPack = (discoveredPackSlot >= kScanStartSlot) ? discoveredPackSlot : -1;
+            const bool matches0 = (s_rtKnownAlbSlot[0] == newAlb && s_rtKnownPackSlot[0] == newPack);
+            const bool matches1 = (s_rtKnownAlbSlot[1] == newAlb && s_rtKnownPackSlot[1] == newPack);
+            if (!matches0 && !matches1) {
+                if (!pairReady(0)) {
+                    s_rtKnownAlbSlot[0] = newAlb;
+                    s_rtKnownPackSlot[0] = newPack;
+                    Logger::Info("CarFX body slot pair[0] cached: alb=" + std::to_string(newAlb) + " pack=" + std::to_string(newPack));
+                } else {
+                    s_rtKnownAlbSlot[1] = newAlb;
+                    s_rtKnownPackSlot[1] = newPack;
+                    Logger::Info("CarFX body slot pair[1] cached: alb=" + std::to_string(newAlb) + " pack=" + std::to_string(newPack));
+                }
+            }
         }
     }
 
