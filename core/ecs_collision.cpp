@@ -514,23 +514,21 @@ void EcsCollision::UpdateOnMainThread(float dt, const std::vector<LiveCarInfo>& 
                         }
                     }
 
-                    // Criterion B & C (optional toggle): Stopped / slow car protection (< stoppedSpeedKmh, speed delta >= 30 km/h)
+                    // Criterion B & C (optional toggle): Stopped / slow car protection (< 10 km/h)
                     if (!rawWrongWay && s_config.ghostStoppedCars) {
                         const float slowThresh = (s_config.stoppedSpeedKmh > 0.0f) ? s_config.stoppedSpeedKmh : 10.0f;
-                        const bool hitNow = onCollisionCourse || (dist < 7.5f && vClose > 1.0f);
+                        const bool stopCorridor = (cpaDist <= 5.5f) && ttcOk && (vClose > 1.0f);
 
                         // B: Player is stopped/slow (< 10 km/h) and any car approaches with >= 30 km/h speed difference
-                        if (pSpeedKmh < slowThresh && (oSpeedKmh - pSpeedKmh) >= 30.0f && hasODir) {
-                            const float chargeDot = -(oDirX * uRx + oDirZ * uRz);
-                            if (chargeDot > 0.65f && hitNow) {
+                        if (pSpeedKmh < slowThresh && (oSpeedKmh - pSpeedKmh) >= 30.0f) {
+                            if (stopCorridor || (dist < 14.0f && vClose > 1.0f)) {
                                 rawWrongWay = true;
                             }
                         }
 
-                        // C: Opponent is stopped/slow (< 10 km/h) and player approaches with >= 30 km/h speed difference
-                        if (!rawWrongWay && oSpeedKmh < slowThresh && (pSpeedKmh - oSpeedKmh) >= 30.0f && hasPDir) {
-                            const float approachDot = (pDirX * uRx + pDirZ * uRz);
-                            if (approachDot > 0.65f && hitNow) {
+                        // C: Opponent is stopped/slow (< 10 km/h) and player approaches them (any moving speed >= 5 km/h)
+                        if (!rawWrongWay && oSpeedKmh < slowThresh && pSpeedKmh >= 5.0f) {
+                            if (stopCorridor || (dist < 11.0f && vClose > 0.5f)) {
                                 rawWrongWay = true;
                             }
                         }
