@@ -107,6 +107,8 @@ struct TargetSlotState {
     std::atomic<bool> usesScene{ false };
     std::atomic<bool> usesDepth{ false };
     std::atomic<bool> usesLivery{ false };
+    std::atomic<bool> usesWalls{ false };
+    std::atomic<bool> usesSpatial{ false };
     std::atomic<float> param[kParams][4]{};
     std::atomic<ID3D11ShaderResourceView*> userTex[kTextures]{};
     std::string userTexPaths[kTextures];
@@ -201,8 +203,22 @@ extern std::atomic<float> g_gameInputs[kTargetCount][kGameInputs];
 extern SRWLOCK g_spatialLock[kTargetCount];
 extern SpatialProximityInput g_spatialInput[kTargetCount];
 
+struct PendingTexCopy {
+    ID3D11Texture2D* src = nullptr;
+    ID3D11Texture2D* dst = nullptr;
+};
+
+struct CachedFrameAudio {
+    float audio[4] = {};
+    float audio2[4] = {};
+    float spectrum[8][4] = {};
+};
+
 extern std::mutex g_graveMtx;
 extern std::vector<RetiredObject> g_graveyard;
+extern std::mutex g_pendingCopyMtx;
+extern std::vector<PendingTexCopy> g_pendingTexCopies;
+extern CachedFrameAudio g_cachedFrameAudio;
 
 extern LARGE_INTEGER g_qpcFreq;
 extern std::atomic<int64_t> g_lastDrawQpc;

@@ -1,5 +1,6 @@
 #include "carfx.h"
 #include "carfx_internal.h"
+#include "audio_capture.h"
 #include "logger.h"
 #include "native_carx.h"
 
@@ -63,6 +64,9 @@ SpatialProximityInput g_spatialInput[kTargetCount]{};
 
 std::mutex g_graveMtx;
 std::vector<RetiredObject> g_graveyard;
+std::mutex g_pendingCopyMtx;
+std::vector<PendingTexCopy> g_pendingTexCopies;
+CachedFrameAudio g_cachedFrameAudio{};
 
 LARGE_INTEGER g_qpcFreq{};
 std::atomic<int64_t> g_lastDrawQpc{ 0 };
@@ -398,6 +402,18 @@ void Shutdown() {
     }
     ReleaseSRWLockExclusive(&g_gameTexLock);
 
+    {
+        std::vector<PendingTexCopy> pending;
+        {
+            std::lock_guard<std::mutex> lk(g_pendingCopyMtx);
+            pending.swap(g_pendingTexCopies);
+        }
+        for (const auto& pc : pending) {
+            SafeReleaseRaw(pc.src);
+            SafeReleaseRaw(pc.dst);
+        }
+    }
+
     SweepGraveyard(true);
     ReleaseSceneCopy();
     ReleaseDepthCopy();
@@ -419,8 +435,27 @@ void Shutdown() {
     Logger::Info("CarFX shut down.");
 }
 
-void OnNewFrame(ID3D11DeviceContext* /*context*/) {
+void OnNewFrame(ID3D11DeviceContext* context) {
     if (!g_initialized.load(std::memory_order_acquire)) return;
+
+    {
+        std::vector<PendingTexCopy> pending;
+        {
+            std::lock_guard<std::mutex> lk(g_pendingCopyMtx);
+            if (!g_pendingTexCopies.empty()) {
+                pending.swap(g_pendingTexCopies);
+            }
+        }
+        for (const auto& pc : pending) {
+            if (context && pc.src && pc.dst) {
+                context->CopyResource(pc.dst, pc.src);
+            }
+            if (pc.src) pc.src->Release();
+            if (pc.dst) pc.dst->Release();
+        }
+    }
+
+    AudioCapture::GetShaderAudioData(g_cachedFrameAudio.audio, g_cachedFrameAudio.audio2, &g_cachedFrameAudio.spectrum[0][0]);
 
     const uint32_t prevFrame = g_frameCounter.fetch_add(1, std::memory_order_relaxed);
     const uint32_t totalPrev = g_totalDrawsFrame.exchange(0, std::memory_order_relaxed);
@@ -569,6 +604,146 @@ void ClearTargetTextures(int target) {
     SetPlayerTargetTextures(target, empty);
 }
 
+bool AnyTargetUsesWalls() {
+    if (!g_initialized.load(std::memory_order_acquire)) return false;
+    for (int t = 0; t < kTargetCount; ++t) {
+        if (IsTargetActiveInternal(t) && g_targets[t].usesWalls.load(std::memory_order_acquire)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool AnyTargetUsesSpatial() {
+    if (!g_initialized.load(std::memory_order_acquire)) return false;
+    for (int t = 0; t < kTargetCount; ++t) {
+        if (IsTargetActiveInternal(t) && g_targets[t].usesSpatial.load(std::memory_order_acquire)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+namespace {
+DXGI_FORMAT UntypelessTexSrvFormat(DXGI_FORMAT fmt) {
+    switch (fmt) {
+    case DXGI_FORMAT_R8G8B8A8_TYPELESS:     return DXGI_FORMAT_R8G8B8A8_UNORM;
+    case DXGI_FORMAT_B8G8R8A8_TYPELESS:     return DXGI_FORMAT_B8G8R8A8_UNORM;
+    case DXGI_FORMAT_R16G16B16A16_TYPELESS: return DXGI_FORMAT_R16G16B16A16_FLOAT;
+    case DXGI_FORMAT_BC1_TYPELESS:          return DXGI_FORMAT_BC1_UNORM;
+    case DXGI_FORMAT_BC2_TYPELESS:          return DXGI_FORMAT_BC2_UNORM;
+    case DXGI_FORMAT_BC3_TYPELESS:          return DXGI_FORMAT_BC3_UNORM;
+    case DXGI_FORMAT_BC4_TYPELESS:          return DXGI_FORMAT_BC4_UNORM;
+    case DXGI_FORMAT_BC5_TYPELESS:          return DXGI_FORMAT_BC5_UNORM;
+    case DXGI_FORMAT_BC7_TYPELESS:          return DXGI_FORMAT_BC7_UNORM;
+    default:                                return fmt;
+    }
+}
+} // namespace
+
+bool CloneD3DTextureForUnity(void* origNativePtr, void** outUnityExternalSrv, void** outD3DRes,
+                             uint32_t* outWidth, uint32_t* outHeight) {
+    if (outUnityExternalSrv) *outUnityExternalSrv = nullptr;
+    if (outD3DRes) *outD3DRes = nullptr;
+    if (outWidth) *outWidth = 0;
+    if (outHeight) *outHeight = 0;
+    if (!g_initialized.load(std::memory_order_acquire) || !g_device || !origNativePtr) return false;
+
+    ID3D11ShaderResourceView* origSrv = nullptr;
+    ID3D11Resource* srcRes = nullptr;
+    if (SUCCEEDED(SafeQueryInterfaceRaw(origNativePtr, __uuidof(ID3D11ShaderResourceView), &origSrv)) && origSrv) {
+        origSrv->GetResource(&srcRes);
+    } else {
+        SafeQueryInterfaceRaw(origNativePtr, __uuidof(ID3D11Resource), &srcRes);
+    }
+    if (!srcRes) {
+        if (origSrv) origSrv->Release();
+        return false;
+    }
+
+    ID3D11Texture2D* srcTex = nullptr;
+    if (FAILED(srcRes->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&srcTex))) || !srcTex) {
+        srcRes->Release();
+        if (origSrv) origSrv->Release();
+        return false;
+    }
+    srcRes->Release();
+
+    D3D11_TEXTURE2D_DESC td = {};
+    srcTex->GetDesc(&td);
+    if (td.Width == 0 || td.Height == 0 || td.ArraySize != 1 || td.SampleDesc.Count > 1 ||
+        (td.MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE)) {
+        srcTex->Release();
+        if (origSrv) origSrv->Release();
+        return false;
+    }
+
+    D3D11_SHADER_RESOURCE_VIEW_DESC origSrvDesc = {};
+    bool haveSrvDesc = false;
+    if (origSrv) {
+        origSrv->GetDesc(&origSrvDesc);
+        haveSrvDesc = (origSrvDesc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D);
+        origSrv->Release();
+        origSrv = nullptr;
+    }
+
+    D3D11_TEXTURE2D_DESC cloneDesc = td;
+    cloneDesc.Usage = D3D11_USAGE_DEFAULT;
+    cloneDesc.CPUAccessFlags = 0;
+    cloneDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    cloneDesc.MiscFlags = 0;
+
+    ID3D11Texture2D* cloneTex = nullptr;
+    if (FAILED(g_device->CreateTexture2D(&cloneDesc, nullptr, &cloneTex)) || !cloneTex) {
+        srcTex->Release();
+        return false;
+    }
+
+    ID3D11ShaderResourceView* cloneSrv = nullptr;
+    HRESULT hrSrv = haveSrvDesc
+        ? g_device->CreateShaderResourceView(cloneTex, &origSrvDesc, &cloneSrv)
+        : g_device->CreateShaderResourceView(cloneTex, nullptr, &cloneSrv);
+    if (FAILED(hrSrv) || !cloneSrv) {
+        D3D11_SHADER_RESOURCE_VIEW_DESC fallbackDesc = {};
+        fallbackDesc.Format = UntypelessTexSrvFormat(cloneDesc.Format);
+        fallbackDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        fallbackDesc.Texture2D.MostDetailedMip = 0;
+        fallbackDesc.Texture2D.MipLevels = cloneDesc.MipLevels ? cloneDesc.MipLevels : 1;
+        hrSrv = g_device->CreateShaderResourceView(cloneTex, &fallbackDesc, &cloneSrv);
+    }
+    if (FAILED(hrSrv) || !cloneSrv) {
+        cloneTex->Release();
+        srcTex->Release();
+        return false;
+    }
+
+    cloneTex->AddRef();
+    {
+        std::lock_guard<std::mutex> lk(g_pendingCopyMtx);
+        g_pendingTexCopies.push_back({ srcTex, cloneTex });
+    }
+
+    if (outWidth) *outWidth = td.Width;
+    if (outHeight) *outHeight = td.Height;
+    if (outD3DRes) {
+        *outD3DRes = cloneTex;
+    } else {
+        cloneTex->Release();
+    }
+    if (outUnityExternalSrv) {
+        *outUnityExternalSrv = cloneSrv;
+    } else {
+        cloneSrv->Release();
+    }
+    return true;
+}
+
+void ReleaseClonedD3DObjects(const std::vector<void*>& objs) {
+    for (void* p : objs) {
+        if (p) Retire(reinterpret_cast<IUnknown*>(p));
+    }
+}
+
 static std::atomic<uint32_t> s_internalsPartMask{ kPartsDefault };
 void SetInternalsPartMask(uint32_t mask) { s_internalsPartMask.store(mask & 0xFFu, std::memory_order_relaxed); }
 uint32_t GetInternalsPartMask() { return s_internalsPartMask.load(std::memory_order_relaxed); }
@@ -602,6 +777,11 @@ void SetInternalsTextures(const std::vector<void*>& nativePtrs) {
             next.res.push_back(res);
         }
     }
+
+    std::sort(next.srvs.begin(), next.srvs.end());
+    next.srvs.erase(std::unique(next.srvs.begin(), next.srvs.end()), next.srvs.end());
+    std::sort(next.res.begin(), next.res.end());
+    next.res.erase(std::unique(next.res.begin(), next.res.end()), next.res.end());
 
     InternalsTexSet old;
     AcquireSRWLockExclusive(&g_gameTexLock);

@@ -108,6 +108,7 @@ static void StartFeatures() {
             Logger::Warn("CarSimOptimizer failed initial hook, will retry...");
         }
 
+        AudioCapture::Init();
         AudioPlayer::Init();
         CloudScripts::Init(g_exeDir);   // before Lua: main.lua loads installed cloud scripts
         ReplayEngine::Init(replaysDir);
@@ -128,8 +129,6 @@ static void StartFeatures() {
 
         // Start async auto-update check against GitHub repository (Garagoro/Urushi)
         Updater::Init(g_exeDir, g_module);
-
-        AudioCapture::Init();
     }
     catch (const std::exception& ex) {
         Logger::Error(std::string("Exception while starting features: ") + ex.what());

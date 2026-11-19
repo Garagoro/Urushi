@@ -171,6 +171,8 @@ bool CompileEffectMemory(int targetIdx, const char* srcData, size_t srcLen, cons
     }
 
     bool readsScene = false, readsDepth = false, readsLivery = false;
+    bool readsWalls = (g_pfnD3DReflect == nullptr);
+    bool readsSpatial = (g_pfnD3DReflect == nullptr);
     if (g_pfnD3DReflect && code) {
         ID3D11ShaderReflection* refl = nullptr;
         if (SUCCEEDED(g_pfnD3DReflect(code->GetBufferPointer(), code->GetBufferSize(),
@@ -183,6 +185,28 @@ bool CompileEffectMemory(int targetIdx, const char* srcData, size_t srcLen, cons
                         if (_stricmp(rbd.Name, "g_fxScene") == 0) readsScene = true;
                         else if (_stricmp(rbd.Name, "g_fxDepth") == 0) readsDepth = true;
                         else if (_stricmp(rbd.Name, "g_fxLivery") == 0) readsLivery = true;
+                    }
+                }
+                for (UINT ci = 0; ci < sd.ConstantBuffers; ++ci) {
+                    ID3D11ShaderReflectionConstantBuffer* cb = refl->GetConstantBufferByIndex(ci);
+                    if (!cb) continue;
+                    D3D11_SHADER_BUFFER_DESC cbd = {};
+                    if (FAILED(cb->GetDesc(&cbd)) || !cbd.Name || _stricmp(cbd.Name, "CarFx") != 0) continue;
+                    for (UINT vi = 0; vi < cbd.Variables; ++vi) {
+                        ID3D11ShaderReflectionVariable* rv = cb->GetVariableByIndex(vi);
+                        if (!rv) continue;
+                        D3D11_SHADER_VARIABLE_DESC vd = {};
+                        if (SUCCEEDED(rv->GetDesc(&vd)) && (vd.uFlags & D3D_SVF_USED) && vd.Name) {
+                            if (_strnicmp(vd.Name, "g_fxWall", 8) == 0) {
+                                readsWalls = true;
+                                readsSpatial = true;
+                            } else if (_strnicmp(vd.Name, "g_fxNearCar", 11) == 0 ||
+                                       _strnicmp(vd.Name, "g_fxCar", 7) == 0 ||
+                                       _strnicmp(vd.Name, "g_fxCam", 7) == 0 ||
+                                       _strnicmp(vd.Name, "g_fxDrift", 9) == 0) {
+                                readsSpatial = true;
+                            }
+                        }
                     }
                 }
             }
@@ -231,6 +255,8 @@ bool CompileEffectMemory(int targetIdx, const char* srcData, size_t srcLen, cons
     ts.usesScene.store(readsScene, std::memory_order_release);
     ts.usesDepth.store(readsDepth, std::memory_order_release);
     ts.usesLivery.store(readsLivery, std::memory_order_release);
+    ts.usesWalls.store(readsWalls, std::memory_order_release);
+    ts.usesSpatial.store(readsSpatial, std::memory_order_release);
     ts.shaderPath = narrowPath;
     ts.lastWriteTime = ft;
     ts.decl = decl;
@@ -301,6 +327,8 @@ void UnloadShader(int target) {
         ts.usesScene.store(false, std::memory_order_relaxed);
         ts.usesDepth.store(false, std::memory_order_relaxed);
         ts.usesLivery.store(false, std::memory_order_relaxed);
+        ts.usesWalls.store(false, std::memory_order_relaxed);
+        ts.usesSpatial.store(false, std::memory_order_relaxed);
     }
     UpdateGhostShaderMask();
 }

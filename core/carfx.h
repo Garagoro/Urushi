@@ -173,6 +173,11 @@ bool IsEnabled();
 void SetTargetEnabled(int target, bool enabled);
 bool IsTargetCompiled(int target);
 bool IsTargetActive(int target);
+bool AnyTargetUsesWalls();
+bool AnyTargetUsesSpatial();
+bool CloneD3DTextureForUnity(void* origNativePtr, void** outUnityExternalSrv, void** outD3DRes,
+                             uint32_t* outWidth = nullptr, uint32_t* outHeight = nullptr);
+void ReleaseClonedD3DObjects(const std::vector<void*>& objs);
 bool ShouldBypassDepthPrePass(int target = kTargetBody);
 bool ShouldHideCarInternals(int target = kTargetBody);
 void SetStealthDepthWrite(bool on);

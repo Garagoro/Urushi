@@ -1,6 +1,7 @@
 #include "unity_bridge.h"
 #include "unity_bridge_internal.h"
 #include "pattern_scanner.h"
+#include "il2cpp_helpers.h"
 #include "carfx.h"
 #include "native_carx.h"
 #include "logger.h"
@@ -18,22 +19,75 @@ namespace UnityBridgeInternal {
 // ================= CarFX Player Livery Extractor (Validated + Leaf SEH) =================
 
 typedef void* (*t_Tex_GetNativePtr)(void* nativeTex);
+typedef void (*t_Tex2D_UpdateExternal)(void* nativeTex, void* externalPtr);
+typedef void* (*t_Tex2D_CreateExternal)(int32_t width, int32_t height, int32_t format,
+                                        uint8_t mipChain, uint8_t linear, void* nativeTex, const void* mi);
+typedef void* (*t_Tex2D_GetBuiltin)();
 
-static bool ReadBuiltinNativeTexGlobal(uintptr_t fnAddr, void** outNativeTex) {
-    if (!fnAddr || !outNativeTex) return false;
-    *outNativeTex = nullptr;
-    // Unity 6000.3 get_*Texture_Injected: 53 48 83 EC 20 48 8B 1D <disp32>
-    if (!IsReadableMemVQ(fnAddr, 13)) return false;
-    const uint8_t* p = reinterpret_cast<const uint8_t*>(fnAddr);
-    if (p[6] != 0x48 || p[7] != 0x8B || p[8] != 0x1D) return false;
-    int32_t disp = 0;
-    memcpy(&disp, p + 9, sizeof(disp));
-    uintptr_t globalSlot = static_cast<uintptr_t>(static_cast<intptr_t>(fnAddr + 13) + disp);
-    if (!IsReadableMemVQ(globalSlot, sizeof(void*))) return false;
-    void* nat = *reinterpret_cast<void* const*>(globalSlot);
-    if (reinterpret_cast<uintptr_t>(nat) < 0x10000) return false;
-    *outNativeTex = nat;
-    return true;
+static uintptr_t GetTexture2DKlass() {
+    static uintptr_t s_klass = 0;
+    if (!s_klass) {
+        s_klass = Il2CppHelpers::LookupTypeClass("Texture2D", "UnityEngine");
+    }
+    return s_klass;
+}
+
+static t_Tex2D_UpdateExternal GetUpdateExternalTexFn() {
+    static t_Tex2D_UpdateExternal s_cached = nullptr;
+    static bool s_tried = false;
+    if (!s_tried) {
+        s_tried = true;
+        uintptr_t klass = GetTexture2DKlass();
+        if (klass) {
+            s_cached = reinterpret_cast<t_Tex2D_UpdateExternal>(
+                Il2CppHelpers::LookupClassMethod(klass, "UpdateExternalTexture_Injected"));
+        }
+    }
+    return s_cached;
+}
+
+static t_Tex2D_CreateExternal GetCreateExternalTexFn() {
+    static t_Tex2D_CreateExternal s_cached = nullptr;
+    static bool s_tried = false;
+    if (!s_tried) {
+        s_tried = true;
+        uintptr_t klass = GetTexture2DKlass();
+        if (klass) {
+            s_cached = reinterpret_cast<t_Tex2D_CreateExternal>(
+                Il2CppHelpers::LookupClassMethod(klass, "CreateExternalTexture"));
+        }
+    }
+    return s_cached;
+}
+
+static void* SafeCallCreateExternalTexSEH(t_Tex2D_CreateExternal fn, int32_t w, int32_t h, void* externalSrv) {
+    if (!fn || w <= 0 || h <= 0 || !externalSrv) return nullptr;
+    __try {
+        void* managed = fn(w, h, 4 /*TextureFormat.RGBA32*/, 0 /*mipChain*/, 0 /*linear*/, externalSrv, nullptr);
+        if (!managed || !IsReadableMem(reinterpret_cast<uintptr_t>(managed) + 0x10, sizeof(void*))) return nullptr;
+        return *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(managed) + 0x10);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+static void* SafeCallBuiltinTexGetterSEH(t_Tex2D_GetBuiltin fn) {
+    if (!fn) return nullptr;
+    __try {
+        return fn();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+static bool SafeCallUpdateExternalTexSEH(t_Tex2D_UpdateExternal fn, void* nativeTex, void* externalPtr) {
+    if (!fn || !nativeTex || !externalPtr) return false;
+    __try {
+        fn(nativeTex, externalPtr);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 }
 
 bool SafeCallGetNativeTexPtr(uintptr_t fnAddr, void* nativeTex, void** outD3DPtr) {
@@ -153,16 +207,24 @@ t_UP_GfxCopyTextureFull GetGfxCopyTextureFullFn(uintptr_t unityBase) {
     return s_cached;
 }
 
-void GetBuiltinNativeTextures(uintptr_t unityBase, void** outWhite, void** outBlack, void** outNormal) {
+void GetBuiltinNativeTextures(uintptr_t /*unityBase*/, void** outWhite, void** outBlack, void** outNormal) {
     static void* s_natWhite = nullptr;
     static void* s_natBlack = nullptr;
     static void* s_natNormal = nullptr;
     static bool s_resolved = false;
-    if (!s_resolved && unityBase) {
-        s_resolved = true;
-        ReadBuiltinNativeTexGlobal(unityBase + 0xA8CF0, &s_natWhite);
-        ReadBuiltinNativeTexGlobal(unityBase + 0xA8D30, &s_natBlack);
-        ReadBuiltinNativeTexGlobal(unityBase + 0xA8E30, &s_natNormal);
+    if (!s_resolved) {
+        uintptr_t klass = GetTexture2DKlass();
+        if (klass) {
+            s_natWhite = SafeCallBuiltinTexGetterSEH(reinterpret_cast<t_Tex2D_GetBuiltin>(
+                Il2CppHelpers::LookupClassMethod(klass, "get_whiteTexture_Injected")));
+            s_natBlack = SafeCallBuiltinTexGetterSEH(reinterpret_cast<t_Tex2D_GetBuiltin>(
+                Il2CppHelpers::LookupClassMethod(klass, "get_blackTexture_Injected")));
+            s_natNormal = SafeCallBuiltinTexGetterSEH(reinterpret_cast<t_Tex2D_GetBuiltin>(
+                Il2CppHelpers::LookupClassMethod(klass, "get_normalTexture_Injected")));
+            if (s_natWhite || s_natBlack) {
+                s_resolved = true;
+            }
+        }
     }
     if (outWhite) *outWhite = s_natWhite;
     if (outBlack) *outBlack = s_natBlack;
@@ -898,11 +960,15 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
     static void* s_prevInternalsRootGo = nullptr;
     static uint32_t s_prevInternalsPartMask = 0;
     static bool s_prevInternalsActive = false;
+    static size_t s_prevInternalsRendererCount = 0;
+    static int s_internalsRetryLeft = 0;
+    static ULONGLONG s_internalsNextRetryMs = 0;
     static std::vector<SavedStealthMatSwap> s_savedInternalsMatSwaps;
     static std::unordered_map<int32_t, int32_t> s_internalsAssetToCloneMat;
     static std::vector<SavedInternalsTexRestore> s_savedInternalsTexRestores;
     static std::unordered_map<void*, void*> s_internalsOrigToClonedTex;
     static std::vector<void*> s_internalsClonedTexList;
+    static std::vector<void*> s_internalsClonedSrvList;
 
     auto releasePlayerIsoPackTex = [&]() {
         if (s_playerIsoPackTex) {
@@ -915,7 +981,8 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
     };
 
     auto restoreInternalsIsolation = [&]() {
-        if (s_savedInternalsTexRestores.empty() && s_savedInternalsMatSwaps.empty() && s_internalsClonedTexList.empty()) {
+        if (s_savedInternalsTexRestores.empty() && s_savedInternalsMatSwaps.empty() &&
+            s_internalsClonedTexList.empty() && s_internalsClonedSrvList.empty()) {
             s_internalsAssetToCloneMat.clear();
             s_internalsOrigToClonedTex.clear();
             return;
@@ -937,17 +1004,25 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
         }
         s_internalsClonedTexList.clear();
         s_internalsOrigToClonedTex.clear();
+        CarFX::SetInternalsTextures({});
+        CarFX::ReleaseClonedD3DObjects(s_internalsClonedSrvList);
+        s_internalsClonedSrvList.clear();
     };
 
     const bool wantTransparent = CarFX::ShouldBypassDepthPrePass();
     const bool wantStealth = CarFX::ShouldHideCarInternals();
     const bool stealthByOrder = Settings::GetBool("carfx", "stealth_order", false);   // experimental: body-first draw order
     CarFX::SetStealthDepthWrite(stealthByOrder && wantStealth);
+    const bool internalsActiveNow = CarFX::IsTargetActive(CarFX::kTargetInternals) && !(wantStealth && !stealthByOrder);
+    const uint32_t partMaskNow = internalsActiveNow ? CarFX::GetInternalsPartMask() : 0;
     const bool modeChanged = (wantTransparent != s_prevWantTransparent);
     const bool stealthChanged = (wantStealth != s_prevWantStealth);
+    const bool internalsChanged = (internalsActiveNow != s_prevInternalsActive) || (partMaskNow != s_prevInternalsPartMask);
 
     const ULONGLONG nowMs = GetTickCount64();
-    if (!modeChanged && !stealthChanged && nowMs < s_nextUpdateMs) return;
+    const bool internalsIncompleteRenderers = internalsActiveNow && (s_prevInternalsRendererCount < 40);
+    const bool internalsRetryDue = internalsActiveNow && (s_internalsRetryLeft > 0 || internalsIncompleteRenderers) && (nowMs >= s_internalsNextRetryMs);
+    if (!modeChanged && !stealthChanged && !internalsChanged && !internalsRetryDue && nowMs < s_nextUpdateMs) return;
 
     auto restoreAllStealthMaterials = [&]() {
         if (s_savedStealthMatQueues.empty() && s_savedStealthSwaps.empty() && s_stealthAssetToClone.empty()) return;
@@ -1052,28 +1127,47 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
     void* s_natNormal = nullptr;
     GetBuiltinNativeTextures(unityBase, &s_natWhite, &s_natBlack, &s_natNormal);
 
-    // Internals target: clone and isolate textures of the local player car's non-body parts so CarFX matches ONLY our car (never remote net_cars).
-    const bool internalsActive = CarFX::IsTargetActive(CarFX::kTargetInternals) && !(wantStealth && !stealthByOrder);
-    const uint32_t partMask = internalsActive ? CarFX::GetInternalsPartMask() : 0;
-    if (rootGo != s_prevInternalsRootGo || partMask != s_prevInternalsPartMask || internalsActive != s_prevInternalsActive) {
-        restoreInternalsIsolation();
-        s_prevInternalsRootGo = rootGo;
-        s_prevInternalsPartMask = partMask;
-        s_prevInternalsActive = internalsActive;
+    // Internals target: clone D3D11 textures + wrap via Texture2D.CreateExternalTexture so CarFX matches ONLY our local car (never remote net_cars).
+    const bool internalsActive = internalsActiveNow;
+    const uint32_t partMask = partMaskNow;
+    const bool internalsReset = (rootGo != s_prevInternalsRootGo || partMask != s_prevInternalsPartMask || internalsActive != s_prevInternalsActive);
+    if (internalsReset || (internalsActive && s_internalsRetryLeft > 0 && nowMs >= s_internalsNextRetryMs)) {
+        if (internalsReset) {
+            restoreInternalsIsolation();
+            s_prevInternalsRootGo = rootGo;
+            s_prevInternalsPartMask = partMask;
+            s_prevInternalsActive = internalsActive;
+            s_prevInternalsRendererCount = 0;
+            s_internalsRetryLeft = internalsActive ? 12 : 0;
+            s_internalsNextRetryMs = 0;
+        } else {
+            if (s_internalsRetryLeft > 0) s_internalsRetryLeft--;
+            s_internalsNextRetryMs = nowMs + 1000;
+        }
 
-        std::vector<void*> intTex;
         if (internalsActive) {
             const uintptr_t pfnGetNatPtr = GetNativeTexPtrFn(unityBase);
+            const t_Tex2D_UpdateExternal pfnUpdateExt = GetUpdateExternalTexFn();
+            const t_Tex2D_CreateExternal pfnCreateExt = GetCreateExternalTexFn();
+            void* writableTemplate = s_natBlack ? s_natBlack : s_natWhite;
             std::vector<CarRendererRef> rs;
             CollectCarRenderersOnMainThread(rootGo, rs);
+            const bool renderersGrew = (rs.size() > s_prevInternalsRendererCount);
+            s_prevInternalsRendererCount = rs.size();
             std::unordered_set<std::string> loggedMats;
             std::unordered_set<int32_t> processedMids;
             std::unordered_set<void*> failedOrigTex;
+            int failNoNat = 0, failD3d = 0, failCreate = 0, failClone = 0, failUpd = 0;
 
             auto isolateMatProp = [&](void* natMat, int32_t matId, int32_t propId, bool allowDefaultTex) -> bool {
                 void* origTex = SafeGetMatTextureSEH(unityBase, natMat, propId);
                 if (!origTex) return false;
                 if (!allowDefaultTex && IsDefaultNativeTex(origTex, s_natWhite, s_natBlack, s_natNormal)) return false;
+
+                // Skip if already replaced with one of our cloned textures on a previous retry pass
+                for (void* ct : s_internalsClonedTexList) {
+                    if (origTex == ct) return true;
+                }
 
                 void* clonedTex = nullptr;
                 auto itT = s_internalsOrigToClonedTex.find(origTex);
@@ -1081,24 +1175,46 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
                     clonedTex = itT->second;
                 } else {
                     if (failedOrigTex.count(origTex)) return false;
-                    clonedTex = CloneGameObjectDirect(origTex);
-                    void* d3dPtr = nullptr;
-                    bool copyOk = clonedTex && SafeCopyTextureFullSEH(unityBase, origTex, clonedTex);
-                    if (copyOk) SafeCallGetNativeTexPtr(pfnGetNatPtr, clonedTex, &d3dPtr);
-                    if (!clonedTex || !copyOk || !d3dPtr) {
-                        if (clonedTex) DestroyObjectDirect(clonedTex, 0.0f);
+                    void* origD3d = nullptr;
+                    if (!SafeCallGetNativeTexPtr(pfnGetNatPtr, origTex, &origD3d) || !origD3d) {
+                        failedOrigTex.insert(origTex);
+                        failNoNat++;
+                        return false;
+                    }
+                    void* extSrv = nullptr;
+                    uint32_t tw = 0, th = 0;
+                    if (!CarFX::CloneD3DTextureForUnity(origD3d, &extSrv, nullptr, &tw, &th) || !extSrv) {
+                        failedOrigTex.insert(origTex);
+                        failD3d++;
+                        return false;
+                    }
+                    if (pfnCreateExt && tw > 0 && th > 0) {
+                        clonedTex = SafeCallCreateExternalTexSEH(pfnCreateExt, static_cast<int32_t>(tw), static_cast<int32_t>(th), extSrv);
+                        if (!clonedTex) failCreate++;
+                    }
+                    if (!clonedTex && pfnUpdateExt && writableTemplate) {
+                        void* tmp = CloneGameObjectDirect(writableTemplate);
+                        if (!tmp) {
+                            failClone++;
+                        } else if (!SafeCallUpdateExternalTexSEH(pfnUpdateExt, tmp, extSrv)) {
+                            DestroyObjectDirect(tmp, 0.0f);
+                            failUpd++;
+                        } else {
+                            clonedTex = tmp;
+                        }
+                    }
+                    if (!clonedTex) {
+                        CarFX::ReleaseClonedD3DObjects({ extSrv });
                         failedOrigTex.insert(origTex);
                         return false;
                     }
                     s_internalsOrigToClonedTex.emplace(origTex, clonedTex);
                     s_internalsClonedTexList.push_back(clonedTex);
+                    s_internalsClonedSrvList.push_back(extSrv);
                 }
 
                 if (!SafeSetMatTextureSEH(unityBase, natMat, propId, clonedTex)) return false;
                 s_savedInternalsTexRestores.push_back({ matId, propId, origTex });
-                void* d3dPtr = nullptr;
-                SafeCallGetNativeTexPtr(pfnGetNatPtr, clonedTex, &d3dPtr);
-                if (d3dPtr) intTex.push_back(d3dPtr);
                 return true;
             };
 
@@ -1108,7 +1224,7 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
                     char mn[64] = {};
                     if (!mid || !SafeReadMatNameSEH(unityBase, mid, mn, sizeof(mn))) continue;
                     const uint32_t part = InternalsPartOfMaterial(mn);
-                    if (loggedMats.insert(mn).second) {
+                    if ((internalsReset || renderersGrew) && loggedMats.insert(mn).second) {
                         Logger::Info("CarFX mat: " + std::string(mn) + " (part=" + std::to_string(part) + ")");
                     }
                     if (part == 0 || !(partMask & part)) continue;
@@ -1146,13 +1262,24 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
                     }
                 }
             }
-            std::sort(intTex.begin(), intTex.end());
-            intTex.erase(std::unique(intTex.begin(), intTex.end()), intTex.end());
-            Logger::Info("CarFX internals scan: isolated " + std::to_string(intTex.size()) +
-                         " unique player textures (" + std::to_string(s_savedInternalsMatSwaps.size()) +
-                         " cloned slots) from " + std::to_string(rs.size()) + " renderers");
+
+            if (failNoNat == 0 && s_prevInternalsRendererCount >= 40) s_internalsRetryLeft = 0;
+            else s_internalsNextRetryMs = nowMs + 1000;
+
+            Logger::Info("CarFX internals scan: isolated " + std::to_string(s_internalsClonedSrvList.size()) +
+                         " unique player D3D11 textures across " + std::to_string(rs.size()) +
+                         " renderers (createExt=" + std::to_string(pfnCreateExt != nullptr ? 1 : 0) +
+                         ", failNat=" + std::to_string(failNoNat) +
+                         ", failD3d=" + std::to_string(failD3d) +
+                         ", failCreate=" + std::to_string(failCreate) +
+                         ", failClone=" + std::to_string(failClone) +
+                         ", failUpd=" + std::to_string(failUpd) +
+                         ", retriesLeft=" + std::to_string(s_internalsRetryLeft) + ")");
+            CarFX::SetInternalsTextures(s_internalsClonedSrvList);
+        } else {
+            s_prevInternalsRendererCount = 0;
+            CarFX::SetInternalsTextures({});
         }
-        CarFX::SetInternalsTextures(intTex);
     }
 
     void* natAlb = nullptr;

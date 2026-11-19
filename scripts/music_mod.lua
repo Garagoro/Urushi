@@ -71,10 +71,10 @@ end
 local BAND_LABELS = { "Sub", "Bass", "LoM", "Mid", "HiM", "Pres", "Bril", "Air" }
 
 local function render_spectrum_bars(spec, avail_w)
-    -- Compact 8-band spectrum meter built from standard Urushi ui.progress_bar widgets
+    -- Clean 8-band spectrum meter without colliding text inside narrow pills
     local bands = 8
     local gap = 4.0
-    local bw = math.max(20.0, (avail_w - (bands - 1) * gap) / bands)
+    local bw = math.max(16.0, (avail_w - (bands - 1) * gap) / bands)
     for b = 1, bands do
         local s_idx = (b - 1) * 4 + 1
         local peak = 0.0
@@ -83,7 +83,7 @@ local function render_spectrum_bars(spec, avail_w)
             if v > peak then peak = v end
         end
         peak = math.max(0.0, math.min(1.0, peak))
-        ui.progress_bar(peak, bw, 14, BAND_LABELS[b])
+        ui.progress_bar(peak, bw, 8, "")
         if b < bands then
             ui.same_line(0, gap)
         end

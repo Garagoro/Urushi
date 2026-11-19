@@ -94,13 +94,15 @@ int GetStatus(lua_State* L) {
 
 int GetLevels(lua_State* L) {
     AudioCapture::Levels lv = AudioCapture::GetLevels();
-    lua_createtable(L, 0, 6);
+    lua_createtable(L, 0, 7);
     lua_pushnumber(L, lv.level);
     lua_setfield(L, -2, "level");
     lua_pushnumber(L, lv.bass);
     lua_setfield(L, -2, "bass");
     lua_pushnumber(L, lv.lowMid);
     lua_setfield(L, -2, "low_mid");
+    lua_pushnumber(L, lv.mid);
+    lua_setfield(L, -2, "mid");
     lua_pushnumber(L, lv.highMid);
     lua_setfield(L, -2, "high_mid");
     lua_pushnumber(L, lv.treble);

@@ -83,6 +83,7 @@ static void EvaluateCarSpatialTarget(
     bool hasVel, const float rawVel[3],
     bool hasCamPos, const UnityVector3& camPos,
     void* fnRaycast,
+    bool runWallProbes,
     float dt,
     const std::vector<VehicleOBBCandidate>& otherCars,
     CarSpatialTracker& tr)
@@ -115,7 +116,7 @@ static void EvaluateCarSpatialTarget(
         kZoneCount
     };
     RawZoneHit rawZones[kZoneCount];
-    {
+    if (runWallProbes) {
         const uint32_t dotsBelongs         = 0x100u;     // Layer 8: Player Car
         const uint32_t dotsCollidesStatic  = ~(0x100u | 0x200u | 0x400u | 0x800u | 0x1000u | 0x2000u | 0x20000u | 0x40000u | 0x800000u | 0x1000000u);
         const uint32_t dotsCollidesBarrier = 0x00010000u; // Car-only barrier walls (zero road asphalt)
@@ -619,6 +620,21 @@ static void EvaluateCarSpatialTarget(
 void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<LiveCarInfo>& liveSnapshot) {
     static CarSpatialTracker s_trackers[CarFX::kTargetCount]{};
     static std::chrono::steady_clock::time_point s_prevSpatTime{};
+    static bool s_hadActiveSpatial = false;
+
+    const bool needSpatial = CarFX::AnyTargetUsesSpatial();
+    const bool needWalls = CarFX::AnyTargetUsesWalls();
+    if (!needSpatial) {
+        if (s_hadActiveSpatial) {
+            s_hadActiveSpatial = false;
+            for (int t = 0; t < CarFX::kTargetCount; ++t) {
+                s_trackers[t].ResetSmooth();
+                CarFX::SetSpatialProximity(CarFX::SpatialProximityInput{}, t);
+            }
+        }
+        return;
+    }
+    s_hadActiveSpatial = true;
 
     auto nowTp = std::chrono::steady_clock::now();
     float dt = 0.016f;
@@ -801,7 +817,7 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
             CarFX::kTargetBody, -1,
             pPos, pRight, pUp, pFwd, halfW, halfH, halfL, frontAxleZ, rearAxleZ,
             hasPVel, pVel, hasCam, camPos, reinterpret_cast<void*>(pfn_InternalRaycast),
-            dt, allCars, s_trackers[CarFX::kTargetBody]);
+            needWalls, dt, allCars, s_trackers[CarFX::kTargetBody]);
     } else {
         CarFX::SetSpatialProximity(CarFX::SpatialProximityInput{}, CarFX::kTargetBody);
     }
@@ -813,6 +829,6 @@ void UnityBridge::UpdateCarFXSpatialProximityOnMainThread(const std::vector<Live
             gq.carfxTarget, 1000 + gq.slotIdx,
             gq.pos, gq.right, gq.up, gq.fwd, gq.halfW, gq.halfH, gq.halfL, gFrontAxleZ, gRearAxleZ,
             gq.hasVel, gq.vel, hasCam, camPos, reinterpret_cast<void*>(pfn_InternalRaycast),
-            dt, allCars, s_trackers[gq.carfxTarget]);
+            needWalls, dt, allCars, s_trackers[gq.carfxTarget]);
     }
 }

@@ -85,7 +85,7 @@ std::atomic<float> g_gain{ 1.0f };
 std::atomic<float> g_attack{ 0.65f };
 std::atomic<float> g_release{ 0.18f };
 
-// Activation completion handler for ActivateAudioInterfaceAsync
+// Activation completion handler for ActivateAudioInterfaceAsync (must support IAgileObject per Microsoft WASAPI loopback docs)
 class AudioActivationHandler : public IActivateAudioInterfaceCompletionHandler {
 public:
     AudioActivationHandler() : m_ref(1), m_hEvent(CreateEventW(nullptr, FALSE, FALSE, nullptr)) {}
@@ -96,7 +96,8 @@ public:
 
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
         if (!ppv) return E_POINTER;
-        if (riid == __uuidof(IUnknown) || riid == __uuidof(IActivateAudioInterfaceCompletionHandler)) {
+        static const IID kIidAgileObject = { 0x94ea2b94, 0xe9cc, 0x49e0, { 0xc0, 0xff, 0xee, 0x64, 0xca, 0x8f, 0x5b, 0x90 } };
+        if (riid == __uuidof(IUnknown) || riid == __uuidof(IActivateAudioInterfaceCompletionHandler) || riid == kIidAgileObject) {
             *ppv = static_cast<IActivateAudioInterfaceCompletionHandler*>(this);
             AddRef();
             return S_OK;
@@ -136,21 +137,28 @@ public:
     volatile LONG m_ref = 1;
 };
 
-// Helper: case-insensitive string equality
+// Helper: UTF-8 case-insensitive string equality (supports Cyrillic e.g. Яндекс Музыка.exe)
 bool EqualsIgnoreCase(const std::string& a, const std::string& b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        if (tolower(static_cast<unsigned char>(a[i])) != tolower(static_cast<unsigned char>(b[i]))) {
-            return false;
-        }
-    }
-    return true;
+    if (a.empty() && b.empty()) return true;
+    int waLen = MultiByteToWideChar(CP_UTF8, 0, a.c_str(), -1, nullptr, 0);
+    int wbLen = MultiByteToWideChar(CP_UTF8, 0, b.c_str(), -1, nullptr, 0);
+    if (waLen <= 0 || wbLen <= 0) return false;
+    std::wstring wa(static_cast<size_t>(waLen), L'\0');
+    std::wstring wb(static_cast<size_t>(wbLen), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, a.c_str(), -1, wa.data(), waLen);
+    MultiByteToWideChar(CP_UTF8, 0, b.c_str(), -1, wb.data(), wbLen);
+    return CompareStringOrdinal(wa.c_str(), -1, wb.c_str(), -1, TRUE) == CSTR_EQUAL;
 }
 
 std::string ToLower(const std::string& str) {
     std::string res = str;
     for (char& c : res) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
     return res;
+}
+
+bool SafeModeAllowsAudioCapture() {
+    SafeMode::Mode m = SafeMode::GetMode();
+    return m != SafeMode::Mode::Safe && m != SafeMode::Mode::AwaitingChoice;
 }
 
 PFN_ActivateAudioInterfaceAsync GetActivateAudioInterfaceAsync() {
@@ -240,7 +248,8 @@ DWORD FindPidForExe(const std::string& targetExe) {
         normTarget += ".exe";
     }
 
-    // 1. First check active audio sessions
+    // 1. First check audio sessions (prefer AudioSessionStateActive PIDs over inactive ones)
+    DWORD fallbackSessionPid = 0;
     IMMDeviceEnumerator* pEnum = nullptr;
     if (SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&pEnum)))) {
         IMMDevice* pDev = nullptr;
@@ -260,14 +269,19 @@ DWORD FindPidForExe(const std::string& targetExe) {
                                 pCtrl2->GetProcessId(&pid);
                                 if (pid > 0) {
                                     std::string exe = GetExeNameFromPid(pid);
-                                    if (EqualsIgnoreCase(ToLower(exe), normTarget)) {
-                                        pCtrl2->Release();
-                                        pCtrl->Release();
-                                        pSessions->Release();
-                                        pMgr->Release();
-                                        pDev->Release();
-                                        pEnum->Release();
-                                        return pid;
+                                    if (EqualsIgnoreCase(exe, normTarget)) {
+                                        AudioSessionState st = AudioSessionStateInactive;
+                                        pCtrl->GetState(&st);
+                                        if (st == AudioSessionStateActive) {
+                                            pCtrl2->Release();
+                                            pCtrl->Release();
+                                            pSessions->Release();
+                                            pMgr->Release();
+                                            pDev->Release();
+                                            pEnum->Release();
+                                            return pid;
+                                        }
+                                        if (fallbackSessionPid == 0) fallbackSessionPid = pid;
                                     }
                                 }
                                 pCtrl2->Release();
@@ -283,6 +297,7 @@ DWORD FindPidForExe(const std::string& targetExe) {
         }
         pEnum->Release();
     }
+    if (fallbackSessionPid > 0) return fallbackSessionPid;
 
     // 2. Fallback: check running processes snapshot
     HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -459,12 +474,23 @@ DWORD WINAPI AudioCaptureThread(LPVOID) {
 
             IActivateAudioInterfaceAsyncOperation* pAsyncOp = nullptr;
             HRESULT hrAct = pfnActivate(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, __uuidof(IAudioClient), &activateParams, handler, &pAsyncOp);
+            DWORD waitRes = WAIT_FAILED;
             if (SUCCEEDED(hrAct)) {
-                WaitForSingleObject(handler->m_hEvent, 2000);
-                if (SUCCEEDED(handler->m_hr) && handler->m_client) {
+                waitRes = WaitForSingleObject(handler->m_hEvent, 2000);
+                if (waitRes == WAIT_OBJECT_0 && SUCCEEDED(handler->m_hr) && handler->m_client) {
                     pAudioClient = handler->m_client;
                     pAudioClient->AddRef();
                 }
+            }
+
+            if (!pAudioClient) {
+                char msg[160];
+                _snprintf_s(msg, sizeof(msg), _TRUNCATE,
+                            "AudioCapture: process loopback attach failed pid=%lu hrAct=0x%08lX wait=%lu m_hr=0x%08lX client=%p",
+                            static_cast<unsigned long>(targetPid), static_cast<unsigned long>(hrAct),
+                            static_cast<unsigned long>(waitRes), static_cast<unsigned long>(handler->m_hr),
+                            handler->m_client);
+                Logger::Warn(msg);
             }
 
             if (pAsyncOp) pAsyncOp->Release();
@@ -479,32 +505,56 @@ DWORD WINAPI AudioCaptureThread(LPVOID) {
         }
 
         WAVEFORMATEX* pwfx = nullptr;
+        bool freeWfx = false;
+        WAVEFORMATEX manualWfx = {};
         HRESULT hr = pAudioClient->GetMixFormat(&pwfx);
-        if (FAILED(hr) || !pwfx) {
-            pAudioClient->Release();
-            if (hTargetProcess) CloseHandle(hTargetProcess);
-            UpdateStatus("error", "Failed to retrieve audio format");
-            WaitForSingleObject(g_hWakeEvent, 1000);
-            continue;
+        if (SUCCEEDED(hr) && pwfx) {
+            freeWfx = true;
+        } else {
+            // Virtual Process Loopback does not implement GetMixFormat (returns E_NOTIMPL);
+            // specify standard stereo PCM/Float format per Microsoft ApplicationLoopback spec.
+            manualWfx.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
+            manualWfx.nChannels = 2;
+            manualWfx.nSamplesPerSec = 48000;
+            manualWfx.wBitsPerSample = 32;
+            manualWfx.nBlockAlign = manualWfx.nChannels * manualWfx.wBitsPerSample / 8;
+            manualWfx.nAvgBytesPerSec = manualWfx.nSamplesPerSec * manualWfx.nBlockAlign;
+            manualWfx.cbSize = 0;
+            pwfx = &manualWfx;
         }
 
         const DWORD sampleRate = pwfx->nSamplesPerSec > 0 ? pwfx->nSamplesPerSec : 48000;
         constexpr REFERENCE_TIME kBufferDuration = 1000000; // 100 ms
 
         hr = pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, kBufferDuration, 0, pwfx, nullptr);
+        if (FAILED(hr) && !freeWfx) {
+            // Fallback to 16-bit PCM 44100Hz stereo if IEEE_FLOAT wasn't accepted by process loopback
+            manualWfx.wFormatTag = WAVE_FORMAT_PCM;
+            manualWfx.nChannels = 2;
+            manualWfx.nSamplesPerSec = 44100;
+            manualWfx.wBitsPerSample = 16;
+            manualWfx.nBlockAlign = manualWfx.nChannels * manualWfx.wBitsPerSample / 8;
+            manualWfx.nAvgBytesPerSec = manualWfx.nSamplesPerSec * manualWfx.nBlockAlign;
+            hr = pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, kBufferDuration, 0, pwfx, nullptr);
+        }
         if (FAILED(hr)) {
-            CoTaskMemFree(pwfx);
+            if (freeWfx) CoTaskMemFree(pwfx);
             pAudioClient->Release();
             if (hTargetProcess) CloseHandle(hTargetProcess);
-            UpdateStatus("error", "Failed to initialize audio client");
+            char hrBuf[64];
+            sprintf_s(hrBuf, "Failed to init audio client (0x%08lX)", static_cast<unsigned long>(hr));
+            UpdateStatus("error", hrBuf);
+            Logger::Warn(std::string("AudioCapture: ") + hrBuf);
             WaitForSingleObject(g_hWakeEvent, 1000);
             continue;
         }
 
+        const DWORD activeSampleRate = pwfx->nSamplesPerSec > 0 ? pwfx->nSamplesPerSec : 48000;
+
         IAudioCaptureClient* pCapture = nullptr;
         hr = pAudioClient->GetService(IID_PPV_ARGS(&pCapture));
         if (FAILED(hr) || !pCapture) {
-            CoTaskMemFree(pwfx);
+            if (freeWfx) CoTaskMemFree(pwfx);
             pAudioClient->Release();
             if (hTargetProcess) CloseHandle(hTargetProcess);
             UpdateStatus("error", "Failed to obtain capture client");
@@ -515,7 +565,7 @@ DWORD WINAPI AudioCaptureThread(LPVOID) {
         hr = pAudioClient->Start();
         if (FAILED(hr)) {
             pCapture->Release();
-            CoTaskMemFree(pwfx);
+            if (freeWfx) CoTaskMemFree(pwfx);
             pAudioClient->Release();
             if (hTargetProcess) CloseHandle(hTargetProcess);
             UpdateStatus("error", "Failed to start capture stream");
@@ -638,7 +688,7 @@ DWORD WINAPI AudioCaptureThread(LPVOID) {
                     mag[i] = (2.0f / static_cast<float>(kFftSize)) * sqrtf(fftRe[i] * fftRe[i] + fftIm[i] * fftIm[i]);
                 }
 
-                const float binWidth = static_cast<float>(sampleRate) / static_cast<float>(kFftSize);
+                const float binWidth = static_cast<float>(activeSampleRate) / static_cast<float>(kFftSize);
 
                 // Calculate raw energy bands
                 auto computeBandEnergy = [&](float minF, float maxF) -> float {
@@ -753,7 +803,7 @@ DWORD WINAPI AudioCaptureThread(LPVOID) {
         // Clean up current audio stream
         pAudioClient->Stop();
         pCapture->Release();
-        CoTaskMemFree(pwfx);
+        if (freeWfx) CoTaskMemFree(pwfx);
         pAudioClient->Release();
         if (hTargetProcess) {
             CloseHandle(hTargetProcess);
@@ -783,7 +833,7 @@ DWORD WINAPI AudioCaptureThread(LPVOID) {
 void Init() {
     if (g_initialized.exchange(true)) return;
 
-    if (!SafeMode::IsFull()) {
+    if (!SafeModeAllowsAudioCapture()) {
         Logger::Info("AudioCapture: Safe mode active, capture disabled.");
         return;
     }
@@ -970,7 +1020,7 @@ std::string GetSource() {
 }
 
 void SetEnabled(bool enabled) {
-    if (!SafeMode::IsFull() && enabled) return;
+    if (!SafeModeAllowsAudioCapture() && enabled) return;
 
     g_enabled.store(enabled, std::memory_order_release);
     if (!enabled) {
