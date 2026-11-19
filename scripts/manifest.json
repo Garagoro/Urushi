@@ -80,8 +80,8 @@
     {
       "id": "replay_mod",
       "path": "scripts/replay_mod.lua",
-      "sha256": "8ec1eebe42dfbc774c3d06eeb1daa6671359341334e02fd3a921382b3ebf6f39",
-      "size": 35097,
+      "sha256": "52184eae0470b365d40aa7677fe5e31f535b9e5573d14992aed128da2dd3d714",
+      "size": 35096,
       "name": "Replays & Anti-Collision",
       "name_ru": "Реплеи и Анти-встречка",
       "description": "3D trajectory replay, ghost car and TTC anti-collision defense",

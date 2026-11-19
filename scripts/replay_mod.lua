@@ -35,11 +35,11 @@ local ghost_settings = {
     enabled = true,
     anti_wrong_way = true,
     show_hud_alert = true,
-    min_speed_kmh = 10.0,
-    dot_threshold = -0.25,
-    max_distance = 150.0,
-    max_ttc_sec = 2.5,
-    safe_mode_duration_sec = 2.0,
+    min_speed_kmh = 15.0,
+    dot_threshold = -0.35,
+    max_distance = 40.0,
+    max_ttc_sec = 1.2,
+    safe_mode_duration_sec = 1.5,
     ghost_stopped_cars = false,
 }
 if config and config.bind then

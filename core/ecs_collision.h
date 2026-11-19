@@ -14,13 +14,13 @@ enum class CarGhostOverride : int {
 struct SelectiveGhostConfig {
     bool enabled = false;
     bool antiWrongWay = true;
-    float minSpeedKmh = 10.0f;
-    float dotThreshold = -0.25f;
-    float maxDistanceMeters = 150.0f;
-    float maxTtcSec = 2.5f;           // Max Time-To-Collision in seconds (0 = disable TTC check)
+    float minSpeedKmh = 15.0f;
+    float dotThreshold = -0.35f;
+    float maxDistanceMeters = 40.0f;
+    float maxTtcSec = 1.2f;           // Max Time-To-Collision in seconds (0 = disable TTC check)
     bool ghostStoppedCars = false;    // Auto-ghost obstacle/AFK cars stopped on track
     float stoppedSpeedKmh = 3.0f;     // Threshold to consider an obstacle car stopped
-    float safeModeDurationSec = 2.0f; // Native Network SafeMode duration in seconds
+    float safeModeDurationSec = 1.5f; // Native Network SafeMode duration in seconds
     bool showHudAlert = true;
 };
 
