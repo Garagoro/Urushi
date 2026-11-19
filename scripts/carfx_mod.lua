@@ -20,7 +20,6 @@ local cfx_settings = {
     internals_enabled = true,
     mode = 0,
     internals_mode = 0,
-    stealth = 0,
     selected_shader = "livery_holo.hlsl",
     internals_shader = "internals_neon.hlsl",
     parts = {
@@ -62,9 +61,8 @@ if type(cfx_settings.tex_paths) ~= "table" then cfx_settings.tex_paths = {} end
 if type(cfx_settings.internals_tex_paths) ~= "table" then cfx_settings.internals_tex_paths = {} end
 
 local state = {
-    tab = 1, -- 1: Body, 2: Internals, 3: Sensors & Extra
+    tab = 1, -- 1: Body, 2: Internals
     shaders = {},
-    custom_path = "",
     tex_inputs = { [0] = { [0] = "", [1] = "", [2] = "", [3] = "" }, [1] = { [0] = "", [1] = "", [2] = "", [3] = "" } },
     status_msg = { [0] = "", [1] = "" },
     status_tone = { [0] = "muted", [1] = "muted" },
@@ -164,7 +162,6 @@ local function load_shader_for_target(target, filename, skip_save_config)
         if not skip_save_config then
             if target == 0 then
                 cfx_settings.selected_shader = filename
-                state.custom_path = filename
             else
                 cfx_settings.internals_shader = filename
             end
@@ -188,17 +185,11 @@ local function try_restore_carfx()
         carfx.set_mode(cfx_settings.mode or 0, 0)
         carfx.set_mode(cfx_settings.internals_mode or 0, 1)
     end
-    if carfx.set_stealth and cfx_settings.stealth ~= nil then
-        local st_val = cfx_settings.stealth
-        if type(st_val) == "boolean" then st_val = st_val and 1 or 0 end
-        carfx.set_stealth(st_val, 0)
-    end
     if carfx.set_parts and type(cfx_settings.parts) == "table" then
         carfx.set_parts(cfx_settings.parts)
     end
 
     if cfx_settings.selected_shader and cfx_settings.selected_shader ~= "" then
-        state.custom_path = cfx_settings.selected_shader
         local ok, err = load_shader_for_target(0, cfx_settings.selected_shader, true)
         if not ok then
             log.warn("CarFX body shader auto-load failed: " .. tostring(err))
@@ -344,7 +335,7 @@ end
 
 local function render_shader_textures(target, st)
     if not (st.textures and #st.textures > 0) then return end
-    ui.card(T("Текстуры (@tex)", "Textures (@tex)"), nil, function()
+    ui.card(T("Текстуры шейдера", "Shader Textures"), nil, function()
         local bw = (ui.avail_width() - 8) * 0.5
         local id_sfx = string.format("t%d", target)
         local tex_store = get_tex_store(target)
@@ -353,9 +344,9 @@ local function render_shader_textures(target, st)
             local slot = tx.slot or 0
             local lbl = (tx.desc and tx.desc ~= "") and tx.desc or tx.name
             local cur_path = state.tex_inputs[target][slot] or ""
-            local tch, np = ui.input_text(string.format("%s (t%d)##cfx_tx_%s_%d", lbl, 33 + slot, id_sfx, slot), cur_path, 256)
+            local tch, np = ui.input_text(string.format("%s##cfx_tx_%s_%d", lbl, id_sfx, slot), cur_path, 256)
             if tch then state.tex_inputs[target][slot] = np end
-            if ui.button(T("Задать##cfx_tx_s_", "Apply##cfx_tx_s_") .. id_sfx .. "_" .. slot, bw, 24, "primary") then
+            if ui.button(T("Применить##cfx_tx_s_", "Apply##cfx_tx_s_") .. id_sfx .. "_" .. slot, bw, 24, "primary") then
                 local p = state.tex_inputs[target][slot] or ""
                 local ok, err = carfx.set_tex(slot, p, target)
                 if not ok then
@@ -417,7 +408,6 @@ local function render_shader_picker_and_modes(target, st, is_body)
         ui.spacing(4)
         if #state.shaders == 0 then refresh_shader_list() end
 
-        -- Dropdown with "(none)" option
         local names = { T("(не выбран)", "(none)") }
         local cur_idx = 1
         for _, name in ipairs(state.shaders) do
@@ -426,7 +416,7 @@ local function render_shader_picker_and_modes(target, st, is_body)
                 cur_idx = #names
             end
         end
-        local c_ch, new_idx = ui.combo(T("Шейдер .hlsl##cfx_cmb_", "Shader (.hlsl)##cfx_cmb_") .. id_sfx, cur_idx, names)
+        local c_ch, new_idx = ui.combo(T("Выбор шейдера##cfx_cmb_", "Shader Preset##cfx_cmb_") .. id_sfx, cur_idx, names)
         if c_ch then
             if new_idx == 1 then
                 load_shader_for_target(target, "")
@@ -440,15 +430,19 @@ local function render_shader_picker_and_modes(target, st, is_body)
         end
 
         ui.spacing(2)
-        local bw = (ui.avail_width() - 6) * 0.5
-        if ui.button(T("Перезагрузить##cfx_rel_", "Reload Shader##cfx_rel_") .. id_sfx, bw, 26) then
+        local bw = (ui.avail_width() - 12) / 3.0
+        if ui.button(T("Перезагрузить##cfx_rel_", "Reload##cfx_rel_") .. id_sfx, bw, 26) then
             local ok, err = carfx.reload(target)
             state.status_msg[target] = ok and "" or tostring(err)
             state.status_tone[target] = ok and "muted" or "red"
             if ok then apply_saved_params_for_target(target, short_name) end
         end
         ui.same_line(0, 6)
-        if ui.button(T("Снять шейдер##cfx_clr_", "Clear Shader##cfx_clr_") .. id_sfx, bw, 26, "danger") then
+        if ui.button(T("Обновить список##cfx_ref_", "Refresh List##cfx_ref_") .. id_sfx, bw, 26, "ghost") then
+            refresh_shader_list()
+        end
+        ui.same_line(0, 6)
+        if ui.button(T("Снять##cfx_clr_", "Clear##cfx_clr_") .. id_sfx, bw, 26, "danger") then
             load_shader_for_target(target, "")
         end
 
@@ -462,15 +456,18 @@ local function render_shader_picker_and_modes(target, st, is_body)
             if config then config.mark_dirty() end
         end
 
-        if is_body and carfx.set_stealth then
-            ui.spacing(2)
-            ui.text_dim(T("Прозрачность кузова (@stealth)", "Body Stealth Mode"))
-            local cur_s = (st.active_stealth or 0) + 1
-            local s_ch, new_s = ui.segmented("cfx_stealth_0", cur_s, T({ "Авто", "Стекло", "Невидимка" }, { "Auto", "Glass", "Stealth" }))
-            if s_ch then
-                carfx.set_stealth(new_s - 1, 0)
-                cfx_settings.stealth = new_s - 1
-                if config then config.mark_dirty() end
+        if short_name == "livery_music.hlsl" and audio_in and audio_in.is_enabled then
+            ui.spacing(6)
+            local audio_on = audio_in.is_enabled()
+            local a_ch, new_a = ui.toggle(T("Захват музыки для шейдера##cfx_m_q_" .. id_sfx, "Capture Music Audio##cfx_m_q_" .. id_sfx), audio_on)
+            if a_ch then
+                audio_in.set_enabled(new_a)
+                if config then config.set("music", "enabled", new_a) end
+            end
+            if urushi and urushi.set_window_open then
+                if ui.button(T("Открыть настройки музыки##cfx_m_o_" .. id_sfx, "Open Music Settings##cfx_m_o_" .. id_sfx), ui.avail_width(), 24, "ghost") then
+                    urushi.set_window_open("music", true)
+                end
             end
         end
 
@@ -486,12 +483,11 @@ end
 
 local function render_internals_parts_card()
     if not (carfx and carfx.get_parts and carfx.set_parts) then return end
-    ui.card(T("К каким частям применять", "Target Parts Filter"), T("Изолировано только на вашем авто (чужие авто не задевает)", "Isolated strictly to your local car"), function()
+    ui.card(T("К каким частям применять", "Target Parts Filter"), T("Работает только на вашем авто", "Applies only to your car"), function()
         local parts = carfx.get_parts()
         local avail = ui.avail_width()
         local col_w = (avail - 6.0) * 0.5
 
-        -- Quick presets row
         local pw = (avail - 12.0) / 3.0
         if ui.button(T("Только салон##cfx_pr_cab", "Cabin Only##cfx_pr_cab"), pw, 24, "ghost") then
             local p = { engine = false, suspension = false, brakes = false, wheels = false, tires = false, lights = false, glass = false, interior = true }
@@ -500,7 +496,7 @@ local function render_internals_parts_card()
             if config then config.mark_dirty() end
         end
         ui.same_line(0, 6)
-        if ui.button(T("Детали (станд.)##cfx_pr_def", "Default Parts##cfx_pr_def"), pw, 24, "ghost") then
+        if ui.button(T("Стандарт##cfx_pr_def", "Default##cfx_pr_def"), pw, 24, "ghost") then
             local p = { engine = true, suspension = true, brakes = true, wheels = true, tires = false, lights = true, glass = false, interior = true }
             carfx.set_parts(p)
             cfx_settings.parts = carfx.get_parts()
@@ -547,13 +543,10 @@ local function render_carfx_window()
 
     local st0 = carfx.get_status(0)
     local st1 = carfx.get_status(1)
-
-    -- Keep body combo synced if music_mod/initiald_mod changed slot 0
     local short0 = short_shader_name(st0.shader_path)
     local short1 = short_shader_name(st1.shader_path)
 
-    -- Top navigation tabs
-    local tab_ch, new_tab = ui.segmented("cfx_nav_tabs", state.tab, T({ "Кузов", "Салон и детали", "Сенсоры" }, { "Body", "Internals", "Sensors" }))
+    local tab_ch, new_tab = ui.segmented("cfx_nav_tabs", state.tab, T({ "Кузов", "Салон и детали" }, { "Body", "Internals" }))
     if tab_ch then
         state.tab = new_tab
     end
@@ -563,94 +556,11 @@ local function render_carfx_window()
         render_shader_picker_and_modes(0, st0, true)
         render_shader_params(0, st0, short0)
         render_shader_textures(0, st0)
-
-    elseif state.tab == 2 then
+    else
         render_shader_picker_and_modes(1, st1, false)
         render_internals_parts_card()
         render_shader_params(1, st1, short1)
         render_shader_textures(1, st1)
-
-    else
-        if audio_in and audio_in.is_enabled then
-            local audio_on = audio_in.is_enabled()
-            local a_st, a_txt = audio_in.get_status()
-            ui.card(T("Музыкальная реактивность", "Music Reactivity"), nil, function()
-                local a_ch, new_a = ui.toggle(T("Захват звука для шейдеров##cfx_m_en", "Audio Capture for Shaders##cfx_m_en"), audio_on)
-                if a_ch then
-                    audio_in.set_enabled(new_a)
-                    if config then config.set("music", "enabled", new_a) end
-                end
-                ui.same_line(0, 10)
-                ui.badge(audio_on and (a_st == "capturing" and T("Активно", "Capturing") or T("Ожидание", "Waiting")) or T("Выкл", "Off"),
-                         audio_on and (a_st == "capturing" and "green" or "yellow") or "muted")
-                if a_txt and a_txt ~= "" then
-                    ui.spacing(2)
-                    ui.text_dim(a_txt)
-                end
-                ui.spacing(4)
-                if ui.button(T("Открыть окно настройки музыки##cfx_open_m", "Open Music Controls##cfx_open_m"), ui.avail_width(), 26, "ghost") then
-                    if urushi and urushi.set_window_open then urushi.set_window_open("music", true) end
-                end
-            end)
-        end
-
-        ui.card(T("Свой файл .hlsl", "Custom Shader File"), nil, function()
-            local p_ch, new_p = ui.input_text(T("Путь .hlsl##cfx_path", "Path (.hlsl)##cfx_path"), state.custom_path, 256)
-            if p_ch then state.custom_path = new_p end
-            local bw = (ui.avail_width() - 6.0) * 0.5
-            if ui.button(T("Загрузить на кузов##cfx_c_b", "Load on Body##cfx_c_b"), bw, 26, "primary") then
-                if state.custom_path ~= "" then
-                    load_shader_for_target(0, state.custom_path)
-                    cfx_settings.body_enabled = true
-                    apply_master_enable()
-                end
-            end
-            ui.same_line(0, 6)
-            if ui.button(T("На салон/детали##cfx_c_i", "Load on Internals##cfx_c_i"), bw, 26, "ghost") then
-                if state.custom_path ~= "" then
-                    load_shader_for_target(1, state.custom_path)
-                    cfx_settings.internals_enabled = true
-                    apply_master_enable()
-                end
-            end
-            ui.spacing(2)
-            if ui.button(T("Обновить список шейдеров##cfx_ref", "Refresh Shader List##cfx_ref"), ui.avail_width(), 24, "ghost") then
-                refresh_shader_list()
-            end
-        end)
-
-        ui.card(T("Датчики и диагностика DX11", "Sensors & DX11 Diagnostics"), nil, function()
-            local init_ok = st0.initialized and st0.hooked_draw
-            if carfx.get_spatial then
-                local sp = carfx.get_spatial()
-                if sp and sp.car_fwd and (sp.car_fwd.valid or 0) > 0.5 then
-                    local fmt_d = function(v)
-                        return (v and v < 900.0) and string.format("%.2fm", v) or "—"
-                    end
-                    ui.text(string.format(T("Стены Пер/Зад: %s / %s | Угол: %.1f°", "Walls F/R: %s / %s | Drift: %.1f°"),
-                        fmt_d(sp.wall_front), fmt_d(sp.wall_rear), sp.drift_deg or 0.0))
-                    ui.text(string.format(T("Лево: %s / %s / %s | Право: %s / %s / %s", "Left: %s / %s / %s | Right: %s / %s / %s"),
-                        fmt_d(sp.wall_front_left), fmt_d(sp.wall_door_left), fmt_d(sp.wall_rear_left),
-                        fmt_d(sp.wall_front_right), fmt_d(sp.wall_door_right), fmt_d(sp.wall_rear_right)))
-                    local near_gap = sp.near_car_pos and sp.near_car_pos.gap or 999.0
-                    if near_gap < 900.0 then
-                        ui.text_dim(string.format(T("Ближайшее авто: %.2f м", "Nearest car: %.2f m"), near_gap))
-                    end
-                    ui.separator()
-                end
-            end
-
-            ui.text_dim(string.format("DX11=%s | Body=%d | Internals=%d / %d | RT=%dx%d",
-                init_ok and "OK" or "WAIT",
-                st0.matched_last_frame or 0,
-                st1.matched_last_frame or 0,
-                st0.total_draws or 0,
-                st0.last_rt_w or 0, st0.last_rt_h or 0))
-            if st0.body_valid and st0.body_albedo_default then
-                ui.text_wrapped(T("Кузов без винила: активна изоляция PackedMap (только ваша машина).",
-                                  "No-vinyl body: isolated PackedMap active (local car only)."), "muted")
-            end
-        end)
     end
 end
 
