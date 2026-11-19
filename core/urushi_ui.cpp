@@ -38,15 +38,8 @@ AccentDef g_customAccentDef = {
     IM_COL32(76, 199, 245, 40),
     IM_COL32(76, 199, 245, 102)
 };
-static UrushiUI::Language DetectInitialLanguage() {
-    LANGID langId = GetUserDefaultUILanguage();
-    WORD primary = PRIMARYLANGID(langId);
-    if (primary == LANG_RUSSIAN || primary == LANG_UKRAINIAN || primary == LANG_BELARUSIAN || primary == 0x3f) {
-        return UrushiUI::Language::Russian;
-    }
-    return UrushiUI::Language::English;
-}
-UrushiUI::Language g_language = DetectInitialLanguage();
+UrushiUI::Language g_language = UrushiUI::Language::English;
+bool g_langHintActive = false;
 bool g_singleTabMode = false;
 
 // UI Element Introspection & Config Auto-Discovery
@@ -232,6 +225,12 @@ void ApplyThemeMetrics(float S) {
 void UrushiUI::Init() {
     std::lock_guard<std::recursive_mutex> lock(g_mutex);
     ApplyBaseTheme();
+    if (!Settings::GetBool("ui", "lang_hint_seen", false)) {
+        g_langHintActive = true;
+        Settings::SetBool("ui", "lang_hint_seen", true);
+    } else {
+        g_langHintActive = false;
+    }
 }
 
 void UrushiUI::Shutdown() {
@@ -505,8 +504,10 @@ void UrushiUI::ToggleLanguage() {
 void UrushiUI::SetLanguage(Language lang, bool notifyLua) {
     {
         std::lock_guard<std::recursive_mutex> lock(g_mutex);
+        if (notifyLua) g_langHintActive = false;
         if (g_language == lang) return;
         g_language = lang;
+        g_langHintActive = false;
     }
     if (notifyLua) {
         std::string out, err;

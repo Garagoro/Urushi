@@ -52,6 +52,7 @@ local function render_welcome_window()
 
     if #missing > 0 or is_downloading or is_failed then
         ui.begin_card(T("Официальные скрипты и шейдеры", "Official Scripts & Shaders"), nil)
+        local cw = ui.avail_width()
 
         if is_downloading then
             local cur_n = pst.downloaded_files or 0
@@ -66,22 +67,22 @@ local function render_welcome_window()
             ui.spacing(2)
 
             local frac = (tot_n > 0) and (cur_n / tot_n) or 0.0
-            ui.progress_bar(frac, w, 8)
+            ui.progress_bar(frac, cw, 8)
             ui.spacing(2)
             ui.text_dim(T("Файл: ", "File: ") .. cur_f)
 
         elseif is_failed then
-            ui.text_colored(1.0, 0.35, 0.35, 1.0, T("Ошибка скачивания: ", "Download error: ") .. tostring(pst.error))
+            ui.text_wrapped(T("Ошибка скачивания: ", "Download error: ") .. tostring(pst.error), "red")
             ui.spacing(3)
 
-            if ui.button(T("Повторить попытку##welc_retry", "Retry##welc_retry"), w, 28, "primary") then
+            if ui.button(T("Повторить попытку##welc_retry", "Retry##welc_retry"), cw, 28, "primary") then
                 if cloud and cloud.download_pack then
                     cloud.download_pack()
                 end
             end
             ui.spacing(3)
 
-            ui.text_dim(T("Вы можете скачать полный архив с GitHub Releases:", "You can download the full package from GitHub Releases:"))
+            ui.text_wrapped(T("Вы можете скачать полный архив с GitHub Releases:", "You can download the full package from GitHub Releases:"), "muted")
             local gh_url = "https://github.com/Garagoro/Urushi/releases/latest"
             ui.input_text("##welc_gh_url", gh_url)
 
@@ -96,14 +97,14 @@ local function render_welcome_window()
 
             local btn_text = T(string.format("Установить официальный пак (%d)##welc_dl", #missing),
                                string.format("Install Official Pack (%d)##welc_dl", #missing))
-            if ui.button(btn_text, w, 30, "primary") then
+            if ui.button(btn_text, cw, 30, "primary") then
                 if cloud and cloud.download_pack then
                     cloud.download_pack()
                 end
             end
             ui.spacing(2)
 
-            if ui.button(T("Выберу сам (открыть Скрипты)##welc_skip", "I'll pick myself (open Scripts)##welc_skip"), w, 24, "ghost") then
+            if ui.button(T("Выберу сам (открыть Скрипты)##welc_skip", "I'll pick myself (open Scripts)##welc_skip"), cw, 24, "ghost") then
                 if urushi.set_window_open then
                     urushi.set_window_open("library", true)
                     urushi.set_window_open("welcome", false)
