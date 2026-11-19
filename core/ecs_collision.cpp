@@ -1,5 +1,6 @@
 #include "ecs_collision.h"
 #include "ecs_collision_internal.h"
+#include "network_safemode.h"
 #include "unity_bridge.h"
 #include "native_carx.h"
 #include "logger.h"
@@ -320,6 +321,7 @@ std::vector<CarGhostState> EcsCollision::GetCarStates() {
 
 void EcsCollision::UpdateOnMainThread(float dt, const std::vector<LiveCarInfo>& liveCars) {
     if (!UnityBridge::IsOnMainThread()) return;
+    NetworkSafeMode::TickOnMainThread();
 
     std::lock_guard<std::recursive_mutex> lock(g_mutex);
     if (!NativeCarX::IsInSession()) {
@@ -551,46 +553,24 @@ void EcsCollision::UpdateOnMainThread(float dt, const std::vector<LiveCarInfo>& 
             st.isWrongWay = rawWrongWay;
 
             bool shouldGhost = false;
-            if (s_config.enabled) {
-                if (st.overrideMode == CarGhostOverride::ForceGhost) {
-                    shouldGhost = true;
-                } else if (st.overrideMode == CarGhostOverride::ForceSolid) {
-                    shouldGhost = false;
-                } else {
-                    shouldGhost = latchedWrongWay;
-                }
+            if (s_config.enabled && s_config.antiWrongWay) {
+                shouldGhost = latchedWrongWay;
             }
-
-            if (base) {
-                if (shouldGhost) {
-                    if ((base->origParent.belongsTo & playerBelongs) == 0) {
-                        ApplyBitmaskGhost(*base, playerBelongs);
-                    } else {
-                        ApplyGroupIndexGhost(*base);
-                        needPlayerGroupIndex = true;
-                    }
-                    st.isSelectivelyGhosted = true;
-                } else {
-                    RestoreBaseline(*base);
-                    st.isSelectivelyGhosted = false;
-                }
+            if (shouldGhost) {
+                st.isSelectivelyGhosted = true;
+                needPlayerGroupIndex = true; // reused as anyDanger flag for native NetworkSafeMode
+            } else {
+                st.isSelectivelyGhosted = false;
             }
         }
 
-        if (base) {
-            CollisionFilter curP = base->origParent;
-            SafeRead(reinterpret_cast<uintptr_t>(base->blobPtr) + 0x08, curP);
-            st.colliderBelongsTo = curP.belongsTo;
-            st.colliderCollidesWith = curP.collidesWith;
-            st.colliderGroupIndex = curP.groupIndex;
-        }
         states.push_back(std::move(st));
     }
 
     if (needPlayerGroupIndex && s_config.enabled) {
-        ApplyGroupIndexGhost(*playerBase);
-    } else {
-        RestoreBaseline(*playerBase);
+        const int durMs = static_cast<int>(std::clamp(s_config.safeModeDurationSec, 0.5f, 10.0f) * 1000.0f);
+        NetworkSafeMode::Trigger(durMs, false);
+        NetworkSafeMode::TickOnMainThread();
     }
 
     s_latestStates = std::move(states);

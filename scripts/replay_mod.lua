@@ -39,6 +39,7 @@ local ghost_settings = {
     dot_threshold = -0.25,
     max_distance = 150.0,
     max_ttc_sec = 2.5,
+    safe_mode_duration_sec = 2.0,
     ghost_stopped_cars = false,
 }
 if config and config.bind then
@@ -682,11 +683,33 @@ local function render_replay_window()
 end
 
 local function render_anticollision_window()
-    ui.card(T("Выборочная коллизия", "Selective Collision"), nil, function()
+    local sm = (carx and carx.get_safemode_status) and carx.get_safemode_status() or { hooks_ok = false, in_lobby = false, active = false, triggers = 0 }
+
+    ui.card(T("Анти-встречка (SafeMode)", "Anti-Wrong-Way (SafeMode)"), T("Штатная сетевая полупрозрачность для всего лобби", "Native network SafeMode ghosting for the whole lobby"), function()
+        ui.stat_row({
+            {
+                label = T("Онлайн-лобби", "Online Lobby"),
+                value = sm.in_lobby and T("Готов", "Ready") or T("Оффлайн", "Offline"),
+                tone = sm.in_lobby and "green" or "muted",
+            },
+            {
+                label = "SafeMode",
+                value = sm.active and T("АКТИВЕН", "ACTIVE") or T("Ожидание", "Standby"),
+                tone = sm.active and "accent" or "muted",
+            },
+            {
+                label = T("Сработок", "Triggers"),
+                value = tostring(sm.triggers or 0),
+                tone = "muted",
+            },
+        })
+        ui.spacing(4)
+
         local anti_name = (keybinds and keybinds.get and keybinds.get("anticollision").name) or "J"
         local en_ch, en_val = ui.toggle(string.format(T("Включить Анти-встречку [%s]##sg_en", "Enable Anti-Wrong-Way [%s]##sg_en"), anti_name), state.ghost_cfg.enabled)
         if en_ch then
             state.ghost_cfg.enabled = en_val
+            state.ghost_cfg.anti_wrong_way = true
             sync_selective_ghost_cfg()
         end
 
@@ -695,18 +718,32 @@ local function render_anticollision_window()
             ui.spacing(2)
         end
 
-        local aww_ch, aww_val = ui.toggle(T("Авто-призрак встречных##sg_aww", "Auto-Ghost Wrong-Way##sg_aww"), state.ghost_cfg.anti_wrong_way)
-        if aww_ch then
-            state.ghost_cfg.anti_wrong_way = aww_val
-            sync_selective_ghost_cfg()
-        end
-
         local hud_ch, hud_val = ui.toggle(T("Радар на экране##sg_hud", "On-Screen Radar##sg_hud"), state.ghost_cfg.show_hud_alert)
         if hud_ch then
             state.ghost_cfg.show_hud_alert = hud_val
             sync_selective_ghost_cfg()
         end
 
+        local sd_ch, sd_val = ui.slider_float(
+            T("Длительность SafeMode##sg_smdur", "SafeMode Duration##sg_smdur"),
+            state.ghost_cfg.safe_mode_duration_sec or 2.0, 0.8, 5.0, T("%.1f сек", "%.1f sec"))
+        if sd_ch then
+            state.ghost_cfg.safe_mode_duration_sec = sd_val
+            sync_selective_ghost_cfg()
+        end
+
+        ui.spacing(3)
+        if carx and carx.test_safemode then
+            local dur_ms = math.floor((state.ghost_cfg.safe_mode_duration_sec or 2.0) * 1000)
+            local lbl = sm.in_lobby
+                and string.format(T("Тест SafeMode (%.1f сек)##sg_test_sm", "Test SafeMode (%.1f sec)##sg_test_sm"), dur_ms / 1000.0)
+                or  T("Тест SafeMode (зайдите в онлайн-лобби)##sg_test_sm", "Test SafeMode (join online lobby)##sg_test_sm")
+            if ui.button(lbl, ui.avail_width(), 26, sm.in_lobby and "primary" or "ghost") and sm.in_lobby then
+                carx.test_safemode(dur_ms)
+            end
+        end
+
+        ui.spacing(2)
         if ui.collapsing(T("Параметры детектора##sg_det", "Detector Settings##sg_det"), false) then
             local s0, v0 = ui.slider_float(T("Время до удара (TTC)##sg_ttc", "Time-To-Collision (TTC)##sg_ttc"), state.ghost_cfg.max_ttc_sec or 2.5, 0.0, 6.0, T("%.1f сек (0=выкл)", "%.1f sec (0=off)"))
             if s0 then state.ghost_cfg.max_ttc_sec = v0; sync_selective_ghost_cfg() end
@@ -720,7 +757,7 @@ local function render_anticollision_window()
             local s3, v3 = ui.slider_float(T("Дистанция (0 = вся карта)##sg_dist", "Max Range (0 = unlimited)##sg_dist"), state.ghost_cfg.max_distance, 0.0, 300.0, T("%.0f м", "%.0f m"))
             if s3 then state.ghost_cfg.max_distance = v3; sync_selective_ghost_cfg() end
 
-            local s4, v4 = ui.toggle(T("Призрак стоячих/AFK на трассе##sg_afk", "Ghost Stopped/AFK Obstacles##sg_afk"), state.ghost_cfg.ghost_stopped_cars == true)
+            local s4, v4 = ui.toggle(T("Срабатывать на стоячих/AFK##sg_afk", "Trigger on Stopped/AFK Cars##sg_afk"), state.ghost_cfg.ghost_stopped_cars == true)
             if s4 then state.ghost_cfg.ghost_stopped_cars = v4; sync_selective_ghost_cfg() end
         end
     end)
@@ -735,29 +772,21 @@ local function render_anticollision_window()
         if other_count == 0 then
             ui.text_dim(T("Других игроков на трассе пока нет.", "No other players on track."))
         else
-            if carx.clear_car_ghost_modes then
-                if ui.button(T("Сбросить всё в «Авто»##sg_clear", "Reset All to Auto##sg_clear"), ui.avail_width(), 26, "ghost") then
-                    carx.clear_car_ghost_modes()
-                end
-                ui.spacing(4)
-            end
-
             local drawn = 0
             for idx, c in ipairs(cars) do
                 if not c.is_local_player then
                     drawn = drawn + 1
-                    local mode = c.ghost_mode or 0
                     local dist = c.dist_to_player or 0.0
                     local spd = c.speed_kmh or 0.0
                     local dot = c.heading_dot or 1.0
 
-                    local status_txt = T("ТВЁРДЫЙ", "SOLID")
+                    local status_txt = T("ОК", "OK")
                     local tone = "green"
                     if not state.ghost_cfg.enabled then
                         status_txt = T("ВЫКЛ", "OFF")
                         tone = "muted"
-                    elseif c.is_selectively_ghosted then
-                        status_txt = c.is_wrong_way and T("ВСТРЕЧКА", "WRONG-WAY") or T("ПРИЗРАК", "GHOST")
+                    elseif c.is_selectively_ghosted or c.is_wrong_way then
+                        status_txt = T("ВСТРЕЧКА", "WRONG-WAY")
                         tone = "accent"
                     end
 
@@ -770,15 +799,7 @@ local function render_anticollision_window()
                     ui.text(string.format(T("%s · %.0fм · %.0f км/ч (%s)%s", "%s · %.0fm · %.0f km/h (%s)%s"),
                         car_label, dist, spd, dir_tag, ttc_tag))
 
-                    if carx.set_car_ghost_mode then
-                        local target_id = c.unity_name or c.ptr
-                        local seg_ch, new_m = ui.segmented("sg_car_mode_" .. tostring(idx), mode + 1, T({ "Авто", "Призрак", "Твёрдый" }, { "Auto", "Ghost", "Solid" }))
-                        if seg_ch then
-                            carx.set_car_ghost_mode(target_id, new_m - 1)
-                        end
-                    end
-
-                    if drawn < other_count then ui.spacing(4) end
+                    if drawn < other_count then ui.spacing(2) end
                 end
             end
         end

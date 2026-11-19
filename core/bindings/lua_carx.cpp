@@ -4,6 +4,7 @@
 #include "../car_sim_optimizer.h"
 #include "../unity_bridge.h"
 #include "../ecs_collision.h"
+#include "../network_safemode.h"
 #include "../carfx.h"
 #include <chrono>
 #include <cmath>
@@ -360,6 +361,8 @@ static void PushSelectiveGhostConfig(lua_State* L, const SelectiveGhostConfig& c
     lua_setfield(L, -2, "ghost_stopped_cars");
     lua_pushnumber(L, cfg.stoppedSpeedKmh);
     lua_setfield(L, -2, "stopped_speed_kmh");
+    lua_pushnumber(L, cfg.safeModeDurationSec);
+    lua_setfield(L, -2, "safe_mode_duration_sec");
     lua_pushboolean(L, cfg.showHudAlert);
     lua_setfield(L, -2, "show_hud_alert");
 }
@@ -399,6 +402,10 @@ int LuaCarX::SetSelectiveGhostConfig(lua_State* L) {
         if (lua_isnumber(L, -1)) cfg.stoppedSpeedKmh = static_cast<float>(lua_tonumber(L, -1));
         lua_pop(L, 1);
 
+        lua_getfield(L, 1, "safe_mode_duration_sec");
+        if (lua_isnumber(L, -1)) cfg.safeModeDurationSec = static_cast<float>(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+
         lua_getfield(L, 1, "show_hud_alert");
         if (!lua_isnil(L, -1)) cfg.showHudAlert = lua_toboolean(L, -1) != 0;
         lua_pop(L, 1);
@@ -412,6 +419,27 @@ int LuaCarX::SetSelectiveGhostConfig(lua_State* L) {
 
 int LuaCarX::GetSelectiveGhostConfig(lua_State* L) {
     PushSelectiveGhostConfig(L, EcsCollision::GetConfig());
+    return 1;
+}
+
+int LuaCarX::TestSafeMode(lua_State* L) {
+    int durationMs = static_cast<int>(luaL_optinteger(L, 1, 2000));
+    NetworkSafeMode::Trigger(durationMs, true);
+    lua_pushboolean(L, NetworkSafeMode::GetStatus().inLobby);
+    return 1;
+}
+
+int LuaCarX::GetSafeModeStatus(lua_State* L) {
+    const auto st = NetworkSafeMode::GetStatus();
+    lua_newtable(L);
+    lua_pushboolean(L, st.hooksInstalled);
+    lua_setfield(L, -2, "hooks_ok");
+    lua_pushboolean(L, st.inLobby);
+    lua_setfield(L, -2, "in_lobby");
+    lua_pushboolean(L, st.safeModeActive);
+    lua_setfield(L, -2, "active");
+    lua_pushinteger(L, st.triggersTotal);
+    lua_setfield(L, -2, "triggers");
     return 1;
 }
 
@@ -1378,6 +1406,8 @@ static const luaL_Reg carx_funcs[] = {
     { "get_selective_ghost_config", LuaCarX::GetSelectiveGhostConfig },
     { "set_car_ghost_mode", LuaCarX::SetCarGhostMode },
     { "clear_car_ghost_modes", LuaCarX::ClearCarGhostModes },
+    { "test_safemode", LuaCarX::TestSafeMode },
+    { "get_safemode_status", LuaCarX::GetSafeModeStatus },
     { "get_rigid_body", LuaCarX::GetRigidBody },
     { "teleport_rigid_body", LuaCarX::TeleportRigidBody },
     { "teleport_player", LuaCarX::TeleportRigidBody },

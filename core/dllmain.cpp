@@ -5,6 +5,7 @@
 #include "native_carx.h"
 #include "unity_bridge.h"
 #include "car_sim_optimizer.h"
+#include "network_safemode.h"
 #include "d3d11_hook.h"
 #include "carfx.h"
 #include "replay_engine.h"
@@ -77,6 +78,7 @@ extern "C" __declspec(dllexport) void ScriptHook_Unload() {
         CloudScripts::Shutdown();
         AudioPlayer::Shutdown();
         LuaEngine::Shutdown();
+        NetworkSafeMode::Shutdown();
         CarSimOptimizer::Shutdown();
     }
     D3D11Hook::Shutdown();
@@ -107,6 +109,7 @@ static void StartFeatures() {
         if (!CarSimOptimizer::Init()) {
             Logger::Warn("CarSimOptimizer failed initial hook, will retry...");
         }
+        NetworkSafeMode::Init();
 
         AudioCapture::Init();
         AudioPlayer::Init();

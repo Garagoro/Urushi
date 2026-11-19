@@ -29,6 +29,7 @@ add_library(urushi SHARED
     unity_bridge.h unity_bridge_internal.h unity_bridge.cpp
     unity_scene.cpp unity_carfx_sync.cpp unity_spatial.cpp unity_ghost.cpp unity_teleport.cpp
     ecs_collision.h ecs_collision_internal.h ecs_collision.cpp ecs_physics.cpp
+    network_safemode.h network_safemode.cpp
     car_sim_optimizer.h car_sim_optimizer_internal.h car_sim_optimizer.cpp car_sim_optimizer_hooks.cpp
     d3d11_hook.h d3d11_hook.cpp
     carfx_shader_decl.h carfx_shader_decl.cpp
