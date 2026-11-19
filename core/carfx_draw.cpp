@@ -218,16 +218,15 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
     *outAlbedoSrv = nullptr;
 
     // Render-thread cache keyed by g_gameTexGen: avoids SRWLock + 20-slot GetResource on every draw call!
+    // Separate fast-slot pairs for [0] normal opaque pass and [1] SafeMode transparent pass so toggling SafeMode has 0-frame flicker.
     static uint64_t s_rtCachedGen = 0;
     static GameSrvSnapshot s_rtSnap[kTargetCount]{};
-    static int s_rtKnownAlbSlot = -1;
-    static int s_rtKnownPackSlot = -1;
+    static int s_rtKnownAlbSlot[2] = { -1, -1 };
+    static int s_rtKnownPackSlot[2] = { -1, -1 };
     static uint32_t s_rtRediscoveryFrame = ~0u;
     static uint32_t s_rtBodyTrackFrame = ~0u;
     static uint32_t s_rtBodyPrimaryCur = 0;
     static uint32_t s_rtBodyPrimaryLast = 0;
-    static bool s_rtPrevSafeMode = false;
-    static uint32_t s_rtSafeModeFlipFrame = ~0u;
 
     const uint32_t curFrameId = g_frameCounter.load(std::memory_order_relaxed);
     if (curFrameId != s_rtBodyTrackFrame) {
@@ -236,16 +235,9 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
         s_rtBodyTrackFrame = curFrameId;
     }
 
-    const bool curSafeMode = NetworkSafeMode::GetStatus().safeModeActive;
-    if (curSafeMode != s_rtPrevSafeMode) {
-        s_rtPrevSafeMode = curSafeMode;
-        s_rtSafeModeFlipFrame = curFrameId;
-        // SafeMode switches the car material/shader pass (opaque <-> transparent ghost) which can move SRV slots.
-        // Immediately invalidate fast slots on this exact frame to prevent 1-2 frame flicker.
-        s_rtKnownAlbSlot = -1;
-        s_rtKnownPackSlot = -1;
-        s_rtRediscoveryFrame = ~0u;
-    }
+    const int smIdx = NetworkSafeMode::GetStatus().safeModeActive ? 1 : 0;
+    int& curAlbSlot = s_rtKnownAlbSlot[smIdx];
+    int& curPackSlot = s_rtKnownPackSlot[smIdx];
 
     const uint64_t curGen = g_gameTexGen.load(std::memory_order_acquire);
     if (curGen != s_rtCachedGen) {
@@ -253,8 +245,8 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
         for (int i = 0; i < kTargetCount; ++i) s_rtSnap[i] = g_gameTex[i];
         s_rtCachedGen = g_gameTexGen.load(std::memory_order_relaxed);
         ReleaseSRWLockShared(&g_gameTexLock);
-        s_rtKnownAlbSlot = -1;
-        s_rtKnownPackSlot = -1;
+        s_rtKnownAlbSlot[0] = s_rtKnownAlbSlot[1] = -1;
+        s_rtKnownPackSlot[0] = s_rtKnownPackSlot[1] = -1;
         s_rtRediscoveryFrame = ~0u;
     }
 
@@ -327,8 +319,8 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
     };
 
     const bool haveFastSlots =
-        (!needAlbSlot || s_rtKnownAlbSlot >= kScanStartSlot) &&
-        (!needPackSlot || s_rtKnownPackSlot >= kScanStartSlot);
+        (!needAlbSlot || curAlbSlot >= kScanStartSlot) &&
+        (!needPackSlot || curPackSlot >= kScanStartSlot);
     const bool bodyActiveNow = playerCanMatch && IsTargetActiveInternal(kTargetBody);
 
     // Check active ghost targets and active player body target BEFORE internals so body/ghost draws are never hijacked
@@ -337,11 +329,11 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
         ID3D11ShaderResourceView* vPack = nullptr;
         ID3D11Resource* resAlb = nullptr;
         ID3D11Resource* resPack = nullptr;
-        if (needAlbSlot && s_rtKnownAlbSlot >= kScanStartSlot) {
-            c->PSGetShaderResources(static_cast<UINT>(s_rtKnownAlbSlot), 1, &vAlb);
+        if (needAlbSlot && curAlbSlot >= kScanStartSlot) {
+            c->PSGetShaderResources(static_cast<UINT>(curAlbSlot), 1, &vAlb);
         }
-        if (needPackSlot && s_rtKnownPackSlot >= kScanStartSlot) {
-            c->PSGetShaderResources(static_cast<UINT>(s_rtKnownPackSlot), 1, &vPack);
+        if (needPackSlot && curPackSlot >= kScanStartSlot) {
+            c->PSGetShaderResources(static_cast<UINT>(curPackSlot), 1, &vPack);
         }
 
         if (anyGhostTex) {
@@ -356,13 +348,13 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
                 }
                 if (match) {
                     matchedTarget = t;
-                    if (!gs.packedIsDefault && s_rtKnownPackSlot >= kScanStartSlot &&
+                    if (!gs.packedIsDefault && curPackSlot >= kScanStartSlot &&
                         srvMatches(vPack, &resPack, gs.packedSrv, gs.packedRes)) {
-                        mask |= (1u << s_rtKnownPackSlot);
+                        mask |= (1u << curPackSlot);
                     }
-                    if (!gs.albedoIsDefault && s_rtKnownAlbSlot >= kScanStartSlot &&
+                    if (!gs.albedoIsDefault && curAlbSlot >= kScanStartSlot &&
                         srvMatches(vAlb, &resAlb, gs.albedoSrv, gs.albedoRes)) {
-                        mask |= (1u << s_rtKnownAlbSlot);
+                        mask |= (1u << curAlbSlot);
                         matchedAlbedoSrv = vAlb;
                         matchedAlbedoSrv->AddRef();
                     }
@@ -408,12 +400,12 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
                 matchedTarget = kTargetBody;
                 ++s_rtBodyPrimaryCur;
                 if (albMatch && vAlb) {
-                    mask |= (1u << s_rtKnownAlbSlot);
+                    mask |= (1u << curAlbSlot);
                     matchedAlbedoSrv = vAlb;
                     matchedAlbedoSrv->AddRef();
                 }
-                if (packMatch && s_rtKnownPackSlot >= kScanStartSlot) {
-                    mask |= (1u << s_rtKnownPackSlot);
+                if (packMatch && curPackSlot >= kScanStartSlot) {
+                    mask |= (1u << curPackSlot);
                 }
             }
         }
@@ -529,8 +521,8 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
         if ((primaryBodyStarved && (frameId - s_rtRediscoveryFrame) >= 2) ||
             (g_matchedDrawsLastFrame.load(std::memory_order_relaxed) == 0 && (frameId - s_rtRediscoveryFrame) >= 30)) {
             s_rtRediscoveryFrame = frameId;
-            s_rtKnownAlbSlot = -1;
-            s_rtKnownPackSlot = -1;
+            curAlbSlot = -1;
+            curPackSlot = -1;
         }
         return false;
     } else {
@@ -681,10 +673,10 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
     // Latch discovered slot indices only after confirming main color RT!
     if (matchedTarget != kTargetInternals) {
         if (discoveredAlbSlot >= kScanStartSlot) {
-            s_rtKnownAlbSlot = discoveredAlbSlot;
+            curAlbSlot = discoveredAlbSlot;
         }
         if (discoveredPackSlot >= kScanStartSlot) {
-            s_rtKnownPackSlot = discoveredPackSlot;
+            curPackSlot = discoveredPackSlot;
         }
     }
 

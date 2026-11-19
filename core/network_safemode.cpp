@@ -21,9 +21,11 @@ using t_GetSafeMode   = bool(__fastcall*)(void* thisModel, const void* methodInf
 
 t_VoidThis    s_origOnActivate   = nullptr;
 t_VoidThis    s_origOnDeactivate = nullptr;
+t_SetBoolThis s_origOnSmChanged  = nullptr;
 t_SetBoolThis s_origSetIndActive = nullptr;
 void*         s_hookOnActivate   = nullptr;
 void*         s_hookOnDeactivate = nullptr;
+void*         s_hookOnSmChanged  = nullptr;
 void*         s_hookSetIndActive = nullptr;
 
 t_ActivateMs  s_fnActivateMs  = nullptr;
@@ -148,6 +150,13 @@ static void __fastcall Hook_OnDeactivate(void* thisPtr, const void* methodInfo) 
     }
 }
 
+static void __fastcall Hook_OnSafeModeChanged(void* thisPtr, bool isSafeMode, const void* methodInfo) {
+    s_safeModeActive.store(isSafeMode, std::memory_order_release);
+    if (s_origOnSmChanged) {
+        s_origOnSmChanged(thisPtr, isSafeMode, methodInfo);
+    }
+}
+
 static void __fastcall Hook_SetActiveSafeMode(void* thisPtr, bool active, const void* methodInfo) {
     if (active && !s_showGameIndicator.load(std::memory_order_acquire)) {
         active = false;
@@ -231,6 +240,14 @@ bool Init() {
     }
     s_hookOnDeactivate = fnOnDeact;
 
+    if (void* fnOnSmCh = Il2CppHelpers::LookupClassMethod(ctrlKlass, "OnSafeModeChangedHandler")) {
+        if (MH_CreateHook(fnOnSmCh, reinterpret_cast<void*>(&Hook_OnSafeModeChanged),
+                          reinterpret_cast<void**>(&s_origOnSmChanged)) == MH_OK &&
+            MH_EnableHook(fnOnSmCh) == MH_OK) {
+            s_hookOnSmChanged = fnOnSmCh;
+        }
+    }
+
     const uintptr_t indKlass = Il2CppHelpers::LookupTypeClass("UINetworkSafeModeIndicatorContext", "UI.Contexts.Race");
     if (indKlass) {
         if (void* fnSetInd = Il2CppHelpers::LookupClassMethod(indKlass, "SetActiveSafeMode")) {
@@ -243,13 +260,19 @@ bool Init() {
     }
 
     s_hooksOk.store(true, std::memory_order_release);
-    Logger::Info(std::string("NetworkSafeMode initialized (hooks=OK, indicatorHook=") +
+    Logger::Info(std::string("NetworkSafeMode initialized (hooks=OK, syncHook=") +
+                 (s_hookOnSmChanged ? "OK" : "OFF") + ", indicatorHook=" +
                  (s_hookSetIndActive ? "OK" : "OFF") + ").");
     return true;
 }
 
 void Shutdown() {
     if (!s_initialized.exchange(false)) return;
+    if (s_hookOnSmChanged) {
+        MH_DisableHook(s_hookOnSmChanged);
+        MH_RemoveHook(s_hookOnSmChanged);
+        s_hookOnSmChanged = nullptr;
+    }
     if (s_hookSetIndActive) {
         MH_DisableHook(s_hookSetIndActive);
         MH_RemoveHook(s_hookSetIndActive);
