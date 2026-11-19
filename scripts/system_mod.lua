@@ -102,7 +102,7 @@ local function get_official_modules()
     local manifest = (urushi.get_manifest and urushi.get_manifest()) or (cloud and cloud.get_manifest and cloud.get_manifest())
     local mods = {}
     if manifest and manifest.scripts then
-        local ver = manifest.core_version or "1.2.1"
+        local ver = manifest.core_version or "1.3.0"
         for _, s in ipairs(manifest.scripts) do
             local win_id = (s.window_ids and s.window_ids[1]) or s.id
             local alt_win_ids = nil

@@ -26,7 +26,7 @@ SCRIPTS_METADATA = {
         "description": "Compact on-screen HUD: speed, drift angle, RPM, FPS & ping",
         "description_ru": "Наэкранный оверлей: скорость, угол заноса, RPM, FPS и сеть",
         "window_ids": ["hud", "fps_net"],
-        "min_core": "1.2.1",
+        "min_core": "1.3.0",
         "default_enabled": True,
     },
     "perf_optimizer": {
@@ -35,7 +35,7 @@ SCRIPTS_METADATA = {
         "description": "Physics solver optimization, component auto-sleep, FPS boost",
         "description_ru": "Оптимизация физики симулятора, автослип узлов, буст FPS",
         "window_ids": ["perf"],
-        "min_core": "1.2.1",
+        "min_core": "1.3.0",
         "default_enabled": True,
     },
     "carfx_mod": {
@@ -44,7 +44,7 @@ SCRIPTS_METADATA = {
         "description": "Custom body shaders, glass reflections, neon glow & tinting",
         "description_ru": "Кастомные шейдеры кузова, стекол, неоновые эффекты, тонировка",
         "window_ids": ["carfx"],
-        "min_core": "1.2.1",
+        "min_core": "1.3.0",
         "default_enabled": True,
     },
     "keybinds_mod": {
@@ -53,7 +53,7 @@ SCRIPTS_METADATA = {
         "description": "Rebind actions to keyboard keys and gamepad buttons (XInput)",
         "description_ru": "Назначение кнопок клавиатуры и кнопок геймпада (XInput)",
         "window_ids": ["keybinds"],
-        "min_core": "1.2.1",
+        "min_core": "1.3.0",
         "default_enabled": True,
     },
     "teleport_mod": {
@@ -62,7 +62,7 @@ SCRIPTS_METADATA = {
         "description": "Quick save & instant teleport to checkpoints on any track",
         "description_ru": "Быстрое сохранение и мгновенный телепорт по точкам трека",
         "window_ids": ["teleport"],
-        "min_core": "1.2.1",
+        "min_core": "1.3.0",
         "default_enabled": True,
     },
     "replay_mod": {
@@ -71,7 +71,7 @@ SCRIPTS_METADATA = {
         "description": "3D trajectory replay, ghost car and TTC anti-collision defense",
         "description_ru": "3D реплеи, призрак траектории и защита от столкновений",
         "window_ids": ["replay", "anticollision"],
-        "min_core": "1.2.1",
+        "min_core": "1.3.0",
         "default_enabled": True,
     },
     "steer_assist_mod": {
@@ -80,7 +80,7 @@ SCRIPTS_METADATA = {
         "description": "Smart wheel angle assist for deep drift angles up to 155°",
         "description_ru": "Умная коррекция выворота колес под угол заноса до 155°",
         "window_ids": ["steer_assist"],
-        "min_core": "1.2.1",
+        "min_core": "1.3.0",
         "default_enabled": True,
     },
     "tires_mod": {
@@ -89,7 +89,7 @@ SCRIPTS_METADATA = {
         "description": "Dense tire smoke, infinite tire wear, pressure and visual damage",
         "description_ru": "Густой дым, блокировка износа шин, давление и деформация",
         "window_ids": ["tires"],
-        "min_core": "1.2.1",
+        "min_core": "1.3.0",
         "default_enabled": True,
     },
     "initiald_mod": {
@@ -98,7 +98,7 @@ SCRIPTS_METADATA = {
         "description": "Anime speedlines postfx, cel shading and eurobeat drift audio",
         "description_ru": "Аниме speedlines postfx, cel-шейдинг кузова и евробит",
         "window_ids": ["initiald"],
-        "min_core": "1.2.1",
+        "min_core": "1.3.0",
         "default_enabled": True,
     },
     "music_mod": {
@@ -107,7 +107,7 @@ SCRIPTS_METADATA = {
         "description": "WASAPI audio capture and FFT spectrum reactive CarFX shaders",
         "description_ru": "WASAPI захват звука и FFT-спектр для музыкальных шейдеров",
         "window_ids": ["music"],
-        "min_core": "1.2.1",
+        "min_core": "1.3.0",
         "default_enabled": True,
     },
 }
@@ -127,7 +127,7 @@ def read_core_version(root_dir: str) -> str:
             m = re.search(r'#define\s+URUSHI_VERSION\s+"([^"]+)"', f.read())
             if m:
                 return m.group(1)
-    return "1.2.1"
+    return "1.3.0"
 
 
 def hash_lf(file_path: str):
