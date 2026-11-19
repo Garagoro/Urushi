@@ -90,7 +90,6 @@ extern UrushiUI::Accent g_accent;
 extern float g_customRgb[3];
 extern AccentDef g_customAccentDef;
 extern UrushiUI::Language g_language;
-extern bool g_langHintActive;
 extern bool g_singleTabMode;
 
 extern std::mutex g_uiElementMutex;

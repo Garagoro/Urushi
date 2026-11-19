@@ -375,33 +375,17 @@ void RenderDock(bool menuOpen) {
                 UrushiUI::ToggleLanguage();
             }
             const bool hv = ImGui::IsItemHovered();
-            if (g_langHintActive) {
-                const float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(ImGui::GetTime()) * 3.8f);
-                const ImU32 acc = UrushiUI::GetAccentU32();
-                const int r = (acc >> IM_COL32_R_SHIFT) & 0xFF;
-                const int g = (acc >> IM_COL32_G_SHIFT) & 0xFF;
-                const int b = (acc >> IM_COL32_B_SHIFT) & 0xFF;
-                const int glowA = static_cast<int>(35.0f + pulse * 55.0f);
-                const int fillA = hv ? 115 : static_cast<int>(52.0f + pulse * 44.0f);
-                const int brdA  = hv ? 255 : static_cast<int>(195.0f + pulse * 60.0f);
-                dl->AddRect(ImVec2(lp.x - 1.5f * S, lp.y - 1.5f * S),
-                            ImVec2(lp.x + lw + 1.5f * S, lp.y + lh + 1.5f * S),
-                            IM_COL32(r, g, b, glowA), 6.5f * S, 0, 2.0f * S);
-                dl->AddRectFilled(lp, ImVec2(lp.x + lw, lp.y + lh), IM_COL32(r, g, b, fillA), 5.0f * S);
-                dl->AddRect(lp, ImVec2(lp.x + lw, lp.y + lh), IM_COL32(r, g, b, brdA), 5.0f * S, 0, 1.4f * S);
-            } else if (hv) {
+            if (hv) {
                 dl->AddRectFilled(lp, ImVec2(lp.x + lw, lp.y + lh), IM_COL32(255, 255, 255, 25), 5.0f * S);
                 dl->AddRect(lp, ImVec2(lp.x + lw, lp.y + lh), IM_COL32(255, 255, 255, 120), 5.0f * S);
+                ImGui::SetTooltip("%s", g_language == UrushiUI::Language::Russian
+                    ? "Язык: Русский (нажмите для переключения на English)"
+                    : "Language: English (click to switch to Русский)");
             } else {
                 dl->AddRectFilled(lp, ImVec2(lp.x + lw, lp.y + lh), IM_COL32(255, 255, 255, 12), 5.0f * S);
                 dl->AddRect(lp, ImVec2(lp.x + lw, lp.y + lh), IM_COL32(255, 255, 255, 35), 5.0f * S);
             }
-            if (hv) {
-                ImGui::SetTooltip("%s", g_language == UrushiUI::Language::Russian
-                    ? "Язык: Русский (нажмите для переключения на English)"
-                    : "Language: English (click to switch to Русский)");
-            }
-            const ImU32 col = (hv || g_langHintActive) ? IM_COL32(255, 255, 255, 255) : kColTextMuted;
+            const ImU32 col = hv ? UrushiUI::GetAccentU32() : kColTextMuted;
             const char* code = (g_language == UrushiUI::Language::English) ? "EN" : "RU";
             if (AppFonts::Small) ImGui::PushFont(AppFonts::Small);
             ImVec2 lTxtSz = ImGui::CalcTextSize(code);

@@ -39,7 +39,6 @@ AccentDef g_customAccentDef = {
     IM_COL32(76, 199, 245, 102)
 };
 UrushiUI::Language g_language = UrushiUI::Language::English;
-bool g_langHintActive = false;
 bool g_singleTabMode = false;
 
 // UI Element Introspection & Config Auto-Discovery
@@ -225,12 +224,6 @@ void ApplyThemeMetrics(float S) {
 void UrushiUI::Init() {
     std::lock_guard<std::recursive_mutex> lock(g_mutex);
     ApplyBaseTheme();
-    if (!Settings::GetBool("ui", "lang_hint_seen", false)) {
-        g_langHintActive = true;
-        Settings::SetBool("ui", "lang_hint_seen", true);
-    } else {
-        g_langHintActive = false;
-    }
 }
 
 void UrushiUI::Shutdown() {
@@ -504,10 +497,8 @@ void UrushiUI::ToggleLanguage() {
 void UrushiUI::SetLanguage(Language lang, bool notifyLua) {
     {
         std::lock_guard<std::recursive_mutex> lock(g_mutex);
-        if (notifyLua) g_langHintActive = false;
         if (g_language == lang) return;
         g_language = lang;
-        g_langHintActive = false;
     }
     if (notifyLua) {
         std::string out, err;
