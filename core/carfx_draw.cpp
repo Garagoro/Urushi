@@ -249,25 +249,37 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
         }
     }
 
-    // internals: cached copy of the texture set, refreshed when the main thread publishes a new one
+    // internals & body-extras: cached copies of the texture sets, refreshed when the main thread publishes new ones
     static uint64_t s_rtIntGen = 0;
     static std::vector<ID3D11ShaderResourceView*> s_rtIntSrvs;
     static std::vector<ID3D11Resource*> s_rtIntRes;
+    static uint64_t s_rtBodyExtraGen = 0;
+    static std::vector<ID3D11ShaderResourceView*> s_rtBodyExtraSrvs;
+    static std::vector<ID3D11Resource*> s_rtBodyExtraRes;
     {
         const uint64_t ig = g_internalsGen.load(std::memory_order_acquire);
-        if (ig != s_rtIntGen) {
+        const uint64_t bg = g_bodyExtrasGen.load(std::memory_order_acquire);
+        if (ig != s_rtIntGen || bg != s_rtBodyExtraGen) {
             AcquireSRWLockShared(&g_gameTexLock);
-            s_rtIntSrvs = g_internals.srvs;
-            s_rtIntRes = g_internals.res;
-            s_rtIntGen = g_internalsGen.load(std::memory_order_relaxed);
+            if (ig != s_rtIntGen) {
+                s_rtIntSrvs = g_internals.srvs;
+                s_rtIntRes = g_internals.res;
+                s_rtIntGen = g_internalsGen.load(std::memory_order_relaxed);
+            }
+            if (bg != s_rtBodyExtraGen) {
+                s_rtBodyExtraSrvs = g_bodyExtras.srvs;
+                s_rtBodyExtraRes = g_bodyExtras.res;
+                s_rtBodyExtraGen = g_bodyExtrasGen.load(std::memory_order_relaxed);
+            }
             ReleaseSRWLockShared(&g_gameTexLock);
         }
     }
     const bool internalsCanMatch = (!s_rtIntSrvs.empty() || !s_rtIntRes.empty()) && IsTargetActiveInternal(kTargetInternals);
+    const bool bodyExtrasCanMatch = (!s_rtBodyExtraSrvs.empty() || !s_rtBodyExtraRes.empty()) && IsTargetActiveInternal(kTargetBody);
 
     const GameSrvSnapshot& body = s_rtSnap[kTargetBody];
     const bool playerCanMatch = targetHasMatchableSrv(body);
-    if (!playerCanMatch && !anyGhostTex && !internalsCanMatch) return false;
+    if (!playerCanMatch && !anyGhostTex && !internalsCanMatch && !bodyExtrasCanMatch) return false;
 
     int matchedTarget = kTargetNone;
     uint32_t mask = 0;
@@ -384,83 +396,101 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
         if (vPack) vPack->Release();
     }
 
-    if (matchedTarget == kTargetNone && internalsCanMatch) {
-        constexpr int kIntScanSlots = 32;
-        static uint64_t s_rtIntSlotGen = 0;
-        static uint32_t s_rtIntDiscoveredMask = 0;
-        static uint32_t s_rtIntDiscoverFrames = 0;
-        static uint32_t s_rtIntDiscoverTickFrame = ~0u;
-        static uint32_t s_rtIntLastRediscoverFrame = ~0u;
-
+    struct TexSetSlotCache {
+        uint64_t gen = 0;
+        uint32_t discoveredMask = 0;
+        uint32_t discoverFrames = 0;
+        uint32_t discoverTickFrame = ~0u;
+        uint32_t lastRediscoverFrame = ~0u;
+    };
+    auto tryMatchTexSet = [&](const std::vector<ID3D11ShaderResourceView*>& srvsSet,
+                              const std::vector<ID3D11Resource*>& resSet,
+                              uint64_t curSetGen,
+                              int targetId,
+                              bool captureAlbedo,
+                              TexSetSlotCache& sc) {
+        constexpr int kSetScanSlots = 32;
         const uint32_t frameId = g_frameCounter.load(std::memory_order_relaxed);
-        if (s_rtIntSlotGen != s_rtIntGen) {
-            s_rtIntSlotGen = s_rtIntGen;
-            s_rtIntDiscoveredMask = 0;
-            s_rtIntDiscoverFrames = 4;
-            s_rtIntDiscoverTickFrame = frameId;
-            s_rtIntLastRediscoverFrame = frameId;
-        } else if (s_rtIntDiscoverFrames == 0 &&
-                   g_targetMatchedLastFrame[kTargetInternals].load(std::memory_order_relaxed) == 0 &&
-                   (frameId - s_rtIntLastRediscoverFrame) >= 120) {
-            s_rtIntLastRediscoverFrame = frameId;
-            s_rtIntDiscoveredMask = 0;
-            s_rtIntDiscoverFrames = 4;
-            s_rtIntDiscoverTickFrame = frameId;
+        if (sc.gen != curSetGen) {
+            sc.gen = curSetGen;
+            sc.discoveredMask = 0;
+            sc.discoverFrames = 6;
+            sc.discoverTickFrame = frameId;
+            sc.lastRediscoverFrame = frameId;
+        } else if (sc.discoverFrames == 0 &&
+                   g_targetMatchedLastFrame[targetId].load(std::memory_order_relaxed) == 0 &&
+                   (frameId - sc.lastRediscoverFrame) >= 120) {
+            sc.lastRediscoverFrame = frameId;
+            sc.discoveredMask = 0;
+            sc.discoverFrames = 6;
+            sc.discoverTickFrame = frameId;
         }
-        if (s_rtIntDiscoverTickFrame != frameId) {
-            s_rtIntDiscoverTickFrame = frameId;
-            if (s_rtIntDiscoverFrames > 0) --s_rtIntDiscoverFrames;
+        if (sc.discoverTickFrame != frameId) {
+            sc.discoverTickFrame = frameId;
+            if (sc.discoverFrames > 0) --sc.discoverFrames;
         }
 
-        const bool discovering = (s_rtIntDiscoverFrames > 0);
-        const uint32_t activeMask = discovering ? 0xFFFFFFFFu : s_rtIntDiscoveredMask;
-        if (activeMask != 0) {
-            int minSlot = 0;
-            int maxSlot = kIntScanSlots - 1;
-            if (!discovering) {
-                minSlot = kIntScanSlots;
-                maxSlot = -1;
-                for (int b = 0; b < kIntScanSlots; ++b) {
-                    if (activeMask & (1u << b)) {
-                        if (b < minSlot) minSlot = b;
-                        maxSlot = b;
-                    }
-                }
-            }
-            const int span = maxSlot - minSlot + 1;
-            if (span > 0) {
-                ID3D11ShaderResourceView* isrv[kIntScanSlots] = {};
-                c->PSGetShaderResources(static_cast<UINT>(minSlot), static_cast<UINT>(span), isrv);
-                const bool needRes = !s_rtIntRes.empty();
-                for (int off = 0; off < span; ++off) {
-                    const int slotIdx = minSlot + off;
-                    ID3D11ShaderResourceView* v = isrv[off];
-                    if (!v || !(activeMask & (1u << slotIdx))) continue;
-                    bool hit = std::binary_search(s_rtIntSrvs.begin(), s_rtIntSrvs.end(), v);
-                    if (!hit && needRes) {
-                        ID3D11Resource* r = nullptr;
-                        v->GetResource(&r);
-                        if (r) {
-                            hit = std::binary_search(s_rtIntRes.begin(), s_rtIntRes.end(), r);
-                            r->Release();
-                        }
-                    }
-                    if (hit) {
-                        s_rtIntDiscoveredMask |= (1u << slotIdx);
-                        if (matchedTarget == kTargetNone) {
-                            matchedTarget = kTargetInternals;
-                            matchedAlbedoSrv = v;
-                            matchedAlbedoSrv->AddRef();
-                        }
-                        mask |= (1u << slotIdx);
-                        if (!discovering) break;
-                    }
-                }
-                for (int off = 0; off < span; ++off) {
-                    if (isrv[off]) isrv[off]->Release();
+        const bool discovering = (sc.discoverFrames > 0);
+        const uint32_t activeMask = discovering ? 0xFFFFFFFFu : sc.discoveredMask;
+        if (activeMask == 0) return;
+
+        int minSlot = 0;
+        int maxSlot = kSetScanSlots - 1;
+        if (!discovering) {
+            minSlot = kSetScanSlots;
+            maxSlot = -1;
+            for (int b = 0; b < kSetScanSlots; ++b) {
+                if (activeMask & (1u << b)) {
+                    if (b < minSlot) minSlot = b;
+                    maxSlot = b;
                 }
             }
         }
+        const int span = maxSlot - minSlot + 1;
+        if (span <= 0) return;
+
+        ID3D11ShaderResourceView* isrv[kSetScanSlots] = {};
+        c->PSGetShaderResources(static_cast<UINT>(minSlot), static_cast<UINT>(span), isrv);
+        const bool needRes = !resSet.empty();
+        for (int off = 0; off < span; ++off) {
+            const int slotIdx = minSlot + off;
+            ID3D11ShaderResourceView* v = isrv[off];
+            if (!v || !(activeMask & (1u << slotIdx))) continue;
+            bool hit = std::binary_search(srvsSet.begin(), srvsSet.end(), v);
+            if (!hit && needRes) {
+                ID3D11Resource* r = nullptr;
+                v->GetResource(&r);
+                if (r) {
+                    hit = std::binary_search(resSet.begin(), resSet.end(), r);
+                    r->Release();
+                }
+            }
+            if (hit) {
+                sc.discoveredMask |= (1u << slotIdx);
+                if (matchedTarget == kTargetNone) {
+                    matchedTarget = targetId;
+                    if (captureAlbedo) {
+                        matchedAlbedoSrv = v;
+                        matchedAlbedoSrv->AddRef();
+                    }
+                }
+                mask |= (1u << slotIdx);
+                if (!discovering) break;
+            }
+        }
+        for (int off = 0; off < span; ++off) {
+            if (isrv[off]) isrv[off]->Release();
+        }
+    };
+
+    if (matchedTarget == kTargetNone && bodyExtrasCanMatch) {
+        static TexSetSlotCache s_bodyExtraCache{};
+        tryMatchTexSet(s_rtBodyExtraSrvs, s_rtBodyExtraRes, s_rtBodyExtraGen, kTargetBody, false, s_bodyExtraCache);
+    }
+
+    if (matchedTarget == kTargetNone && internalsCanMatch) {
+        static TexSetSlotCache s_intCache{};
+        tryMatchTexSet(s_rtIntSrvs, s_rtIntRes, s_rtIntGen, kTargetInternals, true, s_intCache);
     }
 
     if (matchedTarget != kTargetNone) {

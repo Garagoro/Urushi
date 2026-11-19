@@ -5,7 +5,6 @@ local VK_F9 = 0x78
 
 local PARTS = {
     { "interior",   "Салон",       "Interior" },
-    { "lights",     "Фары",        "Lights" },
     { "wheels",     "Диски",       "Rims / Wheels" },
     { "tires",      "Шины",        "Tires" },
     { "engine",     "Двигатель",   "Engine" },
@@ -22,15 +21,20 @@ local cfx_settings = {
     internals_mode = 0,
     selected_shader = "livery_holo.hlsl",
     internals_shader = "internals_neon.hlsl",
+    body_extras = {
+        spoiler = true,
+        lights = true,
+    },
     parts = {
         engine = true,
         suspension = true,
         brakes = true,
         wheels = true,
         tires = false,
-        lights = true,
+        lights = false,
         glass = false,
         interior = true,
+        spoiler = false,
     },
     tex_paths = {},
     internals_tex_paths = {},
@@ -49,10 +53,16 @@ end
 if cfx_settings.internals_enabled == nil then
     cfx_settings.internals_enabled = true
 end
+if type(cfx_settings.body_extras) ~= "table" then
+    cfx_settings.body_extras = { spoiler = true, lights = true }
+else
+    if cfx_settings.body_extras.spoiler == nil then cfx_settings.body_extras.spoiler = true end
+    if cfx_settings.body_extras.lights == nil then cfx_settings.body_extras.lights = true end
+end
 if type(cfx_settings.parts) ~= "table" then
     cfx_settings.parts = {
         engine = true, suspension = true, brakes = true, wheels = true,
-        tires = false, lights = true, glass = false, interior = true,
+        tires = false, lights = false, glass = false, interior = true, spoiler = false,
     }
 end
 if type(cfx_settings.body_params) ~= "table" then cfx_settings.body_params = {} end
@@ -187,6 +197,9 @@ local function try_restore_carfx()
     end
     if carfx.set_parts and type(cfx_settings.parts) == "table" then
         carfx.set_parts(cfx_settings.parts)
+    end
+    if carfx.set_body_extras and type(cfx_settings.body_extras) == "table" then
+        carfx.set_body_extras(cfx_settings.body_extras)
     end
 
     if cfx_settings.selected_shader and cfx_settings.selected_shader ~= "" then
@@ -482,6 +495,28 @@ local function render_shader_picker_and_modes(target, st, is_body, car_ready)
     end)
 end
 
+local function render_body_extras_card()
+    if not (carfx and carfx.get_body_extras and carfx.set_body_extras) then return end
+    ui.card(T("Доп. элементы кузова", "Body Attachments"), T("Шейдер кузова применится и к ним", "Body shader applies to these too"), function()
+        local ex = carfx.get_body_extras()
+        local avail = ui.avail_width()
+        local col_w = (avail - 6.0) * 0.5
+        local sp_on = (ex.spoiler == true)
+        local lt_on = (ex.lights == true)
+        if ui.button((sp_on and "● " or "○ ") .. T("Спойлер##cfx_bex_sp", "Spoiler##cfx_bex_sp"), col_w, 26, sp_on and "primary" or "ghost") then
+            carfx.set_body_extras({ spoiler = not sp_on })
+            cfx_settings.body_extras = carfx.get_body_extras()
+            if config then config.mark_dirty() end
+        end
+        ui.same_line(0, 6)
+        if ui.button((lt_on and "● " or "○ ") .. T("Фары##cfx_bex_lt", "Lights##cfx_bex_lt"), col_w, 26, lt_on and "primary" or "ghost") then
+            carfx.set_body_extras({ lights = not lt_on })
+            cfx_settings.body_extras = carfx.get_body_extras()
+            if config then config.mark_dirty() end
+        end
+    end)
+end
+
 local function render_internals_parts_card()
     if not (carfx and carfx.get_parts and carfx.set_parts) then return end
     ui.card(T("К каким частям применять", "Target Parts Filter"), T("Работает только на вашем авто", "Applies only to your car"), function()
@@ -491,21 +526,21 @@ local function render_internals_parts_card()
 
         local pw = (avail - 12.0) / 3.0
         if ui.button(T("Только салон##cfx_pr_cab", "Cabin Only##cfx_pr_cab"), pw, 24, "ghost") then
-            local p = { engine = false, suspension = false, brakes = false, wheels = false, tires = false, lights = false, glass = false, interior = true }
+            local p = { engine = false, suspension = false, brakes = false, wheels = false, tires = false, lights = false, glass = false, interior = true, spoiler = false }
             carfx.set_parts(p)
             cfx_settings.parts = carfx.get_parts()
             if config then config.mark_dirty() end
         end
         ui.same_line(0, 6)
         if ui.button(T("Стандарт##cfx_pr_def", "Default##cfx_pr_def"), pw, 24, "ghost") then
-            local p = { engine = true, suspension = true, brakes = true, wheels = true, tires = false, lights = true, glass = false, interior = true }
+            local p = { engine = true, suspension = true, brakes = true, wheels = true, tires = false, lights = false, glass = false, interior = true, spoiler = false }
             carfx.set_parts(p)
             cfx_settings.parts = carfx.get_parts()
             if config then config.mark_dirty() end
         end
         ui.same_line(0, 6)
         if ui.button(T("Снять все##cfx_pr_clr", "Clear All##cfx_pr_clr"), pw, 24, "ghost") then
-            local p = { engine = false, suspension = false, brakes = false, wheels = false, tires = false, lights = false, glass = false, interior = false }
+            local p = { engine = false, suspension = false, brakes = false, wheels = false, tires = false, lights = false, glass = false, interior = false, spoiler = false }
             carfx.set_parts(p)
             cfx_settings.parts = carfx.get_parts()
             if config then config.mark_dirty() end
@@ -555,6 +590,7 @@ local function render_carfx_window()
 
     if state.tab == 1 then
         render_shader_picker_and_modes(0, st0, true, st0.body_valid)
+        render_body_extras_card()
         render_shader_params(0, st0, short0)
         render_shader_textures(0, st0)
     else

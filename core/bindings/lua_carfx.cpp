@@ -26,8 +26,10 @@ static const luaL_Reg kCarfxFuncs[] = {
     { "list_shaders",   LuaCarFX::ListShaders },
     { "get_status",     LuaCarFX::GetStatus },
     { "get_spatial",    LuaCarFX::GetSpatial },
-    { "get_parts",      LuaCarFX::GetParts },
-    { "set_parts",      LuaCarFX::SetParts },
+    { "get_parts",        LuaCarFX::GetParts },
+    { "set_parts",        LuaCarFX::SetParts },
+    { "get_body_extras",  LuaCarFX::GetBodyExtras },
+    { "set_body_extras",  LuaCarFX::SetBodyExtras },
     { nullptr, nullptr }
 };
 
@@ -273,6 +275,7 @@ const PartName kParts[] = {
     { "lights",     CarFX::kPartLights },
     { "glass",      CarFX::kPartGlass },
     { "interior",   CarFX::kPartInterior },
+    { "spoiler",    CarFX::kPartSpoiler },
 };
 } // namespace
 
@@ -301,6 +304,32 @@ int LuaCarFX::SetParts(lua_State* L) {
     }
     CarFX::SetInternalsPartMask(mask);
     return GetParts(L);
+}
+
+int LuaCarFX::GetBodyExtras(lua_State* L) {
+    const uint32_t mask = CarFX::GetBodyExtraMask();
+    lua_newtable(L);
+    lua_pushboolean(L, (mask & CarFX::kBodyExtraSpoiler) ? 1 : 0);
+    lua_setfield(L, -2, "spoiler");
+    lua_pushboolean(L, (mask & CarFX::kBodyExtraLights) ? 1 : 0);
+    lua_setfield(L, -2, "lights");
+    return 1;
+}
+
+int LuaCarFX::SetBodyExtras(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    uint32_t mask = CarFX::GetBodyExtraMask();
+    auto readBit = [&](const char* key, uint32_t bit) {
+        lua_getfield(L, 1, key);
+        if (!lua_isnil(L, -1)) {
+            if (lua_toboolean(L, -1)) mask |= bit; else mask &= ~bit;
+        }
+        lua_pop(L, 1);
+    };
+    readBit("spoiler", CarFX::kBodyExtraSpoiler);
+    readBit("lights", CarFX::kBodyExtraLights);
+    CarFX::SetBodyExtraMask(mask);
+    return GetBodyExtras(L);
 }
 
 int LuaCarFX::ListShaders(lua_State* L) {

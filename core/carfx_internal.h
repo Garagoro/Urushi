@@ -198,6 +198,9 @@ extern std::atomic<uint64_t> g_gameTexGen;
 extern InternalsTexSet g_internals;
 extern std::atomic<uint64_t> g_internalsGen;
 
+extern InternalsTexSet g_bodyExtras;
+extern std::atomic<uint64_t> g_bodyExtrasGen;
+
 extern std::atomic<float> g_gameInputs[kTargetCount][kGameInputs];
 
 extern SRWLOCK g_spatialLock[kTargetCount];

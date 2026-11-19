@@ -191,12 +191,22 @@ enum InternalsPart : uint32_t {
     kPartLights     = 1u << 5,   // headlights, taillights, indicators
     kPartTires      = 1u << 6,   // tyres, rubber
     kPartGlass      = 1u << 7,   // windows, windshield, glass
-    kPartsDefault   = kPartEngine | kPartSuspension | kPartBrakes | kPartWheels | kPartInterior | kPartLights
+    kPartSpoiler    = 1u << 8,   // spoilers, wings, aero mounts
+    kPartsDefault   = kPartEngine | kPartSuspension | kPartBrakes | kPartWheels | kPartInterior
 };
 void SetInternalsPartMask(uint32_t mask);
 uint32_t GetInternalsPartMask();
 // Native texture pointers (albedo) of the player car internals; draws using any of them go to kTargetInternals.
 void SetInternalsTextures(const std::vector<void*>& nativePtrs);   // body replace draws also write depth (body is drawn before the internals)
+
+enum BodyExtra : uint32_t {
+    kBodyExtraSpoiler  = 1u << 0,   // spoiler wing, mounts & painted endplates
+    kBodyExtraLights   = 1u << 1,   // headlights, taillights, inner housings & light lenses
+    kBodyExtrasDefault = kBodyExtraSpoiler | kBodyExtraLights
+};
+void SetBodyExtraMask(uint32_t mask);
+uint32_t GetBodyExtraMask();
+void SetBodyExtraTextures(const std::vector<void*>& nativePtrs);
 void SetOverrideMode(int target, int overrideMode);
 int GetOverrideMode(int target);
 void SetOverrideStealth(int target, int overrideStealth);

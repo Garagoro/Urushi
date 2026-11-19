@@ -43,6 +43,7 @@ struct CarRendererRef {
     int32_t instanceId = 0;
     int32_t matIds[16] = {};
     uint32_t matCount = 0;
+    bool isSpoiler = false;
 };
 
 struct SavedStealthMatSwap {

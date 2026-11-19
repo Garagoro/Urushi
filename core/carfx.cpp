@@ -56,6 +56,10 @@ std::atomic<uint64_t> g_gameTexGen{ 1 };
 InternalsTexSet g_internals;
 std::atomic<uint64_t> g_internalsGen{ 1 };
 
+// Body extra attachments (spoiler, headlights/taillights) merged into kTargetBody
+InternalsTexSet g_bodyExtras;
+std::atomic<uint64_t> g_bodyExtrasGen{ 1 };
+
 std::atomic<float> g_gameInputs[kTargetCount][kGameInputs]{};
 
 SRWLOCK g_spatialLock[kTargetCount] = {};
@@ -745,7 +749,7 @@ void ReleaseClonedD3DObjects(const std::vector<void*>& objs) {
 }
 
 static std::atomic<uint32_t> s_internalsPartMask{ kPartsDefault };
-void SetInternalsPartMask(uint32_t mask) { s_internalsPartMask.store(mask & 0xFFu, std::memory_order_relaxed); }
+void SetInternalsPartMask(uint32_t mask) { s_internalsPartMask.store(mask & 0x1FFu, std::memory_order_relaxed); }
 uint32_t GetInternalsPartMask() { return s_internalsPartMask.load(std::memory_order_relaxed); }
 
 void SetInternalsTextures(const std::vector<void*>& nativePtrs) {
@@ -800,6 +804,62 @@ void SetInternalsTextures(const std::vector<void*>& nativePtrs) {
         s_lastResCount = g_internals.res.size();
         Logger::Info("CarFX internals textures: " + std::to_string(g_internals.srvs.size()) + " views, " +
                      std::to_string(g_internals.res.size()) + " resources");
+    }
+}
+
+static std::atomic<uint32_t> s_bodyExtraMask{ kBodyExtrasDefault };
+void SetBodyExtraMask(uint32_t mask) { s_bodyExtraMask.store(mask & 0x03u, std::memory_order_relaxed); }
+uint32_t GetBodyExtraMask() { return s_bodyExtraMask.load(std::memory_order_relaxed); }
+
+void SetBodyExtraTextures(const std::vector<void*>& nativePtrs) {
+    if (!g_initialized.load(std::memory_order_acquire)) return;
+    std::vector<uintptr_t> raw;
+    raw.reserve(nativePtrs.size());
+    for (void* p : nativePtrs) raw.push_back(reinterpret_cast<uintptr_t>(p));
+    std::sort(raw.begin(), raw.end());
+
+    {
+        AcquireSRWLockShared(&g_gameTexLock);
+        const bool same = (g_bodyExtras.raw == raw);
+        ReleaseSRWLockShared(&g_gameTexLock);
+        if (same) return;
+    }
+
+    InternalsTexSet next;
+    next.raw = raw;
+    for (uintptr_t r : raw) {
+        if (!r) continue;
+        void* p = reinterpret_cast<void*>(r);
+        ID3D11ShaderResourceView* srv = nullptr;
+        ID3D11Resource* res = nullptr;
+        if (SUCCEEDED(SafeQueryInterfaceRaw(p, __uuidof(ID3D11ShaderResourceView), &srv)) && srv) {
+            next.srvs.push_back(srv);
+            srv->GetResource(&res);
+            if (res) next.res.push_back(res);
+        } else if (SUCCEEDED(SafeQueryInterfaceRaw(p, __uuidof(ID3D11Resource), &res)) && res) {
+            next.res.push_back(res);
+        }
+    }
+    std::sort(next.srvs.begin(), next.srvs.end());
+    next.srvs.erase(std::unique(next.srvs.begin(), next.srvs.end()), next.srvs.end());
+    std::sort(next.res.begin(), next.res.end());
+    next.res.erase(std::unique(next.res.begin(), next.res.end()), next.res.end());
+
+    InternalsTexSet old;
+    AcquireSRWLockExclusive(&g_gameTexLock);
+    old = std::move(g_bodyExtras);
+    g_bodyExtras = std::move(next);
+    g_bodyExtrasGen.fetch_add(1, std::memory_order_release);
+    ReleaseSRWLockExclusive(&g_gameTexLock);
+
+    for (auto* s : old.srvs) Retire(s);
+    for (auto* r : old.res) Retire(r);
+
+    static size_t s_lastBodyExtraSrvs = static_cast<size_t>(-1);
+    if (g_bodyExtras.srvs.size() != s_lastBodyExtraSrvs) {
+        s_lastBodyExtraSrvs = g_bodyExtras.srvs.size();
+        Logger::Info("CarFX body-extra textures: " + std::to_string(g_bodyExtras.srvs.size()) + " views, " +
+                     std::to_string(g_bodyExtras.res.size()) + " resources");
     }
 }
 

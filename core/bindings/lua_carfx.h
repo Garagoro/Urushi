@@ -33,4 +33,6 @@ public:
     static int GetSpatial(lua_State* L);
     static int GetParts(lua_State* L);
     static int SetParts(lua_State* L);
+    static int GetBodyExtras(lua_State* L);
+    static int SetBodyExtras(lua_State* L);
 };

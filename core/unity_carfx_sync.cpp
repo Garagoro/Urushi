@@ -428,20 +428,26 @@ static uint32_t InternalsPartOfMaterial(const char* name) {
         return 0;
     }
 
-    // Glass: windows, windshield, light glass
-    if (has("glass") || has("window") || has("windshield")) {
-        return CarFX::kPartGlass;
-    }
-
-    // Lights: headlights, taillights, indicators, fog lights (checked before interior!)
+    // Lights: headlights, taillights, inner light housings & light lenses (checked before glass & interior!)
     if (has("headlight") || has("taillight") || has("turnlight") || has("foglight") ||
         has("reverselight") || has("brakelight") || has("lights_front") || has("lights_rear") ||
         has("lights_head") || has("lights_tail") || has("light_front") || has("light_rear") ||
         has("front_light") || has("rear_light") || has("head_light") || has("tail_light") ||
-        has("car_stock_lights") || has("headlamp") || has("taillamp") || has("lamp_front") ||
+        has("car_stock_lights") || has("lights_inner") || has("glass_lights") ||
+        has("headlamp") || has("taillamp") || has("lamp_front") ||
         has("lamp_rear") || has("lens") || has("reflector") || has("light_cone") ||
-        ((has("light") || has("lamp")) && (has("front") || has("rear") || has("head") || has("tail") || has("stock")))) {
+        has("light") || has("lamp")) {
         return CarFX::kPartLights;
+    }
+
+    // Glass: windows, windshield (excluding light glass which belongs to Lights)
+    if (has("glass") || has("window") || has("windshield")) {
+        return CarFX::kPartGlass;
+    }
+
+    // Spoiler / aero wings
+    if (has("spoiler") || has("wing")) {
+        return CarFX::kPartSpoiler;
     }
 
     // Tires: rubber only (checked before wheels!)
@@ -472,13 +478,13 @@ static uint32_t InternalsPartOfMaterial(const char* name) {
         return CarFX::kPartEngine;
     }
 
-    // Interior (steering wheel, dash, instruments, gauges, displays, screens, rollcage, seats, trim, cockpit, interior lights)
+    // Interior (steering wheel, dash, instruments, gauges, displays, screens, rollcage, seats, trim, cockpit)
     if (has("interior") || has("salon") || has("seat") || has("steer") || has("dash") || has("gauge") ||
         has("cockpit") || has("cage") || has("rollcage") || has("pedal") || has("shifter") || has("gear") ||
         has("belt") || has("trim") || has("cabin") || has("door_panel") || has("doorpanel") || has("carpet") ||
         has("tach") || has("speedo") || has("console") || has("carbon") || has("fabric") || has("leather") ||
         has("plastic") || has("logos") || has("chrome") || has("display") || has("screen") || has("meter") ||
-        has("cluster") || has("dial") || has("light") || has("glow") || has("lamp")) {
+        has("cluster") || has("dial") || has("glow")) {
         return CarFX::kPartInterior;
     }
 
@@ -688,27 +694,45 @@ static void CollectCarRenderersOnMainThread(void* rootGo, std::vector<CarRendere
     out.resize(kMaxRenderers);
     int rCount = 0;
 
-    std::vector<void*> stack;
+    struct StackNode {
+        void* tf = nullptr;
+        bool underSpoiler = false;
+    };
+    auto nameHasSpoiler = [](const std::string& s) -> bool {
+        if (s.empty()) return false;
+        char low[128] = {};
+        size_t n = (std::min)(s.size(), sizeof(low) - 1);
+        for (size_t i = 0; i < n; ++i) low[i] = static_cast<char>(tolower(static_cast<unsigned char>(s[i])));
+        return strstr(low, "spoiler") != nullptr || strstr(low, "wing") != nullptr;
+    };
+
+    std::vector<StackNode> stack;
     stack.reserve(512);
     std::unordered_set<void*> visited;
     visited.reserve(1024);
-    stack.push_back(rootTf);
+    stack.push_back({ rootTf, false });
 
     while (!stack.empty() && static_cast<int>(visited.size()) < kMaxNodes) {
-        void* tf = stack.back();
+        StackNode nd = stack.back();
         stack.pop_back();
-        if (!tf || !visited.insert(tf).second) continue;
+        if (!nd.tf || !visited.insert(nd.tf).second) continue;
 
         void* go = nullptr;
         void* chArr = nullptr;
         int32_t chCnt = 0;
-        if (!SafeStepTransformNodeSEH(tf, &go, &chArr, &chCnt, out.data(), &rCount, kMaxRenderers)) continue;
+        const int prevCount = rCount;
+        if (!SafeStepTransformNodeSEH(nd.tf, &go, &chArr, &chCnt, out.data(), &rCount, kMaxRenderers)) continue;
+
+        const bool curSpoiler = nd.underSpoiler || (go && nameHasSpoiler(UnityBridge::GetGameObjectName(go)));
+        for (int ri = prevCount; ri < rCount; ++ri) {
+            out[ri].isSpoiler = curSpoiler;
+        }
 
         if (chArr && chCnt > 0) {
             for (int32_t ci = chCnt - 1; ci >= 0; --ci) {
                 void* childTf = nullptr;
                 if (SafeReadPtr(reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(chArr) + static_cast<size_t>(ci) * 8), &childTf) && childTf) {
-                    stack.push_back(childTf);
+                    stack.push_back({ childTf, curSpoiler });
                 }
             }
         }
@@ -960,6 +984,8 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
     static void* s_prevInternalsRootGo = nullptr;
     static uint32_t s_prevInternalsPartMask = 0;
     static bool s_prevInternalsActive = false;
+    static uint32_t s_prevBodyExtraMask = 0;
+    static bool s_prevBodyExtraActive = false;
     static size_t s_prevInternalsRendererCount = 0;
     static int s_internalsRetryLeft = 0;
     static ULONGLONG s_internalsNextRetryMs = 0;
@@ -967,8 +993,10 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
     static std::unordered_map<int32_t, int32_t> s_internalsAssetToCloneMat;
     static std::vector<SavedInternalsTexRestore> s_savedInternalsTexRestores;
     static std::unordered_map<void*, void*> s_internalsOrigToClonedTex;
+    static std::unordered_map<void*, void*> s_bodyExtraOrigToClonedTex;
     static std::vector<void*> s_internalsClonedTexList;
     static std::vector<void*> s_internalsClonedSrvList;
+    static std::vector<void*> s_bodyExtraClonedSrvList;
 
     auto releasePlayerIsoPackTex = [&]() {
         if (s_playerIsoPackTex) {
@@ -982,9 +1010,11 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
 
     auto restoreInternalsIsolation = [&]() {
         if (s_savedInternalsTexRestores.empty() && s_savedInternalsMatSwaps.empty() &&
-            s_internalsClonedTexList.empty() && s_internalsClonedSrvList.empty()) {
+            s_internalsClonedTexList.empty() && s_internalsClonedSrvList.empty() &&
+            s_bodyExtraClonedSrvList.empty()) {
             s_internalsAssetToCloneMat.clear();
             s_internalsOrigToClonedTex.clear();
+            s_bodyExtraOrigToClonedTex.clear();
             return;
         }
         for (const auto& tr : s_savedInternalsTexRestores) {
@@ -1004,9 +1034,13 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
         }
         s_internalsClonedTexList.clear();
         s_internalsOrigToClonedTex.clear();
+        s_bodyExtraOrigToClonedTex.clear();
         CarFX::SetInternalsTextures({});
+        CarFX::SetBodyExtraTextures({});
         CarFX::ReleaseClonedD3DObjects(s_internalsClonedSrvList);
         s_internalsClonedSrvList.clear();
+        CarFX::ReleaseClonedD3DObjects(s_bodyExtraClonedSrvList);
+        s_bodyExtraClonedSrvList.clear();
     };
 
     const bool wantTransparent = CarFX::ShouldBypassDepthPrePass();
@@ -1015,13 +1049,17 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
     CarFX::SetStealthDepthWrite(stealthByOrder && wantStealth);
     const bool internalsActiveNow = CarFX::IsTargetActive(CarFX::kTargetInternals) && !(wantStealth && !stealthByOrder);
     const uint32_t partMaskNow = internalsActiveNow ? CarFX::GetInternalsPartMask() : 0;
+    const bool bodyExtraActiveNow = CarFX::IsTargetActive(CarFX::kTargetBody) && !(wantStealth && !stealthByOrder);
+    const uint32_t bodyExtraMaskNow = bodyExtraActiveNow ? CarFX::GetBodyExtraMask() : 0;
+    const bool anyPartIsoActiveNow = internalsActiveNow || (bodyExtraActiveNow && bodyExtraMaskNow != 0);
     const bool modeChanged = (wantTransparent != s_prevWantTransparent);
     const bool stealthChanged = (wantStealth != s_prevWantStealth);
-    const bool internalsChanged = (internalsActiveNow != s_prevInternalsActive) || (partMaskNow != s_prevInternalsPartMask);
+    const bool internalsChanged = (internalsActiveNow != s_prevInternalsActive) || (partMaskNow != s_prevInternalsPartMask) ||
+                                  (bodyExtraActiveNow != s_prevBodyExtraActive) || (bodyExtraMaskNow != s_prevBodyExtraMask);
 
     const ULONGLONG nowMs = GetTickCount64();
-    const bool internalsIncompleteRenderers = internalsActiveNow && (s_prevInternalsRendererCount < 40);
-    const bool internalsRetryDue = internalsActiveNow && (s_internalsRetryLeft > 0 || internalsIncompleteRenderers) && (nowMs >= s_internalsNextRetryMs);
+    const bool internalsIncompleteRenderers = anyPartIsoActiveNow && (s_prevInternalsRendererCount < 40);
+    const bool internalsRetryDue = anyPartIsoActiveNow && (s_internalsRetryLeft > 0 || internalsIncompleteRenderers) && (nowMs >= s_internalsNextRetryMs);
     if (!modeChanged && !stealthChanged && !internalsChanged && !internalsRetryDue && nowMs < s_nextUpdateMs) return;
 
     auto restoreAllStealthMaterials = [&]() {
@@ -1052,7 +1090,11 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
         s_prevInternalsRootGo = nullptr;
         s_prevInternalsPartMask = 0;
         s_prevInternalsActive = false;
+        s_prevBodyExtraMask = 0;
+        s_prevBodyExtraActive = false;
+        s_prevInternalsRendererCount = 0;
         CarFX::SetInternalsTextures({});
+        CarFX::SetBodyExtraTextures({});
         s_prevStealthRootGo = nullptr;
         s_loggedDefRootGo = nullptr;
         releasePlayerIsoPackTex();
@@ -1127,25 +1169,35 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
     void* s_natNormal = nullptr;
     GetBuiltinNativeTextures(unityBase, &s_natWhite, &s_natBlack, &s_natNormal);
 
-    // Internals target: clone D3D11 textures + wrap via Texture2D.CreateExternalTexture so CarFX matches ONLY our local car (never remote net_cars).
+    // Unified BodyExtras (Spoiler + Lights) & Internals texture isolation:
+    // Clones D3D11 textures + wraps via Texture2D.CreateExternalTexture so CarFX matches ONLY our local car (never remote net_cars).
     const bool internalsActive = internalsActiveNow;
     const uint32_t partMask = partMaskNow;
-    const bool internalsReset = (rootGo != s_prevInternalsRootGo || partMask != s_prevInternalsPartMask || internalsActive != s_prevInternalsActive);
-    if (internalsReset || (internalsActive && s_internalsRetryLeft > 0 && nowMs >= s_internalsNextRetryMs)) {
-        if (internalsReset) {
+    const bool bodyExtraActive = bodyExtraActiveNow;
+    const uint32_t bodyExtraMask = bodyExtraMaskNow;
+    const bool anyPartIsoActive = anyPartIsoActiveNow;
+    const bool partIsoReset = (rootGo != s_prevInternalsRootGo ||
+                               partMask != s_prevInternalsPartMask ||
+                               internalsActive != s_prevInternalsActive ||
+                               bodyExtraMask != s_prevBodyExtraMask ||
+                               bodyExtraActive != s_prevBodyExtraActive);
+    if (partIsoReset || (anyPartIsoActive && (s_internalsRetryLeft > 0 || s_prevInternalsRendererCount < 40) && nowMs >= s_internalsNextRetryMs)) {
+        if (partIsoReset) {
             restoreInternalsIsolation();
             s_prevInternalsRootGo = rootGo;
             s_prevInternalsPartMask = partMask;
             s_prevInternalsActive = internalsActive;
+            s_prevBodyExtraMask = bodyExtraMask;
+            s_prevBodyExtraActive = bodyExtraActive;
             s_prevInternalsRendererCount = 0;
-            s_internalsRetryLeft = internalsActive ? 12 : 0;
+            s_internalsRetryLeft = anyPartIsoActive ? 12 : 0;
             s_internalsNextRetryMs = 0;
         } else {
             if (s_internalsRetryLeft > 0) s_internalsRetryLeft--;
             s_internalsNextRetryMs = nowMs + 1000;
         }
 
-        if (internalsActive) {
+        if (anyPartIsoActive) {
             const uintptr_t pfnGetNatPtr = GetNativeTexPtrFn(unityBase);
             const t_Tex2D_UpdateExternal pfnUpdateExt = GetUpdateExternalTexFn();
             const t_Tex2D_CreateExternal pfnCreateExt = GetCreateExternalTexFn();
@@ -1159,19 +1211,21 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
             std::unordered_set<void*> failedOrigTex;
             int failNoNat = 0, failD3d = 0, failCreate = 0, failClone = 0, failUpd = 0;
 
-            auto isolateMatProp = [&](void* natMat, int32_t matId, int32_t propId, bool allowDefaultTex) -> bool {
+            auto isolateMatProp = [&](void* natMat, int32_t matId, int32_t propId, bool allowDefaultTex, bool forBodyExtra) -> bool {
                 void* origTex = SafeGetMatTextureSEH(unityBase, natMat, propId);
                 if (!origTex) return false;
                 if (!allowDefaultTex && IsDefaultNativeTex(origTex, s_natWhite, s_natBlack, s_natNormal)) return false;
 
-                // Skip if already replaced with one of our cloned textures on a previous retry pass
                 for (void* ct : s_internalsClonedTexList) {
                     if (origTex == ct) return true;
                 }
 
+                auto& origMap = forBodyExtra ? s_bodyExtraOrigToClonedTex : s_internalsOrigToClonedTex;
+                auto& srvList = forBodyExtra ? s_bodyExtraClonedSrvList : s_internalsClonedSrvList;
+
                 void* clonedTex = nullptr;
-                auto itT = s_internalsOrigToClonedTex.find(origTex);
-                if (itT != s_internalsOrigToClonedTex.end()) {
+                auto itT = origMap.find(origTex);
+                if (itT != origMap.end()) {
                     clonedTex = itT->second;
                 } else {
                     if (failedOrigTex.count(origTex)) return false;
@@ -1208,9 +1262,9 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
                         failedOrigTex.insert(origTex);
                         return false;
                     }
-                    s_internalsOrigToClonedTex.emplace(origTex, clonedTex);
+                    origMap.emplace(origTex, clonedTex);
                     s_internalsClonedTexList.push_back(clonedTex);
-                    s_internalsClonedSrvList.push_back(extSrv);
+                    srvList.push_back(extSrv);
                 }
 
                 if (!SafeSetMatTextureSEH(unityBase, natMat, propId, clonedTex)) return false;
@@ -1223,11 +1277,28 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
                     const int32_t mid = r.matIds[si];
                     char mn[64] = {};
                     if (!mid || !SafeReadMatNameSEH(unityBase, mid, mn, sizeof(mn))) continue;
-                    const uint32_t part = InternalsPartOfMaterial(mn);
-                    if ((internalsReset || renderersGrew) && loggedMats.insert(mn).second) {
+                    uint32_t part = InternalsPartOfMaterial(mn);
+                    if (part == 0 && r.isSpoiler) {
+                        char low[64] = {};
+                        for (size_t k = 0; mn[k] && k + 1 < sizeof(low); ++k) {
+                            low[k] = static_cast<char>(tolower(static_cast<unsigned char>(mn[k])));
+                        }
+                        const bool isPaintedNoLiv = (strstr(low, "nolivery") != nullptr);
+                        const bool isMainBody = (strstr(low, "car_body") != nullptr || strstr(low, "body") != nullptr) && !isPaintedNoLiv;
+                        if (!isMainBody && !strstr(low, "shadow") && !strstr(low, "mirror") && !strstr(low, "glass")) {
+                            part = CarFX::kPartSpoiler;
+                        }
+                    }
+                    if ((partIsoReset || renderersGrew) && loggedMats.insert(mn).second) {
                         Logger::Info("CarFX mat: " + std::string(mn) + " (part=" + std::to_string(part) + ")");
                     }
-                    if (part == 0 || !(partMask & part)) continue;
+                    if (part == 0) continue;
+
+                    const bool wantAsBodyExtra = bodyExtraActive &&
+                        (((part == CarFX::kPartSpoiler) && (bodyExtraMask & CarFX::kBodyExtraSpoiler)) ||
+                         ((part == CarFX::kPartLights) && (bodyExtraMask & CarFX::kBodyExtraLights)));
+                    const bool wantAsInternal = !wantAsBodyExtra && internalsActive && ((partMask & part) != 0);
+                    if (!wantAsBodyExtra && !wantAsInternal) continue;
 
                     int32_t targetMid = mid;
                     if (targetMid > 0) {
@@ -1255,10 +1326,19 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
                     void* natMat = SafeIdToObjectSEH(unityBase, targetMid);
                     if (!natMat) continue;
 
-                    const bool gotAlb = isolateMatProp(natMat, targetMid, 380, false);
-                    const bool gotPack = isolateMatProp(natMat, targetMid, 1370, false);
+                    const bool isNoLivery = (strstr(mn, "nolivery") != nullptr || strstr(mn, "NoLivery") != nullptr);
+                    const bool gotAlb = isolateMatProp(natMat, targetMid, 380, isNoLivery, wantAsBodyExtra);
+                    const bool gotPack = isolateMatProp(natMat, targetMid, 1370, isNoLivery, wantAsBodyExtra);
                     if (!gotAlb && !gotPack) {
-                        isolateMatProp(natMat, targetMid, 380, true);
+                        isolateMatProp(natMat, targetMid, 380, true, wantAsBodyExtra);
+                        isolateMatProp(natMat, targetMid, 1370, true, wantAsBodyExtra);
+                    }
+                    if (isNoLivery) {
+                        // car_body_nolivery binds additional material texture props (950, 961, 968) instead of livery u_sTexture.
+                        static constexpr int32_t kNoLiveryExtraProps[] = { 950, 961, 968 };
+                        for (int32_t pid : kNoLiveryExtraProps) {
+                            isolateMatProp(natMat, targetMid, pid, true, wantAsBodyExtra);
+                        }
                     }
                 }
             }
@@ -1266,18 +1346,18 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
             if (failNoNat == 0 && s_prevInternalsRendererCount >= 40) s_internalsRetryLeft = 0;
             else s_internalsNextRetryMs = nowMs + 1000;
 
-            Logger::Info("CarFX internals scan: isolated " + std::to_string(s_internalsClonedSrvList.size()) +
-                         " unique player D3D11 textures across " + std::to_string(rs.size()) +
-                         " renderers (createExt=" + std::to_string(pfnCreateExt != nullptr ? 1 : 0) +
-                         ", failNat=" + std::to_string(failNoNat) +
+            Logger::Info("CarFX parts scan: bodyExtras=" + std::to_string(s_bodyExtraClonedSrvList.size()) +
+                         " internals=" + std::to_string(s_internalsClonedSrvList.size()) +
+                         " across " + std::to_string(rs.size()) +
+                         " renderers (failNat=" + std::to_string(failNoNat) +
                          ", failD3d=" + std::to_string(failD3d) +
                          ", failCreate=" + std::to_string(failCreate) +
-                         ", failClone=" + std::to_string(failClone) +
-                         ", failUpd=" + std::to_string(failUpd) +
                          ", retriesLeft=" + std::to_string(s_internalsRetryLeft) + ")");
+            CarFX::SetBodyExtraTextures(s_bodyExtraClonedSrvList);
             CarFX::SetInternalsTextures(s_internalsClonedSrvList);
         } else {
             s_prevInternalsRendererCount = 0;
+            CarFX::SetBodyExtraTextures({});
             CarFX::SetInternalsTextures({});
         }
     }
@@ -1638,7 +1718,11 @@ void UnityBridge::UpdateCarFXPlayerTexturesOnMainThread(const std::vector<LiveCa
             if (!SafeResolveMatAndQueueSEH(unityBase, bs.origMatId, &matObj, nullptr) || !matObj) continue;
             void* mAlb = SafeGetMatTextureSEH(unityBase, matObj, 380);
             void* mPack = SafeGetMatTextureSEH(unityBase, matObj, 1370);
-            const bool mAlbDef = IsDefaultNativeTex(mAlb, s_natWhite, s_natBlack, s_natNormal) || (mAlb == s_playerIsoPackTex);
+            char mn[64] = {};
+            SafeReadMatNameSEH(unityBase, bs.origMatId, mn, sizeof(mn));
+            const bool isNoLivery = (strstr(mn, "nolivery") != nullptr) || (mAlb != nullptr && mAlb == mPack);
+            const bool mAlbDef = IsDefaultNativeTex(mAlb, s_natWhite, s_natBlack, s_natNormal) ||
+                                 (mAlb == s_playerIsoPackTex) || isNoLivery;
             const bool mPackDef = IsDefaultNativeTex(mPack, s_natWhite, s_natBlack, s_natNormal);
             const bool mPackIsIso = (mPack != nullptr && mPack == s_playerIsoPackTex);
             if (mAlbDef && !mPackIsIso) continue;
