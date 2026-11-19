@@ -209,7 +209,7 @@ jobs:
           }
 
       - name: Send Discord Release Notification
-        if: startsWith(github.ref, 'refs/tags/v') && steps.publish_release.outputs.created == 'true'
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
