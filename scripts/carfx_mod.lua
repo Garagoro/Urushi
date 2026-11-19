@@ -369,8 +369,9 @@ local function render_shader_textures(target, st)
     end)
 end
 
-local function render_shader_picker_and_modes(target, st, is_body)
+local function render_shader_picker_and_modes(target, st, is_body, car_ready)
     local short_name = short_shader_name(st.shader_path)
+    local pill_name = short_name:gsub("%.hlsl$", "")
     local eff_mode = st.compiled and ((st.resolved_mode == 2) and "Overlay" or "Replace") or T("Выкл", "None")
     local id_sfx = is_body and "body" or "int"
     local target_on = is_body and (cfx_settings.body_enabled ~= false) or (cfx_settings.internals_enabled ~= false)
@@ -390,12 +391,12 @@ local function render_shader_picker_and_modes(target, st, is_body)
         ui.stat_row({
             {
                 label = is_body and T("Кузов", "Body") or T("Авто", "Car"),
-                value = st.body_valid and T("Готов", "Ready") or T("Вне трассы", "Off Track"),
-                tone = st.body_valid and "green" or "muted",
+                value = car_ready and T("Готов", "Ready") or T("Вне трассы", "Off Track"),
+                tone = car_ready and "green" or "muted",
             },
             {
                 label = T("Шейдер", "Shader"),
-                value = (st.compiled and target_on) and (short_name ~= "" and short_name or T("Активен", "Active")) or T("Выкл", "Off"),
+                value = (st.compiled and target_on) and (pill_name ~= "" and pill_name or T("Активен", "Active")) or T("Выкл", "Off"),
                 tone = (st.compiled and target_on) and "accent" or "muted",
             },
             {
@@ -553,11 +554,11 @@ local function render_carfx_window()
     ui.spacing(4)
 
     if state.tab == 1 then
-        render_shader_picker_and_modes(0, st0, true)
+        render_shader_picker_and_modes(0, st0, true, st0.body_valid)
         render_shader_params(0, st0, short0)
         render_shader_textures(0, st0)
     else
-        render_shader_picker_and_modes(1, st1, false)
+        render_shader_picker_and_modes(1, st1, false, st0.body_valid)
         render_internals_parts_card()
         render_shader_params(1, st1, short1)
         render_shader_textures(1, st1)
