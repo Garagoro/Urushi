@@ -222,6 +222,16 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
     static int s_rtKnownAlbSlot = -1;
     static int s_rtKnownPackSlot = -1;
     static uint32_t s_rtRediscoveryFrame = ~0u;
+    static uint32_t s_rtBodyTrackFrame = ~0u;
+    static uint32_t s_rtBodyPrimaryCur = 0;
+    static uint32_t s_rtBodyPrimaryLast = 0;
+
+    const uint32_t curFrameId = g_frameCounter.load(std::memory_order_relaxed);
+    if (curFrameId != s_rtBodyTrackFrame) {
+        s_rtBodyPrimaryLast = s_rtBodyPrimaryCur;
+        s_rtBodyPrimaryCur = 0;
+        s_rtBodyTrackFrame = curFrameId;
+    }
 
     const uint64_t curGen = g_gameTexGen.load(std::memory_order_acquire);
     if (curGen != s_rtCachedGen) {
@@ -229,6 +239,8 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
         for (int i = 0; i < kTargetCount; ++i) s_rtSnap[i] = g_gameTex[i];
         s_rtCachedGen = g_gameTexGen.load(std::memory_order_relaxed);
         ReleaseSRWLockShared(&g_gameTexLock);
+        s_rtKnownAlbSlot = -1;
+        s_rtKnownPackSlot = -1;
         s_rtRediscoveryFrame = ~0u;
     }
 
@@ -380,6 +392,7 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
             }
             if (match) {
                 matchedTarget = kTargetBody;
+                ++s_rtBodyPrimaryCur;
                 if (albMatch && vAlb) {
                     mask |= (1u << s_rtKnownAlbSlot);
                     matchedAlbedoSrv = vAlb;
@@ -497,8 +510,10 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
     if (matchedTarget != kTargetNone) {
         // Already matched cleanly in fast slots or internals scan
     } else if (haveFastSlots) {
-        const uint32_t frameId = g_frameCounter.load(std::memory_order_relaxed);
-        if (g_matchedDrawsLastFrame.load(std::memory_order_relaxed) == 0 && (frameId - s_rtRediscoveryFrame) >= 60) {
+        const uint32_t frameId = curFrameId;
+        const bool primaryBodyStarved = bodyActiveNow && (s_rtBodyPrimaryLast == 0);
+        if ((primaryBodyStarved || g_matchedDrawsLastFrame.load(std::memory_order_relaxed) == 0) &&
+            (frameId - s_rtRediscoveryFrame) >= 30) {
             s_rtRediscoveryFrame = frameId;
             s_rtKnownAlbSlot = -1;
             s_rtKnownPackSlot = -1;
@@ -590,7 +605,9 @@ bool MatchTargetAndCheckRT(ID3D11DeviceContext* c, int* outTarget, uint32_t* out
             }
         }
         if (matchedTarget == kTargetNone && playerCanMatch) {
-            scanMatchForTarget(kTargetBody, false, bodyNeedBoth);
+            if (scanMatchForTarget(kTargetBody, false, bodyNeedBoth)) {
+                ++s_rtBodyPrimaryCur;
+            }
         }
 
         for (int i = 0; i < kScanSlotCount; ++i) {
